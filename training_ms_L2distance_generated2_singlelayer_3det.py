@@ -28,7 +28,10 @@ v_ms_x = torch.arange(-W / 2, W / 2, dx_ms) + dx_ms / 2
 v_ms_y = torch.zeros_like(v_ms_x) + y_ms
 v_ms = torch.stack([v_ms_x, v_ms_y], dim=1)
 
-DATASET_DIR = Path("generated_datasets2")
+# Large input datasets live in the external RailDefect folder (override with RAILDEFECT_DATA_DIR).
+from raildefect_paths import RAILDEFECT_DIR
+
+DATASET_DIR = RAILDEFECT_DIR / "generated_datasets2"
 DATASET_FILES = {
     "crack": DATASET_DIR / "crack_fields_limit5000.pt",
     "dent": DATASET_DIR / "dent_fields_limit5000.pt",
@@ -39,11 +42,13 @@ class_names: list[str] = []
 
 
 def load_intact_field() -> torch.Tensor:
+    # Look in the RailDefect data folder first, then in this repo (a small tracked copy).
     for candidate in ("psi_ms_nodefect_12mm.pt", "psi_ms_nodefect.pt"):
-        path = Path(candidate)
-        if path.exists():
-            psi_ms0 = torch.load(path).to(torch.complex64)
-            return psi_ms0 / torch.sqrt(torch.mean(psi_ms0.abs() ** 2))
+        for base in (RAILDEFECT_DIR, Path(".")):
+            path = base / candidate
+            if path.exists():
+                psi_ms0 = torch.load(path).to(torch.complex64)
+                return psi_ms0 / torch.sqrt(torch.mean(psi_ms0.abs() ** 2))
     raise FileNotFoundError("No intact metasurface field file found.")
 
 

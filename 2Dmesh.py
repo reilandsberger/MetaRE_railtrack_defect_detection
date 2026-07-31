@@ -13,6 +13,10 @@ import cv2
 # import trimesh.path.polygons as pg
 # import shapely.geometry as sg
 
+# Large data files are read from / written to the external RailDefect folder
+# (override with RAILDEFECT_DATA_DIR).
+from raildefect_paths import RAILDEFECT_DIR
+
 mm = 1e3
 height = 180 * mm
 wvl = 12 * mm
@@ -166,7 +170,7 @@ plt.colorbar(int_color)
 plt.colorbar(phase_color)
 
 
-torch.save(psi_ms_nodefect, "psi_ms_nodefect_12mm.pt")
+torch.save(psi_ms_nodefect, RAILDEFECT_DIR / "psi_ms_nodefect_12mm.pt")
 
 #%% Indentation example
 
@@ -329,22 +333,22 @@ for i in tqdm(range(100)):
     psi_ms_list.append(psi_ms)
 
 
-torch.save(torch.tensor(defect_range_list), "range_dist_12mm.pt")
-torch.save(torch.tensor(defect_height_list), "depth_dist_12mm.pt")
-torch.save(torch.cat(psi_ms_list), "psi_ms_dist_12mm.pt")
-torch.save(torch.cat(psi_rail_list), "psi_rail_dist_12mm.pt")
-torch.save(v_rail_batch, "v_rail_dist_12mm.pt")
+torch.save(torch.tensor(defect_range_list), RAILDEFECT_DIR / "range_dist_12mm.pt")
+torch.save(torch.tensor(defect_height_list), RAILDEFECT_DIR / "depth_dist_12mm.pt")
+torch.save(torch.cat(psi_ms_list), RAILDEFECT_DIR / "psi_ms_dist_12mm.pt")
+torch.save(torch.cat(psi_rail_list), RAILDEFECT_DIR / "psi_rail_dist_12mm.pt")
+torch.save(v_rail_batch, RAILDEFECT_DIR / "v_rail_dist_12mm.pt")
 
 #%%
 
 close_defect_idx = 4505
 idx = 90000+close_defect_idx
 
-defect_range_list = torch.load("range_dist_12mm.pt")
-defect_height_list = torch.load("depth_dist_12mm.pt")
-psi_ms_list = torch.load("psi_ms_dist_12mm.pt")
-psi_rail_list = torch.load("psi_rail_dist_12mm.pt")
-v_rail_list = torch.load("v_rail_dist_12mm.pt")
+defect_range_list = torch.load(RAILDEFECT_DIR / "range_dist_12mm.pt")
+defect_height_list = torch.load(RAILDEFECT_DIR / "depth_dist_12mm.pt")
+psi_ms_list = torch.load(RAILDEFECT_DIR / "psi_ms_dist_12mm.pt")
+psi_rail_list = torch.load(RAILDEFECT_DIR / "psi_rail_dist_12mm.pt")
+v_rail_list = torch.load(RAILDEFECT_DIR / "v_rail_dist_12mm.pt")
 
 test_width = (defect_range_list[idx][1]-defect_range_list[idx][0])*290.0129
 test_height = defect_height_list[idx]

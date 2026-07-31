@@ -4,8 +4,11 @@ from __future__ import annotations
 from pathlib import Path
 import csv
 
+# Defect CSV folders live in the external RailDefect folder (override with RAILDEFECT_DATA_DIR).
+from raildefect_paths import RAILDEFECT_DIR
+
 type = "dent"
-DATA_PATH = Path(f"data_defect_{type}/data_log_{type}.txt")
+DATA_PATH = RAILDEFECT_DIR / f"data_defect_{type}/data_log_{type}.txt"
 
 
 def load_rows(path: Path) -> list[dict[str, float | int]]:

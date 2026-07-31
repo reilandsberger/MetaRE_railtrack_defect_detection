@@ -32,8 +32,11 @@ v_ms_y = torch.zeros_like(v_ms_x) + y_ms
 v_ms = torch.stack([v_ms_x,v_ms_y], dim=1)
 
 
-range_defect = torch.load("range_dist_12mm.pt")
-depth_defect = torch.load("depth_dist_12mm.pt")
+# Large input datasets live in the external RailDefect folder (override with RAILDEFECT_DATA_DIR).
+from raildefect_paths import RAILDEFECT_DIR
+
+range_defect = torch.load(RAILDEFECT_DIR / "range_dist_12mm.pt")
+depth_defect = torch.load(RAILDEFECT_DIR / "depth_dist_12mm.pt")
 width_defect = torch.abs(range_defect[:,0]-range_defect[:,1])*290.0129
 defect_size = width_defect * depth_defect
 
@@ -62,9 +65,9 @@ ax.set(
 ax.set_title("Defect size distribution", fontsize=8)
 ax.legend(frameon=False, fontsize=7)
 
-psi_ms = torch.load("psi_ms_dist_12mm.pt").to(torch.complex64)
+psi_ms = torch.load(RAILDEFECT_DIR / "psi_ms_dist_12mm.pt").to(torch.complex64)
 psi_ms = psi_ms / torch.sqrt(torch.mean(psi_ms.abs()**2))
-psi_ms0 = torch.load("psi_ms_nodefect_12mm.pt").to(torch.complex64)
+psi_ms0 = torch.load(RAILDEFECT_DIR / "psi_ms_nodefect_12mm.pt").to(torch.complex64)
 psi_ms0 = psi_ms0 / torch.sqrt(torch.mean(psi_ms0.abs()**2))
 # psi_ms = psi_ms *torch.sqrt(0.5/torch.mean(torch.abs(psi_ms)**2)) # normalize to have the average intensity of 0.5
 # psi = psi_ms[:20]
@@ -486,9 +489,9 @@ print(f"Saved trained ONN checkpoint to {checkpoint_path}")
 net.load_state_dict(state_opt)
 net.eval()
 
-psi_ms_list = torch.load("psi_ms_dist_12mm.pt")
-psi_rail_list = torch.load("psi_rail_dist_12mm.pt")
-v_rail_list = torch.load("v_rail_dist_12mm.pt")
+psi_ms_list = torch.load(RAILDEFECT_DIR / "psi_ms_dist_12mm.pt")
+psi_rail_list = torch.load(RAILDEFECT_DIR / "psi_rail_dist_12mm.pt")
+v_rail_list = torch.load(RAILDEFECT_DIR / "v_rail_dist_12mm.pt")
 
 idx = 0
 psi_ms1 = test_ds[idx][0]

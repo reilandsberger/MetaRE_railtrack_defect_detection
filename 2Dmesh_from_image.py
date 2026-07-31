@@ -23,10 +23,13 @@ N_BOUNDARY_VERTICES = 2400
 DEFAULT_SMOOTH_WINDOW = 9
 SHADOW_SAMPLES = 15
 
+# Defect image folders live in the external RailDefect folder (override with RAILDEFECT_DATA_DIR).
+from raildefect_paths import RAILDEFECT_DIR
+
 DATASET_DIRS = {
-    "crack": Path("data_defect_crack"),
-    "dent": Path("data_defect_dent"),
-    "wear": Path("data_defect_wear"),
+    "crack": RAILDEFECT_DIR / "data_defect_crack",
+    "dent": RAILDEFECT_DIR / "data_defect_dent",
+    "wear": RAILDEFECT_DIR / "data_defect_wear",
 }
 
 
@@ -673,7 +676,7 @@ files, vertices_batch, v_rail_batch, psi_rail, psi_ms = generate_dataset_fields(
 )
 
 # Save the generated tensors for later dataset loading in deep learning workflows.
-dataset_output_path = Path("generated_datasets") / f"{dataset_name}_fields_limit{limit}.pt"
+dataset_output_path = RAILDEFECT_DIR / "generated_datasets" / f"{dataset_name}_fields_limit{limit}.pt"
 dataset_output_path.parent.mkdir(parents=True, exist_ok=True)
 torch.save(
     {

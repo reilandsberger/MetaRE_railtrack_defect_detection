@@ -1,0 +1,16 @@
+# OS / editor junk
+.DS_Store
+__pycache__/
+.venv/
+.ipynb_checkpoints/
+
+# Large simulation data — lives in the RailDefect folder (see raildefect_paths.py), never commit
+generated_datasets/
+generated_datasets2/
+data_defect_*/
+psi_ms.pt
+psi_ms_2class.pt
+psi_ms_dist*.pt
+psi_rail*.pt
+v_rail*.pt
+depth*.pt

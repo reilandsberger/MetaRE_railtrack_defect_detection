@@ -32,11 +32,14 @@ v_ms_y = torch.zeros_like(v_ms_x) + y_ms
 v_ms = torch.stack([v_ms_x,v_ms_y], dim=1)
 
 
-range_defect = torch.load("range.pt")
-depth_defect = torch.load("depth.pt")
-psi_ms = torch.load("psi_ms.pt").to(torch.complex64)
+# Large input datasets live in the external RailDefect folder (override with RAILDEFECT_DATA_DIR).
+from raildefect_paths import RAILDEFECT_DIR
+
+range_defect = torch.load(RAILDEFECT_DIR / "range.pt")
+depth_defect = torch.load(RAILDEFECT_DIR / "depth.pt")
+psi_ms = torch.load(RAILDEFECT_DIR / "psi_ms.pt").to(torch.complex64)
 psi_ms = psi_ms / torch.sqrt(torch.mean(psi_ms.abs()**2))
-psi_ms0 = torch.load("psi_ms_nodefect.pt").to(torch.complex64)
+psi_ms0 = torch.load(RAILDEFECT_DIR / "psi_ms_nodefect.pt").to(torch.complex64)
 psi_ms0 = psi_ms0 / torch.sqrt(torch.mean(psi_ms0.abs()**2))
 # psi_ms = psi_ms *torch.sqrt(0.5/torch.mean(torch.abs(psi_ms)**2)) # normalize to have the average intensity of 0.5
 # psi = psi_ms[:20]
