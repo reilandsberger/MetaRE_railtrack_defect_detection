@@ -1,0 +1,139 @@
+{
+  "device": "cpu",
+  "torch": "2.7.1+cu118",
+  "V1_solver_equivalence": {
+    "psi0": 0.0,
+    "psi1": 1.233747184414824e-07,
+    "psi2": 6.120718012425641e-07,
+    "chunk_invariance": 3.3377921226929175e-07,
+    "batch_consistency": 1.1633240859509897e-07,
+    "n_faces": 1260,
+    "pass": true,
+    "seconds": 1.14
+  },
+  "V2_propagator_equivalence": {
+    "max_rel_l2": 1.1429998494350002e-06,
+    "pass": true,
+    "seconds": 0.58
+  },
+  "V3_asm_vs_rs": {
+    "central_rel_l2": 0.0012969422386959195,
+    "pass": true,
+    "seconds": 0.0
+  },
+  "V4_sanity": {
+    "specular_peak_offset_px": 1.0,
+    "specular_ok": true,
+    "power_ratio": 0.999805212020874,
+    "power_ok": true,
+    "crown_up_fraction": 1.0,
+    "orientation_ok": true,
+    "pass": true,
+    "seconds": 0.22
+  },
+  "V5_2d_3d_consistency": {
+    "pearson_r": 0.9841943699503837,
+    "pass": true,
+    "seconds": 58.58
+  },
+  "V6_shadowing": {
+    "worst_rel_l2": 0.13895732164382935,
+    "samples": [
+      {
+        "class": "crack",
+        "csv": 156,
+        "max_dev_mm": 14.102699279785156,
+        "rel_l2": 0.019016774371266365
+      },
+      {
+        "class": "crack",
+        "csv": 29,
+        "max_dev_mm": 13.013646125793457,
+        "rel_l2": 0.01764918677508831
+      },
+      {
+        "class": "crack",
+        "csv": 30,
+        "max_dev_mm": 11.733084678649902,
+        "rel_l2": 0.11022862046957016
+      },
+      {
+        "class": "dent",
+        "csv": 45,
+        "max_dev_mm": 3.3157706260681152,
+        "rel_l2": 0.0
+      },
+      {
+        "class": "dent",
+        "csv": 87,
+        "max_dev_mm": 3.3083062171936035,
+        "rel_l2": 0.0
+      },
+      {
+        "class": "dent",
+        "csv": 185,
+        "max_dev_mm": 3.307922840118408,
+        "rel_l2": 0.029696237295866013
+      },
+      {
+        "class": "wear",
+        "csv": 19,
+        "max_dev_mm": 12.585460662841797,
+        "rel_l2": 0.0
+      },
+      {
+        "class": "wear",
+        "csv": 165,
+        "max_dev_mm": 12.227643013000488,
+        "rel_l2": 0.0
+      },
+      {
+        "class": "wear",
+        "csv": 80,
+        "max_dev_mm": 10.834672927856445,
+        "rel_l2": 0.13895732164382935
+      }
+    ],
+    "intact_augmented_artifact": 0.0,
+    "generation_shadow_mode": "raycast",
+    "pass": true,
+    "seconds": 38.48
+  },
+  "V7_mesh_convergence": {
+    "signal_cosines": [
+      0.9355352520942688,
+      0.9927845597267151,
+      0.9946703314781189,
+      0.980168879032135,
+      0.976254940032959
+    ],
+    "min_cosine": 0.9355352520942688,
+    "mean_cosine": 0.9758827924728394,
+    "intact_barcode_rel_err": 0.03067241795361042,
+    "pass": true,
+    "seconds": 57.44
+  },
+  "V8_end_to_end_smoke": {
+    "loss_first": 0.9559885859489441,
+    "loss_last": 1.0257434844970703,
+    "score_epoch0": 0.6666666865348816,
+    "score_best": 1.0,
+    "score_improves": true,
+    "n_det_final": 8,
+    "pruning_ok": true,
+    "detector_centers_moved": true,
+    "u_max_change": 1.1932497024536133,
+    "best_val": {
+      "pass_rate": 0.5,
+      "false_alarm": 0.0,
+      "gap_p5": 0.21074225008487701,
+      "gap_mean": 0.3499504327774048,
+      "gap0_mean": 0.12004506587982178,
+      "class_acc": 0.5,
+      "score": 1.0
+    },
+    "resume_max_metric_mismatch": 0.0,
+    "resume_ok": true,
+    "pass": true
+  }
+}

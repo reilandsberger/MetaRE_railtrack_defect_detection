@@ -1,0 +1,14 @@
+# rail3D dependencies.
+#
+# torch is intentionally NOT pinned here because the build differs per machine:
+#   - laptop (MX250, Pascal):        torch 2.7.1+cu118  (already installed in the RailDefect .venv)
+#   - lab workstation (RTX 5090, Blackwell sm_120): needs a cu128 build --
+#       pip install torch --index-url https://download.pytorch.org/whl/cu128
+#     A +cu118 build CANNOT run on the 5090. See SETUP_LAB.md.
+torch>=2.7
+numpy>=1.26
+matplotlib>=3.8
+pillow>=10.0
+tqdm>=4.66
+jupyter
+ipykernel

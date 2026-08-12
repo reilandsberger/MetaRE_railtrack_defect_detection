@@ -14,3 +14,12 @@ psi_ms_dist*.pt
 psi_rail*.pt
 v_rail*.pt
 depth*.pt
+
+# rail3D — 3D upgrade: bulk generated data / checkpoints stay out of the repo
+rail3D/data/generated/
+rail3D/data/checkpoints/
+rail3D/**/*.pt
+rail3D/**/__pycache__/
+# small meta-atom library fits ARE tracked
+!rail3D/rail3d/library_amp_fit.npy
+!rail3D/rail3d/library_phase_fit.npy
