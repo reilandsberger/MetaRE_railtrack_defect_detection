@@ -31,7 +31,14 @@ class TrainConfig:
     run_name: str = "run"
     surface: str = "slm"              # "slm" | "metaunit"
     mode: str = "tot"                 # field mode: "tot" | "sca"
-    n_epoch: int = 400
+    # The tau anneal (0..tau_anneal_end) and the pruning window make the
+    # objective NON-STATIONARY for the first ~250 epochs. At the old default of
+    # 400 that left only ~150 epochs of stationary fine-tuning at the final
+    # detector count and mask sharpness -- too short to settle ~1800 metasurface
+    # parameters. 1200 leaves ~950. Epochs are cheap (~0.5 s on the 5090), so
+    # check history["best_epoch"]: if it lands in the last 10% of the run, the
+    # model was still improving and n_epoch should go up again.
+    n_epoch: int = 1200
     batch_size: int = 256
     b0: int = 64                      # intact reference batch per step
     lr: float = 5e-4
@@ -353,6 +360,19 @@ def train(cfg: TrainConfig, device: torch.device | None = None,
 
     save_checkpoint(latest, cfg, model, optimizer, cfg.n_epoch - 1, history,
                     {"power_floor": power_floor})
+
+    # convergence hint: was the run still improving when it stopped?
+    be, ne = history["best_epoch"], cfg.n_epoch
+    stationary = ne - max(cfg.tau_anneal_end, cfg.prune_end)
+    if verbose:
+        print(f"\nbest epoch {be}/{ne}  ({100 * be / max(ne, 1):.0f}% of the run); "
+              f"{stationary} epochs were stationary "
+              f"(after tau anneal {cfg.tau_anneal_end} and pruning {cfg.prune_end})")
+        if be > 0.9 * ne:
+            print("  -> still improving at the end: increase n_epoch")
+        elif stationary < 0.4 * ne:
+            print("  -> most of the run was non-stationary: increase n_epoch, or "
+                  "shorten tau_anneal_end / prune_end")
     return history
 
 

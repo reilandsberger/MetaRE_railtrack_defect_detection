@@ -72,7 +72,24 @@ NX, NY = 60, 30
 WX = NX * DX                    # 240 mm aperture across the railhead
 WY = NY * DX                    # 120 mm aperture along the rail
 
-H_MS = 160.0                    # crown -> metasurface plane distance (20 wvl)
+# Crown -> metasurface plane distance. Chosen by measurement (scan_geometry.py,
+# 20 samples/class/config), not inherited:
+#     H     energy   intact det-spread  field AUC  det AUC   crack field AUC
+#      80  1.43e-2        0.0203          0.567     0.419        0.595
+#     160  1.06e-3        0.0184          0.867     0.819        0.777
+#     240  5.16e-4        0.0052          0.899     0.845        0.803   <- chosen
+#     320  3.17e-4        0.0083          0.890     0.842        0.767
+#     400  2.20e-4        0.0042          0.872     0.856        0.688
+#     480  1.60e-4        0.0022          0.869     0.887        0.688
+# H=80 puts the specular lobe INSIDE the aperture (13x more energy) and performs
+# below chance: this system works because it is dark-field. Beyond 240 the field
+# AUC (physical information at the plane) falls while the det AUC through an
+# UNTRAINED random SLM keeps rising -- the field grows diffuse, which washes out
+# the crack speckle but also desensitizes fixed windows to placement jitter.
+# 240 maximizes the information training can actually exploit; it also keeps 3x
+# more energy than 480, which our RELATIVE noise model does not penalize but real
+# hardware would.
+H_MS = 240.0
 # Lateral offset of the plane centre. The horn illuminates at 55 deg from +x, so
 # the specular lobe off a flat crown lands at x = -H*tan(55 deg): -114 mm at
 # H=80, -228 mm at H=160. With PLANE_X_CENTER=0 the aperture (x in +-WX/2)
