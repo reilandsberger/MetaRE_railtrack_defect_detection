@@ -93,6 +93,14 @@ def main() -> int:
     val = train3d.evaluate(model_best, data, "val")
     res["best_val"] = val
 
+    # full_evaluation must run on the *training device* — the notebooks call it and
+    # a CPU/GPU mismatch here (e.g. quantile positions built on CPU) would otherwise
+    # only surface mid-notebook on the lab GPU.
+    ev = train3d.full_evaluation(model_best, data)
+    expected = {"test", "confusion", "roc", "noise_curve", "alignment_curve"}
+    res["full_eval_keys_ok"] = expected.issubset(ev)
+    res["full_eval_auc"] = ev["roc"]["auc"]
+
     # resume equivalence (epochs 15..29)
     mism = 0.0
     for ea, eb in zip(hist_a["val"][15:], hist_b["val"][15:]):
@@ -102,7 +110,8 @@ def main() -> int:
     res["resume_ok"] = mism < 1e-6
 
     res["pass"] = bool(res["score_improves"] and res["pruning_ok"]
-                       and res["detector_centers_moved"] and res["resume_ok"])
+                       and res["detector_centers_moved"] and res["resume_ok"]
+                       and res["full_eval_keys_ok"])
 
     report = json.loads(REPORT_PATH.read_text()) if REPORT_PATH.exists() else {}
     report["V8_end_to_end_smoke"] = res

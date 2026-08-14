@@ -166,7 +166,9 @@ def tpr_at_fpr(pos: torch.Tensor, neg: torch.Tensor, fpr: float = 0.01) -> float
 @torch.no_grad()
 def roc_points(pos: torch.Tensor, neg: torch.Tensor, n: int = 200) -> tuple[np.ndarray, np.ndarray]:
     scores = torch.cat([pos, neg])
-    thresholds = torch.quantile(scores, torch.linspace(0, 1, n).to(scores.dtype))
+    # q must live on the same device as the input (a bare .to(dtype) leaves it on CPU)
+    q = torch.linspace(0, 1, n, device=scores.device, dtype=scores.dtype)
+    thresholds = torch.quantile(scores, q)
     tpr = [(pos > t).float().mean().item() for t in thresholds]
     fpr = [(neg > t).float().mean().item() for t in thresholds]
     return np.array(fpr), np.array(tpr)
