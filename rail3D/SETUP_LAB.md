@@ -121,6 +121,21 @@ drive the GPU.
 
 ## 4. Run the verification suite (do this once, before anything long)
 
+**Fastest path — one command that runs everything and writes a paste-able summary:**
+
+```bash
+cd rail3D && python lab_report.py
+```
+
+~5 minutes on the 5090. It runs V0–V4, V5–V7, a smoke generation, the stored-shard
+statistics, a class-separability check, and V8, then writes
+`data/generated/lab_report.md`. Paste that file's contents into the chat and it
+carries everything needed to judge the run — including a measured samples/second
+and the extrapolated full-generation time. Add `--quick` to skip the slow V5–V7
+gates, or `--skip-smoke` to reuse an existing smoke set.
+
+The individual steps, if you prefer to run them separately:
+
 Ordered so the CSV-free gates run while the §5a copy is still transferring:
 
 ```bash

@@ -84,7 +84,17 @@ RESOL_ANT = 20                  # 20x20 aperture samples
 # Rail geometry
 RAIL_HEIGHT = 180.0             # cross-section normalized height (mm)
 Z_CUT = -80.0                   # illuminated region: z > -80 mm (2D's y2d > 100 mm)
-SEG_LEN = 240.0                 # swept segment length along y (2x the y-aperture)
+# Swept segment length along y. Measured truncation study (λ/8 mesh, ray-cast
+# shadowing, defect-signal cosine vs a 240 mm reference):
+#     240 mm  120480 faces  6.99 s/sample   reference
+#     160 mm   80320 faces  3.54 s/sample   cosines 0.9987-0.9998
+#     120 mm   60240 faces  2.25 s/sample   cosines 0.9969-0.9990   <- chosen
+#      80 mm   40160 faces  1.22 s/sample   cosines 0.959-0.995     <- too short
+# Truncation shifts the intact field ~5% at 120 mm, but that is common mode
+# (intact and defect samples share the segment), so the defect SIGNATURE is
+# preserved better than the mesh-resolution error we already accept. At 80 mm
+# the cut edge sits inside the illuminated footprint and cracks degrade.
+SEG_LEN = 120.0                 # = the y-aperture; 3.1x faster than 240 mm
 SLICE_DS = WVL / 2              # coarse (lambda/2) sampling: occluder meshes, quick tests
 N_BOUNDARY_VERTICES = 2400      # matches the 2D pipeline's loop resampling
 
