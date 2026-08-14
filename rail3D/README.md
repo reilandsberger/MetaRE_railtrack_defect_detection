@@ -2,8 +2,7 @@
 
 **Handoff document.** This README is written so that a future session (any
 model, any context) can pick the project up cold. Read this first, then
-`SETUP_LAB.md` for machine setup. The original plan lived at
-`~/.claude/plans/please-read-through-the-ancient-cookie.md`.
+`SETUP_LAB.md` for machine setup.
 
 ---
 
