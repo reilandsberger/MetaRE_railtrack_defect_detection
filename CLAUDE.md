@@ -61,9 +61,14 @@ Per approved plan (`~/.claude/plans/i-am-noticing-on-imperative-dewdrop.md`):
 - **Remaining (lab 5090):** `git pull` → regenerate the full 4-class dataset
   (`--profile lab`, λ/8 ≈ 1–2 h, resumable) → retrain MS + no-MS notebooks.
   Watch crack recall specifically (hairlines = hardest signal).
-- Known quirks to keep: wear CSV depths are shallow (~0.6–1 mm) after the
-  20th-percentile baseline correction in `extract_csv_profile` (width-matching
-  inflates loops — the correction is required); shell samples may land on the
+- **Defect parameter ranges are the user's operating ranges** (config.py, one
+  block), widened from the paper measurements; README §2 carries the full
+  provenance table. Do not "correct" them back to the papers. All depths are
+  sampled, never clipped. `y0` is ±10 mm on purpose (the sensor rides the train
+  along y, so defects pass the beam center); `s0` stays broadly sampled.
+- Known quirks to keep: `extract_csv_profile` needs its 20th-percentile baseline
+  correction (width-matching inflates loops); wear's CSV shape is normalized by
+  its peak *inside the gauge band*, not globally; shell samples may land on the
   vertical head side (x≈38.5) — geometrically intended; on tiny smoke splits the
   calibrated FPR is degenerate (3 intact val samples), fine on the real set.
 

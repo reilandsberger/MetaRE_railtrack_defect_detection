@@ -59,10 +59,37 @@ Figs 14/23/24) and Ye et al. 2023 (*IEEE TIM*, Figs 7/9):
 
 | class | footprint | depth | region |
 |---|---|---|---|
-| `crack` | line-divot, 10–31 mm long × 1.5–3 mm wide; longitudinal / transverse / oblique (20–70°); 30% chance of 2–3 parallel lines | 2–6.9 mm *(sampled)* | running band + gauge corner |
-| `dent` | 2D super-Gaussian, 16–20 mm (y) × 10–14 mm (s); 20% chance of a 2–4 pit chain | 1.5–2.5 mm *(sampled)* | running band |
-| `wear` | CSV cross-section deviation × long y-envelope (120–300 mm) | raw CSV, 0.7–12.5 mm | horn-facing shoulder |
-| `shell` | **parametric** (no CSVs): Fourier-modulated ellipse 8–20 mm + ragged interior; 30% chance of a second lobe | 1–3 mm | horn-facing shoulder |
+| `crack` | line-divot, 10–50 mm long × 2–5 mm wide; longitudinal / transverse / oblique (20–70°); 30% chance of 2–3 parallel lines | 2–10 mm | running band + gauge corner |
+| `dent` | 2D super-Gaussian, 10–30 mm (y) × 10–30 mm (s); 20% chance of a 2–4 pit chain | 1.5–8 mm | running band |
+| `wear` | CSV cross-section shape × y-envelope of 300–900 mm — i.e. **the whole 240 mm segment is worn**, only a slight end taper | 2–8 mm | horn-facing shoulder |
+| `shell` | **parametric** (no CSVs): Fourier-modulated ellipse 8–20 mm + ragged interior; 30% chance of a second lobe | 1–5 mm | horn-facing shoulder |
+
+All depths are **sampled uniformly** from the ranges above; the CSV supplies the
+across-defect profile *shape* only. For wear the shape is normalized by its peak
+**inside the gauge band** — normalizing globally left realized depth far below the
+sampled value, because many wear CSVs have their deepest point on the crown or
+field side, which the band mask removes.
+
+### Where the numbers come from
+
+Baseline measurements — **Ye et al. 2018, Table 1** (journal p. 351): cracks
+27–31 mm long × 2.00 mm wide × 3.00–4.33 mm deep (45° cut); squats 16.6–19.5 mm
+long × 1.90–2.42 mm deep; a narrow deep notch 10.34 mm × 3.12 mm × 6.85 mm.
+Figs 23–24 show three parallel gauge-corner cracks and rounded running-surface
+squats. **Ye et al. 2023, Fig. 9**: a shelling patch ≈ 10 × 12 mm, ≈ 2 mm deep,
+ragged and multi-lobed; Fig. 7 shows squat chains and two-lobe shelling.
+
+The ranges in the table above are the **operating ranges for this system**,
+widened from those measurements to cover the severities it must handle. Neither
+paper characterizes gauge-corner wear, so wear's extent and depth are set from
+domain knowledge, not measurement.
+
+**`y0` (along-track defect position) is near zero by construction** — ±10 mm,
+not spread over the aperture. The horn boresights the crown at y = 0 and the
+sensor rides the train along y, so every defect passes through the beam center
+at some frame; the residual spread models finite capture rate. This does **not**
+apply to `s0`, the across-head position, which the train cannot change and which
+stays broadly sampled.
 
 Parameters are resolution independent, so the fine simulation mesh (λ/8) and
 the coarse ray-cast occluder (λ/2) render the *same* physical defect.

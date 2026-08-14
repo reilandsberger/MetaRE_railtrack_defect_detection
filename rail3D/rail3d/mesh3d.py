@@ -240,10 +240,22 @@ def sample_defect_params(class_name: str, gen: torch.Generator,
 
     elif class_name == "wear":
         L = _u(gen, *config.DEFECT_LENGTH_RANGE["wear"])
+        # The CSV supplies the worn cross-section SHAPE (normalized to unit
+        # peak); the depth is sampled, so wear no longer inherits raw CSV
+        # depths that reached 12.5 mm.
+        # Normalize by the peak INSIDE the gauge band, not the global peak: many
+        # wear CSVs have their deepest point on the crown or field side, which
+        # the band mask removes — normalizing globally then left the realized
+        # depth far below the sampled value (measured 0.34 mm for a 2-8 mm draw).
+        dev = csv_profile["dev"].copy() if csv_profile else None
+        if dev is not None:
+            peak_in_band = float((dev * region_band(geom, "gauge")).max())
+            if peak_in_band > 1e-6:
+                dev = dev / peak_in_band
         p.update(L=L, band="gauge",
-                 csv_dev=csv_profile["dev"] if csv_profile else None,
+                 csv_dev=dev,
                  csv_s=csv_profile["s_dev"] if csv_profile else None,
-                 depth=float(csv_profile["depth"]) if csv_profile else 1.5)
+                 depth=_u(gen, *config.WEAR_DEPTH_RANGE))
 
     elif class_name == "shell":
         r_s = _u(gen, *config.SHELL_RADIUS_RANGE)     # semi-axes (mm)
@@ -299,7 +311,7 @@ def render_depth_field(p: dict, geom: dict, y_slices: np.ndarray) -> np.ndarray:
 
     elif cls == "wear":
         if p.get("csv_dev") is not None:
-            dev = np.interp(s, p["csv_s"], p["csv_dev"])
+            dev = p["depth"] * np.interp(s, p["csv_s"], p["csv_dev"])
         else:
             dev = p["depth"] * np.ones_like(s)
         g_y = np.exp(-math.log(2) * (2 * Y[:, 0] / p["L"]) ** 8)

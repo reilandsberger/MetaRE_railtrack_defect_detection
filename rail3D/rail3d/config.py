@@ -100,25 +100,42 @@ OCCLUDER_DS = WVL / 2           # coarse occluder mesh for the ray-cast shadow t
 SHADOW_MODE = "raycast"
 
 # --- Defect geometry parameters (rev. 2: per-point depth fields d(s, y)) ---
-# Ranges cite laser-scan measurements: Ye et al. 2018 Table 1 (cracks 27-31 mm
-# long x ~2 mm wide x 3-4.3 mm deep at 45 deg; squats 16-20 x 12 mm x
-# 1.9-2.4 mm; deep notch 10.3 x 3.1 x 6.9 mm) and Ye et al. 2023 Fig 9
-# (shelling ~8-20 mm ragged patch, ~2 mm deep, on the head shoulder).
-DEFECT_CENTER_RANGE = (-40.0, 40.0)   # y0 range, keeps energy in the y-aperture
-DEFECT_LENGTH_RANGE = {"wear": (120.0, 300.0)}   # wear keeps its long y-envelope
+# Baseline ranges came from laser-scan measurements -- Ye et al. 2018 Table 1
+# (cracks 27-31 mm long x ~2 mm wide x 3-4.3 mm deep at 45 deg; squats 16-20 mm
+# long x 1.9-2.4 mm deep; deep notch 10.3 x 3.1 x 6.9 mm) and Ye et al. 2023
+# Fig 9 (shelling ~10 x 12 mm ragged patch, ~2 mm deep, on the head shoulder).
+# The values below are the USER'S operating ranges, widened from those
+# measurements to cover the defect severities this system must handle; see
+# README section 2 for the per-parameter provenance table.
+#
+# All depths are SAMPLED uniformly from these ranges, never clipped: clipping
+# raw CSV depths used to pin 66% of cracks and 49% of dents at the cap. The CSV
+# supplies the across-defect profile SHAPE, the sampled value sets its scale.
 
-# Crack/dent depth is SAMPLED uniformly from these ranges (they are not clips —
-# clipping raw CSV depths pinned 66% of cracks and 49% of dents at the cap).
-# The CSV still provides the across-defect profile shape. Wear is deliberately
-# left on its raw CSV depth (up to ~12 mm), so it stays the strongest signal.
-CRACK_LENGTH_RANGE = (10.0, 31.0)     # along the crack line (mm)
-CRACK_WIDTH_RANGE = (1.5, 3.0)        # across the line: hairline (Table 1 ~2 mm)
-CRACK_DEPTH_RANGE = (2.0, 6.9)        # sampled (mm)
-DENT_DEPTH_RANGE = (1.5, 2.5)         # sampled (mm)
-DENT_FOOTPRINT_Y = (16.0, 20.0)       # FWHM along the rail (mm)
-DENT_FOOTPRINT_S = (10.0, 14.0)       # FWHM across the head (mm)
+# y0: the defect's along-track position. The horn boresights the crown at y=0
+# and the sensor rides the train along y, so every defect passes through the
+# beam center at some frame -- y0 is near 0 by construction, not uniform over
+# the aperture. The residual spread models finite capture rate / trigger jitter.
+# (This argument does NOT apply to the across-head position s0, which the train
+# cannot change and which stays broadly sampled.)
+DEFECT_CENTER_RANGE = (-10.0, 10.0)
+
+# Wear: gauge-corner wear develops over long stretches (curves, older rail), so
+# the envelope is longer than the 240 mm segment -- the whole modelled rail
+# carries the worn cross-section, with only a slight taper at the ends.
+DEFECT_LENGTH_RANGE = {"wear": (300.0, 900.0)}
+
+CRACK_LENGTH_RANGE = (10.0, 50.0)     # along the crack line (mm)
+CRACK_WIDTH_RANGE = (2.0, 5.0)        # across the line (mm)
+CRACK_DEPTH_RANGE = (2.0, 10.0)       # sampled (mm)
+DENT_DEPTH_RANGE = (1.5, 8.0)         # sampled (mm)
+DENT_FOOTPRINT_Y = (10.0, 30.0)       # FWHM along the rail (mm)
+DENT_FOOTPRINT_S = (10.0, 30.0)       # FWHM across the head (mm)
 SHELL_RADIUS_RANGE = (4.0, 10.0)      # semi-axes (mm) -> 8-20 mm footprints
-SHELL_DEPTH_RANGE = (1.0, 3.0)
+SHELL_DEPTH_RANGE = (1.0, 5.0)        # sampled (mm)
+# Wear depth is now sampled too (was: raw CSV, which reached 12.5 mm). Deeper
+# wear only increases the barcode distance, so training does not need it.
+WEAR_DEPTH_RANGE = (2.0, 8.0)         # sampled (mm)
 
 # Surface region bands (arc positions, mm in section coords)
 CROWN_HALF_WIDTH = 25.0               # running band: |x| <= 25
