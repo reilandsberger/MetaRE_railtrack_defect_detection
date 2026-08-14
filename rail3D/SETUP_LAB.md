@@ -10,8 +10,12 @@ unchanged on the lab machine except where marked.
 
 ## 0. Read this first
 
-- **Start the defect-CSV copy now** (§5a) — it is ~2 GB and everything from §4's
-  V5–V7 onward needs it. It can transfer while you do §1–§3.
+- **Start the defect-CSV copy now** (§4) — it is ~2 GB and every step from §5
+  onward needs it. It can transfer while you do §1–§3.
+- **Steps 5–12 are the runbook**, in the order you actually run them. If you
+  only want the short version: `lab_report.py` → `generate_dataset_3d.py
+  --profile lab` → training notebook → `sweep_detectors.py` →
+  `analyze_results.py`.
 - **If you cloned earlier in the session, `git pull` before running anything.**
   Fixes land on `3D_railhead_upgrade` between sessions; the `cuda:auto` GPU
   selection in §3 is one of them.
@@ -30,7 +34,7 @@ git checkout 3D_railhead_upgrade
 (Or `git pull` + `git checkout 3D_railhead_upgrade` if already cloned.)
 
 All 3D code lives in `rail3D/`. Bulk data (`rail3D/data/generated/`,
-`rail3D/data/checkpoints/`) is gitignored — see §5 for how to get the data.
+`rail3D/data/checkpoints/`) is gitignored and regenerated locally — see §8.
 
 ## 2. Python environment
 
@@ -97,7 +101,7 @@ python -c "from rail3d import config, sections; print(config.RAILDEFECT_DIR, con
 ```
 
 Expect an absolute path, `True`, and `{'crack': 5000, 'dent': 5000, 'wear': 5000}`
-(smaller counts simply mean the §5a copy is still running). Anything wrong raises a
+(smaller counts simply mean the §4 copy is still running). Anything wrong raises a
 `FileNotFoundError` naming the specific problem.
 
 > You do **not** need to edit the hard-coded fallback path in `config.py`. It is only
@@ -113,51 +117,14 @@ Expect an absolute path, `True`, and `{'crack': 5000, 'dent': 5000, 'wear': 5000
   `"cuda"`.
 - `RAILDEFECT_DATA_DIR` — the **parent** folder holding the three defect CSV
   datasets (`data_defect_crack2/`, `data_defect_dent2/`, `data_defect_wear2/`).
-  Required by V5–V7, the V8 smoke test, and all dataset generation — see §5a.
+  Required by V5–V7, the V8 smoke test, and all dataset generation — see §4.
   Only training-from-existing-shards works without it.
 
 `config.py` fails fast with an actionable message if the torch build cannot
 drive the GPU.
 
-## 4. Run the verification suite (do this once, before anything long)
 
-**Fastest path — one command that runs everything and writes a paste-able summary:**
-
-```bash
-cd rail3D && python lab_report.py
-```
-
-~5 minutes on the 5090. It runs V0–V4, V5–V7, a smoke generation, the stored-shard
-statistics, a class-separability check, and V8, then writes
-`data/generated/lab_report.md`. Paste that file's contents into the chat and it
-carries everything needed to judge the run — including a measured samples/second
-and the extrapolated full-generation time. Add `--quick` to skip the slow V5–V7
-gates, or `--skip-smoke` to reuse an existing smoke set.
-
-The individual steps, if you prefer to run them separately:
-
-Ordered so the CSV-free gates run while the §5a copy is still transferring:
-
-```bash
-cd rail3D
-python tests_physics_3d.py          # V1-V4: solver/propagator equivalence, sanity (~1 min, CPU)
-```
-
-V1–V4 need only `crosssection.png`, which is committed — they work immediately.
-The rest need the defect CSVs of §5a in place:
-
-```bash
-python validation_3d.py             # V5-V7: 2D-vs-3D, shadowing, mesh convergence (~3 min GPU)
-python generate_dataset_3d.py --profile lab --smoke   # 20/class + 32 intact (~1 min)
-python v8_smoke_test.py             # V8: end-to-end smoke train + kill-and-resume (~5 min GPU)
-```
-
-All eight gates must PASS (they do on the laptop). Results are written to
-`data/generated/verification_report.json`, which is **untracked** — running the
-suite never dirties your working tree, so `git pull` stays conflict-free. The
-laptop's reference numbers live in `README.md` §5.
-
-## 5a. Get the defect CSVs onto this machine (~2 GB — start this first)
+## 4. Get the defect CSVs onto this machine (~2 GB — start this first)
 
 `rail3D` reads only these three folders from `RAILDEFECT_DATA_DIR`; nothing else
 in the old `RailDefect/` tree is used:
@@ -168,8 +135,9 @@ in the old `RailDefect/` tree is used:
 | `data_defect_dent2/`  | 5000 CSVs | ~667 MB |
 | `data_defect_wear2/`  | 5000 CSVs | ~667 MB |
 
-Copy them under one parent (that parent is what `RAILDEFECT_DATA_DIR` points at).
-With the source mounted as `Z:`:
+(`shell` is fully parametric — it needs no CSV folder.) Copy them under one
+parent; that parent is what `RAILDEFECT_DATA_DIR` points at. With the source
+mounted as `Z:`:
 
 ```bat
 robocopy Z:\RailDefect\data_defect_crack2 C:\Users\<you>\Documents\Rei\RailDefect\data_defect_crack2 /E /MT:16
@@ -178,104 +146,192 @@ robocopy Z:\RailDefect\data_defect_crack2 C:\Users\<you>\Documents\Rei\RailDefec
 Repeat for `data_defect_dent2` and `data_defect_wear2`. Many small files — expect
 this to be slower than 2 GB of bulk data suggests, which is why it goes first.
 
-## 5. Getting the dataset
+---
 
-**Primary path — generate on the 5090** (≲1 h; only the smoke set was ever
-generated on the laptop). Needs `RAILDEFECT_DATA_DIR` pointing at the defect
-CSV folders (§3):
+# The runbook
+
+Steps 5–12 in the order you actually run them. Steps 5–7 are one-time checks;
+8–12 are the experiment.
+
+## 5. Verify the machine — one command
+
+```bash
+cd rail3D && python lab_report.py
+```
+
+~5 min on the 5090. Runs V0–V4, V5–V7, a smoke generation, stored-shard
+statistics, a class-separability check and V8, then writes
+`data/generated/lab_report.md`. Every gate must say PASS. `--quick` skips the
+slow V5–V7 gates; `--skip-smoke` reuses an existing smoke set.
+
+## 6. Look at the setup
+
+```bash
+python setup_diagram.py
+```
+
+Writes to `data/figures/`:
+- `setup_diagram.png` — 3D scene, side view (x–z) and top view (x–y) with every
+  distance annotated, plus a marker showing where the specular lobe lands
+  relative to the aperture;
+- `cross_sections.png` — intact vs defect CSV cross-sections;
+- `mesh_review.png` — one mesh per class with its `d(s,y)` depth-field footprint.
+
+For the physics and module-design figures, run `design_review_notebook.ipynb`
+and `validation_3d_notebook.ipynb`.
+
+## 7. Measurement-plane geometry — already decided
+
+```bash
+python scan_geometry.py          # only if you want to re-derive it
+```
+
+Already run: `H_MS = 240 mm`, plane centred at x = 0, aperture 60×30. The scan
+measured H = 80/160/240/320/400/480 and this configuration maximised the
+*field-level* information (AUC 0.899). Notably H = 80 puts the specular lobe
+**inside** the aperture — 13× the energy and **below-chance** separability — so
+this system works precisely because it is dark-field. Full table and reasoning
+are in `rail3d/config.py` above `H_MS`.
+
+## 8. Generate the dataset
 
 ```bash
 python generate_dataset_3d.py --profile lab
 ```
 
-Useful flags: `--status` (which shards exist/remain), `--classes crack dent`
-(subset), `--limit N` (samples per class, default 5000). Generation is
-resumable: shards are written atomically and existing shards are skipped, so
-an interrupted run just continues on relaunch — safe on the shared
-workstation.
+~36 min on the 5090 for 4 classes × 5000 + 512 intact (measured 9.47 samples/s).
+Resumable: shards are written atomically and existing ones are skipped, so an
+interrupt just continues on relaunch — safe on a shared workstation.
 
-**Rev.2 note (4 classes, finer mesh).** The dataset now has **four** defect
-classes — `crack`, `dent`, `wear` and `shell` (shelling, fully parametric: it
-needs no CSV folder) — plus the intact pool, and the generation mesh is λ/8
-(1 mm facets) so hairline cracks are resolved. Expect **~1–2 h** on the 5090
-for 5000/class, and note that **shards from before this change are
-incompatible** (different geometry and label order): delete
-`data/generated/rail3d_*_shard*.pt` before regenerating.
+Flags: `--status` (which shards exist/remain), `--classes crack dent` (subset),
+`--limit N` (samples per class), `--smoke` (20/class into `data/generated/smoke/`).
 
-**Optional fidelity upgrade (lab only):** the laptop dataset uses the λ/4
-mesh (defect-signal cosine 0.993 vs λ/12; ~15% systematic magnitude bias
-shared across samples). On the 5090 you can afford λ/8: set
-`MESH_DS = WVL / 8` in `rail3d/config.py`, delete/rename the old shards, and
-regenerate (~4-6× the λ/4 cost — still around an hour).
+**Shards from before the rev.2 geometry are incompatible** (different defect
+model, label order, plane height). Delete them first:
 
-### Troubleshooting
+```bash
+rm -f data/generated/rail3d_*_shard*.pt
+```
+
+## 9. Check the data before training on it
+
+```bash
+python inspect_dataset.py --root data/generated
+```
+
+Re-derives each stored sample's geometry from its seed and shows it beside the
+stored field, plus the mean defect-minus-intact intensity and per-class
+parameter statistics. Confirm the depth/length/angle ranges match `README.md` §2.
+
+## 10. Train
+
+Open `training_3d_ms_notebook.ipynb` (select the `.venv` kernel): a phase-only
+`SLM2D` run first, then the real meta-atom `MetaUnitSoft`. `training_3d_no_ms_notebook.ipynb`
+is the no-metasurface baseline. Headless equivalent:
+
+```bash
+python -c "from rail3d import config, train3d; train3d.train(train3d.TrainConfig(run_name='ms3d_slm_v1', surface='slm', n_epoch=1200, batch_size=config.PROFILES['lab'].train_batch))"
+```
+
+~10 min at 1200 epochs. Training auto-resumes from
+`data/checkpoints/<run_name>/latest.pt`; delete that folder to start over.
+
+### How the detectors are optimized
+
+Positions are **trained, not swept**. `SoftDetector2D` holds the window centres
+as an `nn.Parameter` with sigmoid-edged (differentiable) masks, so gradients move
+them; variance-based pruning runs *inside* the same training run. One run does:
+
+| epochs | what happens |
+|---|---|
+| 0–40 | full starting grid, soft masks (large τ), phase + positions training |
+| 40–200 | pruning window: geometric reduction to the final count, positions still moving |
+| 200–250 | τ anneal completes, masks sharpen toward hard edges |
+| 250–1200 | stationary fine-tune at the final count and sharpness |
+
+All reported metrics use **hard** binary windows, never the soft training masks.
+Why 1200 epochs: the τ anneal and pruning make the objective non-stationary for
+~250 epochs, so a 400-epoch run left only ~150 stationary epochs to settle ~1800
+metasurface parameters. `train()` prints where the best epoch landed and warns if
+the model was still improving at the end.
+
+## 11. How few detectors can you get away with?
+
+```bash
+python sweep_detectors.py --counts 4 6 8 10
+```
+
+Starts from a dense 13×10 = 130-detector grid (~92% plane coverage) and prunes
+to each final count, one full training run per count. Writes
+`data/figures/detector_sweep.png` (AUC and class accuracy vs count, plus the
+surviving layout) and `data/generated/detector_sweep.json`.
+
+Add `--dist 120 160 200` to sweep the metasurface→detector distance at the same
+time — that is a training-time propagation, so it needs no regeneration.
+
+## 12. Where does it succeed and fail?
+
+```bash
+python analyze_results.py --run-name ms3d_slm_v1
+```
+
+Joins every test sample's outcome to the defect parameters stored in its shard
+metadata, and writes:
+- `analysis_parameters.png` — detection rate vs depth, size, orientation and
+  across-head position, per class. A downward trend marks the regime the system
+  misses (e.g. "cracks shallower than N mm").
+- `analysis_performance.png` — per-class ROC, class-confusion matrix, and the
+  score distributions with the calibrated threshold drawn on.
+- `analysis_failures.png` — the worst missed detections, each rendered as the
+  depth field that produced it.
+- `analysis.json` — every number behind those figures, plus a per-class ranking
+  of which parameter best predicts failure.
+
+---
+
+## Troubleshooting
 
 | Symptom | Cause / fix |
 |---|---|
-| `git pull` → "Your local changes to the following files would be overwritten by merge" | You ran the scripts, which rewrite generated output. Everything under `rail3D/data/` is regenerated and safe to discard: `git checkout -- rail3D/data/` then pull. (Keep real edits instead with `git stash` → `git pull` → `git stash pop`.) |
-| "It's running on the Intel GPU / the wrong GPU" in Task Manager | Almost always a misread — **CUDA never uses Intel integrated graphics**, and Task Manager's GPU numbering does not match CUDA's (on the lab box the 5090 is Task Manager GPU 1 but CUDA `cuda:0`). Trust the banner each script prints (`[rail3d] ... running on cuda:N (NVIDIA ...)`) and `nvidia-smi`, not Task Manager indices. Note Task Manager also hides CUDA work unless you switch a graph to the **Compute_0** engine. |
-| `tests_physics_3d.py` shows no GPU activity at all | Expected: **V0–V4 run on CPU by design** (tiny meshes, ~5 s, safe on a 2 GB laptop card). Force the GPU with `RAIL3D_TEST_DEVICE=cuda:0`. V5–V7, generation and training always use the GPU. |
-| `ValueError: crack: requested 5000 but only 0 CSVs` | `RAILDEFECT_DATA_DIR` unset in *this* process, wrong shell syntax (§3), an MSYS `/c/...` path, or it points inside a `data_defect_*2` folder instead of their parent |
-| Reference rail width prints ~94 mm instead of 157.4 mm | wrong image loader for `crosssection.png` — see `README.md` §6.1 |
-| CUDA "no kernel image available" | a non-cu128 torch got installed; re-run §2 and do not use `pip install -U` |
-| Generation looks stalled | it logs every ~50 samples to `data/generated/generation.log`; `--status` lists shards done/remaining |
+| `git pull` → "local changes would be overwritten by merge" | You ran the scripts, which rewrite generated output. Everything under `rail3D/data/` is regenerated and safe to discard: `git checkout -- rail3D/data/` then pull. (Keep real edits with `git stash` → `git pull` → `git stash pop`.) |
+| "It's running on the Intel GPU / the wrong GPU" | Almost always a misread — **CUDA never uses Intel integrated graphics**, and Task Manager's GPU numbering does not match CUDA's (here the 5090 is Task Manager GPU 1 but CUDA `cuda:0`). Trust the `[rail3d] ... running on cuda:N (NVIDIA ...)` banner each script prints, and `nvidia-smi`. Task Manager also hides CUDA work unless you switch a graph to the **Compute_0** engine. |
+| `tests_physics_3d.py` shows no GPU activity | Expected: **V0–V4 run on CPU by design** (tiny meshes, ~5 s, safe on a 2 GB card). Force the GPU with `RAIL3D_TEST_DEVICE=cuda:0`. |
+| `ValueError: crack: requested 5000 but only 0 CSVs` | `RAILDEFECT_DATA_DIR` unset in *this* process, wrong shell syntax (§3), an MSYS `/c/...` path, or pointing inside a `data_defect_*2` folder instead of their parent. |
+| Reference rail width prints ~94 mm instead of 157.4 mm | Wrong image loader for `crosssection.png` — see `README.md` §6 finding 1. |
+| CUDA "no kernel image available" | A non-cu128 torch got installed; re-run §2 and do not use `pip install -U`. |
+| Generation looks stalled | It logs every ~50 samples to `data/generated/generation.log`; `--status` lists shards done/remaining. |
+| Notebook can't find the data | `RAILDEFECT_DATA_DIR` is read at import time — launch VS Code from the shell where you exported it (`code .`), or set `os.environ[...]` above the `from rail3d import ...` line. |
 
-## 6. Training
+## Timings (RTX 5090)
 
-Open the notebooks in VS Code (select the `.venv` kernel):
-
-- `training_3d_ms_notebook.ipynb` — main run: phase-only SLM first, then the
-  real meta-atom (`MetaUnitSoft`) parameterization. 400 epochs; minutes per
-  run on the 5090.
-- `training_3d_no_ms_notebook.ipynb` — no-metasurface baseline for the
-  comparison table.
-- `design_review_notebook.ipynb` / `validation_3d_notebook.ipynb` — design
-  and physics review figures (already rendered to `data/figures/`).
-
-Or headless from a terminal:
-
-```python
-python -c "
-from rail3d import config, train3d
-cfg = train3d.TrainConfig(run_name='ms3d_slm_v1', surface='slm', n_epoch=400,
-                          batch_size=config.PROFILES['lab'].train_batch)
-train3d.train(cfg)
-"
-```
-
-**Interruption safety (shared workstation):** a full resumable checkpoint
-(model + optimizer + RNG states + pruning state + metric history) is written
-atomically to `data/checkpoints/<run_name>/latest.pt` every 10 epochs and to
-`best.pt` on every validation improvement. Re-running the same `TrainConfig`
-auto-resumes from `latest.pt` — verified **bit-identical** continuation in V8
-(overhead ≪1%). To restart a run from scratch, delete its checkpoint folder.
-
-Trained artifacts to bring back / compare: the checkpoint folder plus the
-exported `phase.csv` / `w_pillar.csv` maps from the notebook's final cells.
-
-## 7. What to expect
-
-| Step | Laptop (MX250, 2 GB) | Lab (RTX 5090) |
-|---|---|---|
-| Physics test suite (V1–V8) | ~10 min | few min |
-| Full generation, 15.5k samples (λ/4) | ~4.5 h (not planned — use the 5090) | ≲1 h |
-| SLM training, 400 epochs | ~1–2 h | minutes–tens of minutes |
+| Step | Time |
+|---|---|
+| `lab_report.py` (V0–V8 + smoke) | ~5 min |
+| `setup_diagram.py` | seconds (CPU) |
+| `scan_geometry.py` (8 configs) | ~1 min |
+| `generate_dataset_3d.py --profile lab` | **~36 min** (9.47 samples/s) |
+| `inspect_dataset.py` | ~10 s |
+| training, 1200 epochs | ~10 min |
+| `sweep_detectors.py` (4 counts) | ~40 min |
+| `analyze_results.py` | ~1 min |
 
 Profiles (`rail3d/config.py`): `laptop` = cuda:0, mesh batch 2, chunk 1024,
-train batch 256; `lab` = cuda:auto (strongest card), mesh batch 64, chunk
-8192, train batch 1024. `RAIL3D_DEVICE` always wins over the profile's device.
+train batch 256; `lab` = cuda:auto (strongest card), mesh batch 64, chunk 8192,
+train batch 1024. `RAIL3D_DEVICE` always wins over the profile's device.
 
-## 8. Physics/verification summary (what you can trust)
+## What you can trust (verification summary)
 
 - Chunked/batched Rayleigh–Sommerfeld solver ≡ verbatim Face3D code to ~1e-7
-  (V1); FFT propagator ≡ verified conv2d kernel to ~1e-6 (V2); angular-
+  (V1); FFT propagator ≡ the verified conv2d kernel to ~1e-6 (V2); angular-
   spectrum cross-check 0.13% (V3); specular/energy/orientation sanity (V4).
-- 3D solver vs the established 2D Hankel pipeline on a uniform rail:
-  Pearson r = 0.984 (V5).
-- Ray-cast shadowing validated against the 2D line-of-sight ground truth;
-  grazing-ray false positives eliminated (`min_t`), real crack-crater
-  shadowing (~2–14%) retained (V6).
-- Generation mesh (λ/4): defect-signal cosine ≥ 0.94 (mean 0.976) vs λ/8,
-  intact barcode within 3% (V7).
-- End-to-end training: score improves, pruning 18→8 runs, detector centers
-  move, kill-and-resume bit-identical (V8).
+- Rev.2 defect geometry: crack orientations, band confinement, seed
+  reproducibility and cross-resolution consistency (V0).
+- 3D solver vs the established 2D Hankel pipeline on a uniform rail: r = 0.976
+  at the 120 mm segment (V5).
+- Ray-cast shadowing validated against the 2D line-of-sight ground truth; now a
+  real 4.3% effect since the defect ranges widened (V6).
+- Generation mesh (λ/8): defect-signal cosine mean 0.9975, min 0.9944 vs λ/16
+  (V7).
+- End-to-end training: score improves, pruning runs, detector centres move,
+  kill-and-resume is bit-identical, `full_evaluation` covered, legacy objective
+  guarded (V8).

@@ -67,6 +67,21 @@ def load_class_fields(class_name: str, root: Path | None = None) -> tuple[torch.
     return torch.cat(psis, dim=0), metas
 
 
+def load_meta(class_name: str, root: Path | None = None) -> list[dict]:
+    """Per-sample metadata for one class WITHOUT loading its fields.
+
+    Same concatenation order as load_class_fields, so indices line up with the
+    tensors returned by load_dataset (and therefore with the split indices).
+    """
+    root = root or config.GENERATED_DIR
+    metas: list[dict] = []
+    for k in existing_shards(class_name, root=root):
+        bundle = torch.load(shard_path(class_name, k, root=root), map_location="cpu",
+                            weights_only=False)
+        metas.extend(bundle["meta"])
+    return metas
+
+
 def combine_field(psi: torch.Tensor, mode: str, psi0: torch.Tensor | None = None,
                   root: Path | None = None) -> torch.Tensor:
     """(N, NX, NY, 2) [psi1, psi2] -> (N, NX, NY) complex field."""

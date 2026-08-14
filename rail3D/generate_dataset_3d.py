@@ -6,8 +6,8 @@ Examples (run from rail3D/):
     python generate_dataset_3d.py --status                     # what exists / what remains
     python generate_dataset_3d.py --profile lab                # same on the RTX 5090 (auto-picks the strongest GPU)
 
-Physics per sample (validated in V1-V7): λ/4 swept mesh, ray-cast shadowing
-against a λ/2 occluder mesh, exact RS-I surface integral, psi1 + psi2 channels;
+Physics per sample (validated in V0-V7): lambda/8 swept mesh, ray-cast shadowing
+against a lambda/2 occluder mesh, exact RS-I surface integral, psi1 + psi2 channels;
 the face-independent psi0 is cached once. Shards are written atomically and
 skipped on re-run, and every sample is derived from a deterministic seed, so an
 interrupted run resumes losslessly on any machine.
@@ -164,7 +164,7 @@ def main() -> int:
     parser.add_argument("--limit", type=int, default=FULL_PER_CLASS, help="samples per defect class")
     parser.add_argument("--intact", type=int, default=FULL_INTACT, help="intact pool size")
     parser.add_argument("--classes", nargs="*", default=None,
-                        help="subset of {crack,dent,wear,intact}")
+                        help="subset of {crack,dent,wear,shell,intact}")
     parser.add_argument("--shard-size", type=int, default=data3d.SHARD_SIZE)
     parser.add_argument("--status", action="store_true", help="report shard status and exit")
     args = parser.parse_args()

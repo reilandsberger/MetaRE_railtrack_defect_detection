@@ -3,7 +3,7 @@
 Ties each shard back to the geometry that produced it: for a few samples per
 class it re-derives the defect parameters from the stored seed, renders the
 depth field d(s, y), and shows it next to the fields actually stored in the
-shard — plus the mean defect-minus-intact intensity, which is the signature the
+shard - plus the mean defect-minus-intact intensity, which is the signature the
 metasurface has to work with.
 
 Usage (from rail3D/):
@@ -44,7 +44,7 @@ def summarize(psi: torch.Tensor, meta: list[dict], cls: str) -> None:
     print(f"    all finite: {finite}"
           f"   sample-to-sample variation: {float(psi1.abs().std(dim=0).mean()):.4g}")
     if not finite:
-        print("    !! non-finite values present — generation is broken")
+        print("    !! non-finite values present - generation is broken")
 
     keys = [k for k in ("depth", "L", "theta", "y0", "s0", "r_s", "r_y", "fw_y", "fw_s")
             if k in meta[0]]

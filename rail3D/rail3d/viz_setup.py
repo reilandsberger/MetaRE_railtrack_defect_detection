@@ -38,10 +38,20 @@ def setup_diagram(save_path=None, show=False):
 
     horn_c, horn_corners, _ = _horn_geometry()
     z_ms = config.H_MS
-    z_det = config.H_MS + config.LAYER_DISTANCES[-1]
+    d_det = config.LAYER_DISTANCES[-1]
+    z_det = z_ms + d_det
+    xc = config.PLANE_X_CENTER                 # planes may be laterally offset
     wx2, wy2 = config.WX / 2, config.WY / 2
+    x_lo, x_hi = xc - wx2, xc + wx2
     det_c = config.detector_grid_centers().numpy()
     dw, dh = config.DET_SIZE
+    # everything below is derived from config so the figure stays correct when
+    # the plane height / offset / aperture change (it silently clipped the
+    # detector plane when H_MS moved from 160 to 240)
+    margin = 60.0
+    rail_w = float(section[:, 0].max() - section[:, 0].min())
+    side_xlim = (min(x_lo, -rail_w / 2) - margin, horn_c[0] + margin)
+    side_ylim = (config.Z_CUT - margin, z_det + margin)
 
     fig = plt.figure(figsize=(15, 5.5))
 
@@ -49,9 +59,9 @@ def setup_diagram(save_path=None, show=False):
     ax = fig.add_subplot(1, 3, 1, projection="3d")
     ax.plot_trisurf(vx, vy, vz, triangles=f.numpy(), color="lightsteelblue",
                     edgecolor="none", alpha=0.9, shade=True)
-    for zz, color, label in [(z_ms, "tab:orange", "metasurface z=160"),
-                             (z_det, "tab:green", "detector plane z=320")]:
-        xs = [-wx2, wx2, wx2, -wx2, -wx2]
+    for zz, color, label in [(z_ms, "tab:orange", f"metasurface z={z_ms:.0f}"),
+                             (z_det, "tab:green", f"detector plane z={z_det:.0f}")]:
+        xs = [x_lo, x_hi, x_hi, x_lo, x_lo]
         ys = [-wy2, -wy2, wy2, wy2, -wy2]
         ax.plot(xs, ys, [zz] * 5, color=color, lw=1.5, label=label)
     hc = np.vstack([horn_corners, horn_corners[:1]])
@@ -69,47 +79,59 @@ def setup_diagram(save_path=None, show=False):
     ax.plot(sx, sz, color="steelblue", lw=1.2, label="rail cross-section")
     ax.axhline(config.Z_CUT, color="gray", ls=":", lw=0.8)
     ax.text(60, config.Z_CUT + 3, f"z_cut = {config.Z_CUT:.0f} (illuminated above)", fontsize=7)
-    ax.plot([-wx2, wx2], [z_ms, z_ms], color="tab:orange", lw=2, label="metasurface (240 mm)")
-    ax.plot([-wx2, wx2], [z_det, z_det], color="tab:green", lw=2, label="detector plane")
-    ax.plot(horn_corners[[0, 1], 0], horn_corners[[0, 1], 2], color="tab:red", lw=3, label="horn (A=27.4 mm)")
+    ax.plot([x_lo, x_hi], [z_ms, z_ms], color="tab:orange", lw=2,
+            label=f"metasurface ({config.WX:.0f} mm wide)")
+    ax.plot([x_lo, x_hi], [z_det, z_det], color="tab:green", lw=2, label="detector plane")
+    ax.plot(horn_corners[[0, 1], 0], horn_corners[[0, 1], 2], color="tab:red", lw=3,
+            label=f"horn (A={config.SIZE_ANT[0]:.1f} mm)")
     ax.annotate("", xy=(0, 0), xytext=(horn_c[0], horn_c[2]),
                 arrowprops=dict(arrowstyle="->", color="tab:red", lw=0.9))
     ax.text(horn_c[0] * 0.55, horn_c[2] * 0.62,
-            f"224 mm @ {np.degrees(config.THETA_INC):.0f}°", fontsize=8, color="tab:red")
-    ax.annotate("", xy=(-135, z_ms), xytext=(-135, 0),
+            f"{config.DIST_ANT:.0f} mm @ {np.degrees(config.THETA_INC):.0f}°",
+            fontsize=8, color="tab:red")
+    x_ann = x_lo - 15
+    ax.annotate("", xy=(x_ann, z_ms), xytext=(x_ann, 0),
                 arrowprops=dict(arrowstyle="<->", lw=0.8))
-    ax.text(-158, z_ms / 2, "160 mm", fontsize=8, rotation=90)
-    ax.annotate("", xy=(-135, z_det), xytext=(-135, z_ms),
+    ax.text(x_ann - 23, z_ms / 2, f"{z_ms:.0f} mm", fontsize=8, rotation=90)
+    ax.annotate("", xy=(x_ann, z_det), xytext=(x_ann, z_ms),
                 arrowprops=dict(arrowstyle="<->", lw=0.8))
-    ax.text(-158, (z_ms + z_det) / 2, "160 mm", fontsize=8, rotation=90)
+    ax.text(x_ann - 23, (z_ms + z_det) / 2, f"{d_det:.0f} mm", fontsize=8, rotation=90)
+    # specular lobe off a flat crown: shows why the aperture is dark-field
+    x_spec = -z_ms * np.tan(config.THETA_INC)
+    ax.plot([0, x_spec], [0, z_ms], color="tab:red", ls="--", lw=0.8, alpha=0.6)
+    ax.plot([x_spec], [z_ms], "rx", ms=7,
+            label=f"specular lobe (x={x_spec:.0f} mm)")
     ax.set(xlabel="x (mm)", ylabel="z (mm)", title="Side view (x-z at y=0)",
-           xlim=(-180, 260), ylim=(-200, 360))
+           xlim=(min(side_xlim[0], x_spec - 30), side_xlim[1]), ylim=side_ylim)
     ax.set_aspect("equal")
     ax.legend(loc="upper right", fontsize=7)
 
     # --- top view (x-y) ----------------------------------------------------
     ax = fig.add_subplot(1, 3, 3)
-    rail_w = float(section[:, 0].max() - section[:, 0].min())
     ax.add_patch(Rectangle((-rail_w / 2, -config.SEG_LEN / 2), rail_w, config.SEG_LEN,
                            color="steelblue", alpha=0.35, label=f"rail segment ({config.SEG_LEN:.0f} mm)"))
-    ax.add_patch(Rectangle((-wx2, -wy2), config.WX, config.WY, fill=False,
+    ax.add_patch(Rectangle((x_lo, -wy2), config.WX, config.WY, fill=False,
                            edgecolor="tab:orange", lw=1.5,
                            label=f"MS aperture {config.WX:.0f}x{config.WY:.0f} mm ({config.NX}x{config.NY} px)"))
     for k, (cx, cy) in enumerate(det_c):
-        ax.add_patch(Rectangle((cx - dw / 2, cy - dh / 2), dw, dh, fill=False,
+        ax.add_patch(Rectangle((xc + cx - dw / 2, cy - dh / 2), dw, dh, fill=False,
                                edgecolor="tab:green", lw=1.0,
-                               label="detectors (6x3 init)" if k == 0 else None))
+                               label=f"detectors ({config.DET_GRID[0]}x{config.DET_GRID[1]} init)"
+                               if k == 0 else None))
     ax.plot(horn_c[0], horn_c[1], "r*", ms=12, label="horn center (proj.)")
     y0lo, y0hi = config.DEFECT_CENTER_RANGE
     ax.plot([0, 0], [y0lo, y0hi], "k-", lw=3, alpha=0.4, label="defect-center range y0")
     ax.set(xlabel="x (mm)", ylabel="y (mm)", title="Top view (x-y)",
-           xlim=(-160, 260), ylim=(-140, 140))
+           xlim=(min(x_lo, -rail_w / 2) - 40, horn_c[0] + 40),
+           ylim=(-config.SEG_LEN / 2 - 30, config.SEG_LEN / 2 + 30))
     ax.set_aspect("equal")
     ax.legend(loc="upper right", fontsize=7)
 
     fig.suptitle(
         f"rail3D simulated setup — λ={config.WVL:.0f} mm (37.5 GHz), dx={config.DX:.0f} mm, "
-        f"grid {config.NX}x{config.NY}, horn 224 mm @ 55°, crown→MS 160 mm, MS→det 160 mm",
+        f"grid {config.NX}x{config.NY}, horn {config.DIST_ANT:.0f} mm @ "
+        f"{np.degrees(config.THETA_INC):.0f}°, crown→MS {z_ms:.0f} mm, "
+        f"MS→det {d_det:.0f} mm, segment {config.SEG_LEN:.0f} mm",
         fontsize=10,
     )
     fig.tight_layout(rect=(0, 0, 1, 0.95))
