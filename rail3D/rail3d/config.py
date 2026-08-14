@@ -155,19 +155,46 @@ class Profile:
 PROFILES = {
     # This laptop: GeForce MX250, 2 GB VRAM — keep every intermediate small.
     "laptop": Profile("laptop", "cuda:0", batch_meshes=2, chunk_faces=1024, train_batch=256),
-    # Lab workstation: RTX 5090 (Blackwell) on device index 1.
-    "lab": Profile("lab", "cuda:1", batch_meshes=64, chunk_faces=8192, train_batch=1024),
+    # Lab workstation: the big card (RTX 5090). Its index differs per machine,
+    # so "cuda:auto" picks the strongest CUDA device instead of guessing.
+    "lab": Profile("lab", "cuda:auto", batch_meshes=64, chunk_faces=8192, train_batch=1024),
     # CPU fallback used by the verification suite.
     "cpu": Profile("cpu", "cpu", batch_meshes=1, chunk_faces=512, train_batch=64),
 }
 
 
+def best_cuda_device() -> torch.device:
+    """The strongest visible CUDA device: highest compute capability, then most VRAM.
+
+    Multi-GPU boxes do not agree on which index holds the big card (on the lab
+    workstation the 5090 is cuda:0, elsewhere it may be cuda:1), so ranking by
+    capability beats hard-coding an index. Set RAIL3D_DEVICE to override.
+    """
+    n = torch.cuda.device_count()
+    if n == 0:
+        raise RuntimeError("no CUDA devices visible")
+    ranked = sorted(
+        range(n),
+        key=lambda i: (torch.cuda.get_device_capability(i),
+                       torch.cuda.get_device_properties(i).total_memory),
+        reverse=True,
+    )
+    idx = ranked[0]
+    if n > 1:
+        print(f"[rail3d] cuda:auto -> cuda:{idx} ({torch.cuda.get_device_name(idx)}, "
+              f"sm_{''.join(map(str, torch.cuda.get_device_capability(idx)))}, "
+              f"{torch.cuda.get_device_properties(idx).total_memory / 1e9:.0f} GB) "
+              f"out of {n} devices")
+    return torch.device(f"cuda:{idx}")
+
+
 def get_device(profile: str | None = None) -> torch.device:
     """Resolve the compute device.
 
-    Priority: RAIL3D_DEVICE env var > profile's device > cpu. Never returns a
-    bare "cuda" so multi-GPU boxes (the lab 5090 is device 1) behave
-    predictably. Falls back to CPU with a warning if CUDA is unavailable.
+    Priority: RAIL3D_DEVICE env var > profile's device > cpu. Accepts
+    "cuda:auto" (strongest card, see best_cuda_device). Never returns a bare
+    "cuda" so multi-GPU boxes behave predictably. Falls back to CPU with a
+    warning if CUDA is unavailable.
     """
     requested = os.environ.get("RAIL3D_DEVICE")
     if requested is None and profile is not None:
@@ -175,13 +202,14 @@ def get_device(profile: str | None = None) -> torch.device:
     if requested is None:
         requested = "cpu"
 
-    device = torch.device(requested)
-    if device.type == "cuda":
+    if requested.startswith("cuda"):
         if not torch.cuda.is_available():
             print(f"[rail3d] {requested} requested but CUDA is unavailable; using CPU")
             return torch.device("cpu")
+        device = best_cuda_device() if requested in ("cuda:auto", "cuda") else torch.device(requested)
         check_cuda_build(device)
-    return device
+        return device
+    return torch.device(requested)
 
 
 def check_cuda_build(device: torch.device) -> None:

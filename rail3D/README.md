@@ -75,6 +75,10 @@ metrics: pass rate / false alarm / gap-p5 / confusion / ROC-AUC / robustness
 - Horn: Face3D "config 55" verbatim (27.4×21.9 aperture, 224 mm, 55° in x–z).
 - Splits: stratified 80/10/10, seed 0 (comparable to the 2D notebooks).
 - Label order: crack=0, dent=1, wear=2 (`config.CLASS_NAMES`).
+- **Device**: never a bare `"cuda"`. The `lab` profile is `cuda:auto` →
+  `config.best_cuda_device()` ranks visible GPUs by (compute capability,
+  VRAM) and takes the strongest, because the 5090's index differs per
+  machine (cuda:0 on the lab workstation). `RAIL3D_DEVICE` overrides.
 
 ## 5. Verification status — ALL 8 GATES PASS (see `data/generated/verification_report.json`)
 

@@ -1,8 +1,9 @@
 # rail3D — Lab Workstation Setup (RTX 5090)
 
 Step-by-step replication of the 3D rail-defect pipeline on the lab computer
-(VS Code + local filesystem, GPU = **RTX 5090 on device index 1**). Developed
-and verified on the laptop (MX250); every command below was designed to run
+(VS Code + local filesystem, GPU = **RTX 5090**; its device index varies by
+machine, so the code selects it automatically — see §3). Developed and
+verified on the laptop (MX250); every command below was designed to run
 unchanged on the lab machine except where marked.
 
 ---
@@ -43,7 +44,7 @@ Sanity check (should print the 5090's compute capability `(12, 0)` without
 errors):
 
 ```bash
-python -c "import torch; print(torch.__version__, torch.cuda.get_device_name(1), torch.cuda.get_device_capability(1))"
+python -c "import torch; print(torch.__version__); [print(i, torch.cuda.get_device_name(i), torch.cuda.get_device_capability(i)) for i in range(torch.cuda.device_count())]"
 ```
 
 ## 3. Point the code at the right GPU and data
@@ -51,12 +52,17 @@ python -c "import torch; print(torch.__version__, torch.cuda.get_device_name(1),
 Two environment variables (set them in the VS Code terminal, or a `.env`):
 
 ```bash
-set RAIL3D_DEVICE=cuda:1
 set RAILDEFECT_DATA_DIR=C:\path\to\RailDefect\RailDefect
+:: optional — only if you want to pin a specific GPU:
+:: set RAIL3D_DEVICE=cuda:0
 ```
 
-- `RAIL3D_DEVICE=cuda:1` — the 5090 is GPU 1 on the workstation. Every
-  device call in `rail3d/config.py` routes through this; nothing uses a bare
+- **GPU selection is automatic.** The `lab` profile uses `cuda:auto`:
+  `config.best_cuda_device()` ranks the visible CUDA devices by compute
+  capability, then VRAM, and takes the strongest — the 5090 regardless of
+  whether it is index 0 or 1. It prints which one it chose when more than one
+  device is present. Set `RAIL3D_DEVICE=cuda:N` only to override that choice
+  (e.g. to leave the 5090 free for someone else). Nothing ever uses a bare
   `"cuda"`.
 - `RAILDEFECT_DATA_DIR` — folder containing the defect CSV datasets
   (`data_defect_crack2/`, `data_defect_dent2/`, `data_defect_wear2/`).
@@ -147,8 +153,8 @@ exported `phase.csv` / `w_pillar.csv` maps from the notebook's final cells.
 | SLM training, 400 epochs | ~1–2 h | minutes–tens of minutes |
 
 Profiles (`rail3d/config.py`): `laptop` = cuda:0, mesh batch 2, chunk 1024,
-train batch 256; `lab` = cuda:1, mesh batch 64, chunk 8192, train batch 1024.
-`RAIL3D_DEVICE` always wins over the profile's device.
+train batch 256; `lab` = cuda:auto (strongest card), mesh batch 64, chunk
+8192, train batch 1024. `RAIL3D_DEVICE` always wins over the profile's device.
 
 ## 8. Physics/verification summary (what you can trust)
 

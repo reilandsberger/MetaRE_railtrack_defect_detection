@@ -4,7 +4,7 @@ Examples (run from rail3D/):
     python generate_dataset_3d.py --profile laptop --smoke     # 20/class + 32 intact -> data/generated/smoke/
     python generate_dataset_3d.py --profile laptop             # full 5000/class + 512 intact
     python generate_dataset_3d.py --status                     # what exists / what remains
-    python generate_dataset_3d.py --profile lab                # same on the RTX 5090 (RAIL3D_DEVICE=cuda:1)
+    python generate_dataset_3d.py --profile lab                # same on the RTX 5090 (auto-picks the strongest GPU)
 
 Physics per sample (validated in V1-V7): λ/4 swept mesh, ray-cast shadowing
 against a λ/2 occluder mesh, exact RS-I surface integral, psi1 + psi2 channels;

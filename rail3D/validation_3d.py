@@ -294,9 +294,10 @@ def v7_mesh_convergence(device: torch.device, n_samples: int = 5) -> dict:
 # ---------------------------------------------------------------------------
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--device", default="cuda:0" if torch.cuda.is_available() else "cpu")
+    parser.add_argument("--device", default=None,
+                        help="e.g. cuda:0; default = RAIL3D_DEVICE, else strongest CUDA card")
     args = parser.parse_args()
-    device = torch.device(args.device)
+    device = torch.device(args.device) if args.device else config.get_device("lab")
     config.ensure_dirs()
 
     report = {}
