@@ -38,12 +38,19 @@ class TrainConfig:
     lr_head: float = 1e-3
     n_layer: int = 1
     layer_distances: tuple = config.LAYER_DISTANCES
-    # pruning window (epochs) and cadence
+    # Pruning window (epochs) and schedule. "fraction" keeps a fixed ratio at
+    # each prune step, so a dense start (100+ detectors) reaches a handful in a
+    # bounded number of steps: n_k = n_0 * prune_keep^k. The legacy "fixed"
+    # schedule removes prune_per_step each time (fine from an 18-detector start,
+    # but would need 300+ epochs from 130).
     prune_start: int = 60
     prune_end: int = 150
     prune_every: int = 5
-    prune_per_step: int = 2
+    prune_schedule: str = "fraction"  # "fraction" | "fixed"
+    prune_keep: float = 0.75          # fraction retained per prune step
+    prune_per_step: int = 2           # used only by the "fixed" schedule
     n_det_final: int = config.N_DET_FINAL
+    det_grid: tuple | None = None     # override config.DET_GRID (dense start)
     # tau anneal: tau_scale from 1/4 to 1/16 over [0, tau_anneal_end]
     tau_start: float = 0.25
     tau_end: float = 1 / 16
@@ -71,11 +78,39 @@ def tau_for_epoch(cfg: TrainConfig, epoch: int) -> float:
 
 
 def build_model(cfg: TrainConfig, device: torch.device) -> optics3d.ONN3D:
+    detector = None
+    if cfg.det_grid is not None:
+        detector = optics3d.SoftDetector2D(centers=dense_centers(cfg.det_grid))
     model = optics3d.ONN3D(
         n_layer=cfg.n_layer, layer_distances=cfg.layer_distances,
-        surface=cfg.surface, noise=cfg.noise, seed=cfg.seed,
+        surface=cfg.surface, noise=cfg.noise, seed=cfg.seed, detector=detector,
     )
     return model.to(device)
+
+
+def dense_centers(grid: tuple[int, int]) -> torch.Tensor:
+    """Detector centres on a gx x gy lattice spanning the whole aperture.
+
+    Spacing is aperture/(g+1) so windows sit inside the plane rather than on its
+    edge; with a dense enough grid the windows tile most of the measurement
+    plane, which is the starting point for prune-down experiments.
+    """
+    gx, gy = grid
+    px = config.WX / (gx + 1)
+    py = config.WY / (gy + 1)
+    cx = (torch.arange(gx) - (gx - 1) / 2) * px
+    cy = (torch.arange(gy) - (gy - 1) / 2) * py
+    CX, CY = torch.meshgrid(cx, cy, indexing="ij")
+    return torch.stack([CX.reshape(-1), CY.reshape(-1)], dim=1)
+
+
+def prune_count(cfg: TrainConfig, n_now: int) -> int:
+    """How many detectors to drop at this prune step."""
+    if cfg.prune_schedule == "fixed":
+        n_rm = cfg.prune_per_step
+    else:
+        n_rm = max(1, int(round(n_now * (1.0 - cfg.prune_keep))))
+    return min(n_rm, n_now - cfg.n_det_final)
 
 
 def build_optimizer(cfg: TrainConfig, model: optics3d.ONN3D) -> torch.optim.Adam:
@@ -290,7 +325,7 @@ def train(cfg: TrainConfig, device: torch.device | None = None,
                 _hard_dets(model, data["fields"], data["val"]),
                 _hard_dets(model, data["intact"], data["i_val"]),
             ], dim=0)
-            n_rm = min(cfg.prune_per_step, model.detector.n_det - cfg.n_det_final)
+            n_rm = prune_count(cfg, model.detector.n_det)
             model.prune_detectors(det_all, n_rm)
             optimizer = build_optimizer(cfg, model)
             history["prune_epochs"].append({"epoch": epoch, "n_det": model.detector.n_det})
