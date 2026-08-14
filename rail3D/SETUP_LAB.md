@@ -197,6 +197,7 @@ regenerate (~4-6× the λ/4 cost — still around an hour).
 
 | Symptom | Cause / fix |
 |---|---|
+| `git pull` → "Your local changes to the following files would be overwritten by merge" | You ran the scripts, which rewrite generated output. Everything under `rail3D/data/` is regenerated and safe to discard: `git checkout -- rail3D/data/` then pull. (Keep real edits instead with `git stash` → `git pull` → `git stash pop`.) |
 | `ValueError: crack: requested 5000 but only 0 CSVs` | `RAILDEFECT_DATA_DIR` unset in *this* process, wrong shell syntax (§3), an MSYS `/c/...` path, or it points inside a `data_defect_*2` folder instead of their parent |
 | Reference rail width prints ~94 mm instead of 157.4 mm | wrong image loader for `crosssection.png` — see `README.md` §6.1 |
 | CUDA "no kernel image available" | a non-cu128 torch got installed; re-run §2 and do not use `pip install -U` |

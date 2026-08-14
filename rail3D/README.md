@@ -79,7 +79,7 @@ the coarse ray-cast occluder (λ/2) render the *same* physical defect.
 | `rail3d/losses3d.py` | combined loss (margin + intact-compactness + CE + power floor + top-k + centroid margin + TV) and all metrics |
 | `rail3d/data3d.py` | shard IO (atomic writes), dataset assembly, stratified split (seed 0) |
 | `rail3d/train3d.py` | `TrainConfig`, `train()` (auto-resume, RNG-state checkpoints, pruning), `full_evaluation()` |
-| `rail3d/viz_setup.py` | every review figure (setup diagram, meshes, fields, library, detectors, barcodes) |
+| `rail3d/viz_setup.py` | every review figure (setup diagram, meshes, fields, library, detectors, barcodes) — output to `data/figures/`, which is **gitignored**: regenerate with `python setup_diagram.py` (+ the validation scripts for V5/V7 plots) |
 | `generate_dataset_3d.py` | CLI generator (`--profile lab`, `--smoke`, `--status`; resumable shards) |
 | `tests_physics_3d.py` | V1–V4 automated gates (CPU-safe) |
 | `validation_3d.py` | V5–V7 gates + figures (includes the 2D Hankel reference solver) |

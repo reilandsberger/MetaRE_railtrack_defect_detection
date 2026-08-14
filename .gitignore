@@ -23,6 +23,10 @@ rail3D/**/__pycache__/
 # small meta-atom library fits ARE tracked
 !rail3D/rail3d/library_amp_fit.npy
 !rail3D/rail3d/library_phase_fit.npy
-# verification_report.json is rewritten by every test run — keep it out of the
-# tree so running the suite never blocks a pull (numbers live in rail3D/README.md)
+# Everything under rail3D/data/ is regenerated output, never hand-edited:
+# verification_report.json is rewritten by every test run, and data/figures/*.png
+# by setup_diagram.py / validation_3d.py. Tracking them made every `git pull`
+# fail with "local changes would be overwritten" after running the suite.
+# Regenerate with:  python setup_diagram.py  and the validation scripts.
 rail3D/data/generated/verification_report.json
+rail3D/data/figures/
