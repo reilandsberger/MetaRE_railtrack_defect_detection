@@ -213,16 +213,14 @@ Run all of them: `python tests_physics_3d.py` (V0–V4, CPU),
 12. The illuminated arc wraps *around* the head, so an `x >= GAUGE_X_MIN` test
     alone also selects the downward-facing under-head fillet. Region bands
     additionally gate on the normal (`nz`) — see `mesh3d.region_band`.
-13. **Ray-cast shadowing is inert for rev.2 hairline cracks.** The occluder
-    mesh is λ/2 (4 mm facets) and a crack is 1.5–3 mm wide, so the occluder
-    simply has no crack in it: V6's `worst_rel_l2` is exactly 0.0 — that is
-    the *occluder resolution*, not physics. Measured against a
-    generation-resolution (λ/8) occluder the omitted self-shadowing is
-    **0.5%** (V6 records it as `crack_shadow_with_resolved_occluder`), well
-    inside other accepted approximations, and capturing it would mean
-    ray-casting against 16× more triangles. Do not "conclude" shadowing is
-    unnecessary from the 0.0 — re-measure with a resolved occluder if the
-    defect geometry ever gets deeper or narrower.
+13. **Ray-cast shadowing became active once the defect ranges widened.** With
+    the earlier 1.5–3 mm hairline cracks the λ/2 (4 mm) occluder mesh had no
+    crack in it at all and V6's `worst_rel_l2` was exactly 0.0 — occluder
+    resolution, not physics. With the current ranges (cracks 2–5 mm wide ×
+    2–10 mm deep, dents to 8 mm) the occluder resolves them and V6 measures a
+    real **4.3%** effect. Both figures are recorded per run; if the geometry is
+    ever made finer again, re-check `crack_shadow_with_resolved_occluder`
+    (the λ/8-occluder control) before concluding shadowing is negligible.
 
 ## 6b. Objective & metrics (rev. 2)
 

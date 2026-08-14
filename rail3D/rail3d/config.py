@@ -73,6 +73,13 @@ WX = NX * DX                    # 240 mm aperture across the railhead
 WY = NY * DX                    # 120 mm aperture along the rail
 
 H_MS = 160.0                    # crown -> metasurface plane distance (20 wvl)
+# Lateral offset of the plane centre. The horn illuminates at 55 deg from +x, so
+# the specular lobe off a flat crown lands at x = -H*tan(55 deg): -114 mm at
+# H=80, -228 mm at H=160. With PLANE_X_CENTER=0 the aperture (x in +-WX/2)
+# therefore collects the OFF-SPECULAR tail -- effectively dark-field, which may
+# help defect contrast but was inherited from Face3D rather than chosen.
+# scan_geometry.py measures separability vs (H_MS, PLANE_X_CENTER, grid).
+PLANE_X_CENTER = 0.0
 LAYER_DISTANCES = (160.0,)      # MS -> detector plane; extend for 2-layer runs
 
 # Horn antenna (pyramidal), Face3D config-55 verbatim
@@ -173,15 +180,24 @@ SEED = 0
 # ---------------------------------------------------------------------------
 # Grids
 # ---------------------------------------------------------------------------
-def plane_grid(device: torch.device | str = "cpu") -> tuple[torch.Tensor, torch.Tensor]:
-    """Cell-centered observation-grid coordinates X, Y of shape (1, NX, NY).
+def plane_grid(device: torch.device | str = "cpu",
+               nx: int | None = None, ny: int | None = None,
+               x_center: float | None = None
+               ) -> tuple[torch.Tensor, torch.Tensor]:
+    """Cell-centered observation-grid coordinates X, Y of shape (1, nx, ny).
 
     The leading singleton dim matches what the Face3D field functions expect.
+    nx/ny/x_center default to the module constants; scan_geometry.py overrides
+    them to compare aperture sizes and lateral plane offsets.
     """
-    x = torch.arange(-WX / 2 + DX / 2, WX / 2, DX, device=device)
-    y = torch.arange(-WY / 2 + DX / 2, WY / 2, DX, device=device)
+    nx = NX if nx is None else nx
+    ny = NY if ny is None else ny
+    xc = PLANE_X_CENTER if x_center is None else x_center
+    wx, wy = nx * DX, ny * DX
+    x = torch.arange(-wx / 2 + DX / 2, wx / 2, DX, device=device) + xc
+    y = torch.arange(-wy / 2 + DX / 2, wy / 2, DX, device=device)
     X, Y = torch.meshgrid(x, y, indexing="ij")
-    return X.reshape(1, NX, NY), Y.reshape(1, NX, NY)
+    return X.reshape(1, nx, ny), Y.reshape(1, nx, ny)
 
 
 def detector_grid_centers() -> torch.Tensor:
