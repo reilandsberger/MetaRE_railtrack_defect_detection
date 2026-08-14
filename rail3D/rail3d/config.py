@@ -39,6 +39,10 @@ CROSSSECTION_IMAGE = REPO_ROOT / "crosssection.png"
 # Defect CSV folders live in the external RailDefect folder; mirrors
 # raildefect_paths.py at the repo root (duplicated here so the rail3d package
 # is importable without sys.path tricks).
+# The default is only a convenience for the original laptop; it is used *only*
+# when RAILDEFECT_DATA_DIR is unset, so there is no need to edit it on another
+# machine — export the variable instead. check_data_dir() below turns a wrong or
+# missing value into an actionable error rather than a silent "0 CSVs".
 RAILDEFECT_DIR = Path(
     os.environ.get("RAILDEFECT_DATA_DIR", r"C:\Users\Rei\Downloads\RailDefect\RailDefect")
 )
@@ -248,3 +252,42 @@ def sample_seed(class_name: str, csv_index: int) -> int:
 def ensure_dirs() -> None:
     for d in (GENERATED_DIR, CHECKPOINT_DIR, FIGURE_DIR):
         d.mkdir(parents=True, exist_ok=True)
+
+
+def check_data_dir(class_name: str | None = None) -> None:
+    """Validate RAILDEFECT_DATA_DIR and raise something actionable if it is wrong.
+
+    Called by ``sections.get_dataset_files`` when a defect folder yields no CSVs,
+    so a mis-set path surfaces as an explanation instead of a downstream
+    IndexError or "requested N but only 0 CSVs".
+    """
+    raw = os.environ.get("RAILDEFECT_DATA_DIR")
+    lines = [
+        f"Defect CSVs not found under RAILDEFECT_DIR = {RAILDEFECT_DIR}",
+        f"  RAILDEFECT_DATA_DIR = {raw!r}" if raw else
+        "  RAILDEFECT_DATA_DIR is UNSET — falling back to the original laptop path.",
+    ]
+    if raw and not Path(raw).is_absolute():
+        # 'C:Users\...' (no separator after the drive) is drive-RELATIVE on Windows
+        lines.append("  -> that path is not absolute. A Windows drive needs a separator: "
+                     "'C:/Users/...' or 'C:\\Users\\...', not 'C:Users\\...'.")
+    if raw and raw.startswith("/") and ":" not in raw:
+        lines.append("  -> looks like an MSYS path (/c/Users/...). Git Bash does not "
+                     "translate it for exported variables; use 'C:/Users/...'.")
+    if not RAILDEFECT_DIR.exists():
+        lines.append("  -> that directory does not exist.")
+    else:
+        missing = [n for n, d in DATASET_DIRS.items() if not d.is_dir()]
+        present = [n for n, d in DATASET_DIRS.items() if d.is_dir()]
+        if missing:
+            lines.append(f"  -> directory exists but is missing: "
+                         f"{', '.join(f'data_defect_{n}2' for n in missing)}"
+                         + (f" (found: {', '.join(present)})" if present else ""))
+            lines.append("  -> RAILDEFECT_DATA_DIR must point at the PARENT of the three "
+                         "data_defect_*2 folders, not at one of them.")
+        elif class_name:
+            lines.append(f"  -> data_defect_{class_name}2 exists but contains no *.csv "
+                         "(copy still running?).")
+    lines.append("  See rail3D/SETUP_LAB.md section 3 for per-shell syntax "
+                 "(export / $env: / set).")
+    raise FileNotFoundError("\n".join(lines))

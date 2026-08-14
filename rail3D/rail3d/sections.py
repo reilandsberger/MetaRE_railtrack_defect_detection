@@ -214,6 +214,15 @@ def illuminated_mask(section: torch.Tensor, z_cut: float = config.Z_CUT) -> torc
 
 
 def get_dataset_files(class_name: str) -> list[Path]:
+    """Sorted defect-CSV paths for one class.
+
+    Empty result means RAILDEFECT_DATA_DIR is unset/wrong (or the copy is still
+    running); check_data_dir explains which, instead of letting the caller fail
+    later with an opaque IndexError.
+    """
     if class_name not in config.DATASET_DIRS:
         raise ValueError(f"Unknown dataset: {class_name}")
-    return sorted(config.DATASET_DIRS[class_name].glob("*.csv"))
+    files = sorted(config.DATASET_DIRS[class_name].glob("*.csv"))
+    if not files:
+        config.check_data_dir(class_name)
+    return files

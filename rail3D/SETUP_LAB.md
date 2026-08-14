@@ -90,6 +90,19 @@ before Python starts. For notebooks, launch VS Code from the same shell (`code .
 so the kernel inherits it; otherwise set `os.environ['RAILDEFECT_DATA_DIR'] = ...`
 in the first cell, **above** the `from rail3d import ...` line.
 
+Verify it before moving on (from `rail3D/`):
+
+```bash
+python -c "from rail3d import config, sections; print(config.RAILDEFECT_DIR, config.RAILDEFECT_DIR.is_absolute()); print({c: len(sections.get_dataset_files(c)) for c in config.CLASS_NAMES})"
+```
+
+Expect an absolute path, `True`, and `{'crack': 5000, 'dent': 5000, 'wear': 5000}`
+(smaller counts simply mean the §5a copy is still running). Anything wrong raises a
+`FileNotFoundError` naming the specific problem.
+
+> You do **not** need to edit the hard-coded fallback path in `config.py`. It is only
+> used when `RAILDEFECT_DATA_DIR` is unset; an exported value always wins.
+
 - **GPU selection is automatic** — no `RAIL3D_DEVICE` needed. The `lab` profile
   uses `cuda:auto`:
   `config.best_cuda_device()` ranks the visible CUDA devices by compute
