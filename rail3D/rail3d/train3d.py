@@ -52,6 +52,11 @@ class TrainConfig:
     seed: int = config.SEED
     noise: bool = True
     data_root: str | None = None      # None -> full dataset; path -> e.g. smoke dir
+    # objective (rev.2): "rank" = pairwise soft-AUC on normalized barcodes with a
+    # calibrated operating threshold; "margin" = legacy absolute-margin loss.
+    objective: str = "rank"
+    metric: str = "cos"               # "cos" | "l2" score for rank/reporting
+    target_fpr: float = losses3d.TARGET_FPR
 
 
 def _ckpt_dir(cfg: TrainConfig) -> Path:
@@ -121,20 +126,53 @@ def _hard_dets(model, fields, idx, chunk=512):
     return torch.cat(outs, dim=0)
 
 
+def _classify_input(det: torch.Tensor, d_ref: torch.Tensor, objective: str) -> torch.Tensor:
+    if objective == "rank":
+        return losses3d.normalize_barcode(det)
+    return det / d_ref.norm().clamp_min(1e-12)
+
+
 @torch.no_grad()
-def evaluate(model, data, split="val") -> dict:
+def evaluate(model, data, split="val", cfg: TrainConfig | None = None) -> dict:
+    """Split metrics on hard detector powers.
+
+    rank objective (default): score = AUC + class accuracy (both threshold
+    independent — checkpoint selection no longer depends on a margin); the
+    reported pass_rate/false_alarm use the threshold CALIBRATED at target_fpr
+    on this split's intact spread.
+    """
+    cfg = cfg or TrainConfig()
     model.eval()
     det = _hard_dets(model, data["fields"], data[split])
     det0 = _hard_dets(model, data["intact"], data[f"i_{split}"])
     d_ref = det0.mean(dim=0)
-    gap = losses3d.relative_l2_gap(det, d_ref)
-    gap0 = losses3d.relative_l2_gap(det0, d_ref)
-    metrics = losses3d.detection_metrics(gap, gap0)
+    metric = cfg.metric if cfg.objective == "rank" else "l2"
+    gap = losses3d.gap_score(det, d_ref, metric)
+    gap0 = losses3d.gap_score(det0, d_ref, metric)
+
     labels = data["labels"][data[split]]
-    logits = model.classify(det / d_ref.norm())
-    pred = logits.argmax(dim=1)
-    metrics["class_acc"] = float((pred == labels).float().mean())
-    metrics["score"] = metrics["pass_rate"] - metrics["false_alarm"] + metrics["class_acc"]
+    logits = model.classify(_classify_input(det, d_ref, cfg.objective))
+    class_acc = float((logits.argmax(dim=1) == labels).float().mean())
+
+    auc = losses3d.auc_score(gap, gap0)
+    thr = losses3d.calibrated_threshold(gap0, cfg.target_fpr)
+    thr_bal, bal_acc = losses3d.best_threshold(gap, gap0)
+    metrics = {
+        "auc": auc,
+        "threshold": thr,
+        "pass_rate": float((gap > thr).float().mean()),
+        "false_alarm": float((gap0 > thr).float().mean()),
+        "balanced_acc": bal_acc,
+        "threshold_balanced": thr_bal,
+        "gap_p5": float(torch.quantile(gap, 0.05)),
+        "gap_mean": float(gap.mean()),
+        "gap0_mean": float(gap0.mean()),
+        "class_acc": class_acc,
+    }
+    if cfg.objective == "rank":
+        metrics["score"] = auc + class_acc
+    else:
+        metrics["score"] = metrics["pass_rate"] - metrics["false_alarm"] + class_acc
     return metrics
 
 
@@ -229,10 +267,11 @@ def train(cfg: TrainConfig, device: torch.device | None = None,
             _, det_all = model(psi)
             det_d, det_0 = det_all[: len(idx)], det_all[len(idx):]
             d_ref = det_0.mean(dim=0)
-            logits = model.classify(det_d / d_ref.norm().clamp_min(1e-12))
+            logits = model.classify(_classify_input(det_d, d_ref, cfg.objective))
 
             loss, logs = losses3d.combined_loss(
-                det_d, data["labels"][idx], det_0, logits, surface_map(model), power_floor)
+                det_d, data["labels"][idx], det_0, logits, surface_map(model), power_floor,
+                objective=cfg.objective, metric=cfg.metric)
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
             optimizer.step()
@@ -256,7 +295,7 @@ def train(cfg: TrainConfig, device: torch.device | None = None,
             optimizer = build_optimizer(cfg, model)
             history["prune_epochs"].append({"epoch": epoch, "n_det": model.detector.n_det})
 
-        val = evaluate(model, data, "val")
+        val = evaluate(model, data, "val", cfg)
         val["epoch"] = epoch
         val["seconds"] = round(time.time() - t0, 2)
         history["val"].append(val)
@@ -272,10 +311,10 @@ def train(cfg: TrainConfig, device: torch.device | None = None,
 
         if verbose:
             print(f"ep {epoch:4d}  loss {history['train'][-1]['loss']:.4f}  "
-                  f"pass {val['pass_rate']:.3f}  FA {val['false_alarm']:.3f}  "
-                  f"acc {val['class_acc']:.3f}  gap5 {val['gap_p5']:.3f}  "
-                  f"Ndet {model.detector.n_det}  tau {model.detector.tau_scale:.3f}  "
-                  f"{val['seconds']:.1f}s")
+                  f"auc {val['auc']:.3f}  pass@cal {val['pass_rate']:.3f}  "
+                  f"FA {val['false_alarm']:.3f}  acc {val['class_acc']:.3f}  "
+                  f"thr {val['threshold']:.3f}  Ndet {model.detector.n_det}  "
+                  f"tau {model.detector.tau_scale:.3f}  {val['seconds']:.1f}s")
 
     save_checkpoint(latest, cfg, model, optimizer, cfg.n_epoch - 1, history,
                     {"power_floor": power_floor})
@@ -297,19 +336,30 @@ def load_trained(cfg: TrainConfig, device: torch.device, which: str = "best"):
 # Full evaluation for the notebooks (test split + robustness curves)
 # ---------------------------------------------------------------------------
 @torch.no_grad()
-def full_evaluation(model, data, noise_levels=(0.0, 0.02, 0.05, 0.10, 0.15),
+def full_evaluation(model, data, cfg: TrainConfig | None = None,
+                    noise_levels=(0.0, 0.02, 0.05, 0.10, 0.15),
                     shifts_mm=np.linspace(-10, 10, 21)) -> dict:
-    """Test metrics + ROC/AUC + noise & alignment robustness curves."""
+    """Test metrics + ROC/AUC + noise & alignment robustness curves.
+
+    The operating threshold is calibrated on the VALIDATION intact spread
+    (never on test) and applied to every curve.
+    """
+    cfg = cfg or TrainConfig()
+    metric = cfg.metric if cfg.objective == "rank" else "l2"
     model.eval()
-    out = {"test": evaluate(model, data, "test")}
+    out = {"test": evaluate(model, data, "test", cfg)}
 
     det = _hard_dets(model, data["fields"], data["test"])
     det0 = _hard_dets(model, data["intact"], data["i_test"])
+    det0_val = _hard_dets(model, data["intact"], data["i_val"])
     d_ref = det0.mean(dim=0)
     labels = data["labels"][data["test"]]
+    thr = losses3d.calibrated_threshold(
+        losses3d.gap_score(det0_val, det0_val.mean(dim=0), metric), cfg.target_fpr)
+    out["threshold_from_val"] = thr
 
     # confusion
-    logits = model.classify(det / d_ref.norm())
+    logits = model.classify(_classify_input(det, d_ref, cfg.objective))
     out["confusion"] = losses3d.confusion_matrix(logits.argmax(dim=1), labels)
 
     # ROC (5% complex noise, negatives = noisy intact) — no-MS notebook port
@@ -322,8 +372,8 @@ def full_evaluation(model, data, noise_levels=(0.0, 0.02, 0.05, 0.10, 0.15),
     neg_f = noisy(data["intact"][data["i_test"]], 0.05)
     det_p = torch.cat([model(pos_f[s:s+512], hard=True)[1] for s in range(0, len(pos_f), 512)])
     det_n = torch.cat([model(neg_f[s:s+512], hard=True)[1] for s in range(0, len(neg_f), 512)])
-    pos = losses3d.relative_l2_gap(det_p, d_ref)
-    neg = losses3d.relative_l2_gap(det_n, d_ref)
+    pos = losses3d.gap_score(det_p, d_ref, metric)
+    neg = losses3d.gap_score(det_n, d_ref, metric)
     out["roc"] = {
         "auc": losses3d.auc_score(pos, neg),
         "tpr_at_1pct_fpr": losses3d.tpr_at_fpr(pos, neg, 0.01),
@@ -345,12 +395,12 @@ def full_evaluation(model, data, noise_levels=(0.0, 0.02, 0.05, 0.10, 0.15),
                         for s in range(0, len(data["test"]), 512)])
         dn = torch.cat([model(noisy(data["intact"][data["i_test"]], sig)[s:s+512], hard=True)[1]
                         for s in range(0, len(data["i_test"]), 512)])
-        g = losses3d.relative_l2_gap(dp, d_ref)
-        g0 = losses3d.relative_l2_gap(dn, d_ref)
-        lg = model.classify(dp / d_ref.norm())
+        g = losses3d.gap_score(dp, d_ref, metric)
+        g0 = losses3d.gap_score(dn, d_ref, metric)
+        lg = model.classify(_classify_input(dp, d_ref, cfg.objective))
         curve.append({"sigma": float(sig),
-                      "pass_rate": float((g > losses3d.DETECTION_MARGIN).float().mean()),
-                      "false_alarm": float((g0 > losses3d.DETECTION_MARGIN).float().mean()),
+                      "pass_rate": float((g > thr).float().mean()),
+                      "false_alarm": float((g0 > thr).float().mean()),
                       "class_acc": float((lg.argmax(dim=1) == labels).float().mean())})
     out["noise_curve"] = curve
 
@@ -366,8 +416,8 @@ def full_evaluation(model, data, noise_levels=(0.0, 0.02, 0.05, 0.10, 0.15),
                                        shift=(float(dx_mm), 0.0))
             for s in range(0, len(data["i_test"]), 512)])
         d_ref_s = det0_s.mean(dim=0)
-        g = losses3d.relative_l2_gap(det_s, d_ref_s)
+        g = losses3d.gap_score(det_s, d_ref_s, metric)
         align.append({"shift_mm": float(dx_mm),
-                      "pass_rate": float((g > losses3d.DETECTION_MARGIN).float().mean())})
+                      "pass_rate": float((g > thr).float().mean())})
     out["alignment_curve"] = align
     return out

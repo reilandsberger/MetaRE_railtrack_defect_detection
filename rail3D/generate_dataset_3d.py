@@ -63,7 +63,9 @@ def generate_class(
     n_arc_fine = mesh3d.default_arc_count(section, config.MESH_DS)
     n_arc_coarse = mesh3d.default_arc_count(section, config.OCCLUDER_DS)
 
-    files = sections.get_dataset_files(class_name) if class_name != "intact" else None
+    # "shell" is fully parametric and "intact" has no defect: neither uses CSVs
+    files = (sections.get_dataset_files(class_name)
+             if class_name in config.DATASET_DIRS else None)
     if files is not None and n_samples > len(files):
         raise ValueError(f"{class_name}: requested {n_samples} but only {len(files)} CSVs")
 
@@ -91,26 +93,33 @@ def generate_class(
             for i in range(start, stop):
                 seed = config.sample_seed(class_name, i)
                 defect = None
-                if class_name != "intact":
+                if files is not None:
                     defect = sections.match_reference_width(
                         sections.load_vertices_from_csv(files[i]), section)
-                v, f, meta = mesh3d.build_sample_mesh(
-                    section, class_name, defect, seed, n_arc=n_arc_fine, faces=faces_fine)
+                # defect params drawn ONCE at the canonical (fine) resolution,
+                # then rendered on both grids -> fine sim mesh and coarse
+                # ray-cast occluder describe the same physical defect
+                params, aug = mesh3d.defect_params_for_sample(
+                    section, class_name, defect, seed, n_arc=n_arc_fine)
+                v, f = mesh3d.sweep_rail_mesh(
+                    section, defect_params=params,
+                    slice_ds=config.MESH_DS, arc_ds=config.MESH_DS, n_arc=n_arc_fine,
+                    roll_deg=aug["roll_deg"],
+                    jitter_xz=(aug["jitter_x"], aug["jitter_z"]),
+                    faces=faces_fine)
                 faces_fine = f
-                # occluder mesh: same defect/envelope/augmentation, coarse sampling
-                gen = torch.Generator().manual_seed(seed)
-                envelope = None
-                if class_name != "intact":
-                    envelope, _ = mesh3d.defect_envelope(class_name, gen)
-                aug = mesh3d.sample_augmentation(gen)
                 v_occ, f_occ = mesh3d.sweep_rail_mesh(
-                    section, defect, envelope,
+                    section, defect_params=params,
                     slice_ds=config.OCCLUDER_DS, arc_ds=config.OCCLUDER_DS,
                     n_arc=n_arc_coarse,
                     roll_deg=aug["roll_deg"],
                     jitter_xz=(aug["jitter_x"], aug["jitter_z"]),
                     faces=faces_coarse)
                 faces_coarse = f_occ
+                meta = {k2: val for k2, val in params.items()
+                        if k2 not in ("profile_v", "profile_d", "csv_dev", "csv_s")}
+                meta.update(aug)
+                meta["seed"] = seed
                 meta["csv_index"] = i
                 meta["class"] = class_name
                 vs.append(v)

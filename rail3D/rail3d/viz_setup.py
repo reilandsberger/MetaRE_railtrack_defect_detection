@@ -120,50 +120,92 @@ def setup_diagram(save_path=None, show=False):
     return fig
 
 
-def mesh_review_figure(save_path=None, seed_base: int = 12345, csv_index: int = 0):
-    """One mesh per class (crack/dent/wear + intact) with envelope insets."""
+def _find_crack_seed(section, geom, orientation: str, csv_profile, start: int = 0) -> tuple[int, dict]:
+    """Scan sample seeds until the drawn crack has the requested orientation."""
+    import torch as _torch
+
+    for i in range(start, start + 400):
+        seed = config.sample_seed("crack", i)
+        gen = _torch.Generator().manual_seed(seed)
+        p = mesh3d.sample_defect_params("crack", gen, geom, csv_profile)
+        th = abs(p["theta"])
+        if orientation == "longitudinal" and th < 1e-6:
+            return i, p
+        if orientation == "transverse" and abs(th - np.pi / 2) < 1e-6:
+            return i, p
+        if orientation == "oblique" and 1e-6 < th < np.pi / 2 - 1e-6:
+            return i, p
+    return start, p  # fallback: whatever came last
+
+
+def mesh_review_figure(save_path=None, csv_index: int = 0):
+    """Rev.2 geometry review: 3D mesh + depth-field top view per case.
+
+    Cases: intact, crack in all three orientations, dent, wear, shell —
+    the user-approval artifact for the g(s,y) model. Depth insets show
+    d(s, y) with s (across head) horizontal and y (along rail) vertical.
+    """
     section = sections.load_reference_section()
-    n_arc = mesh3d.default_arc_count(section)
+    n_arc = mesh3d.default_arc_count(section)      # λ/2: used only for param sampling
+    geom = mesh3d.arc_geometry(section, n_arc)
+    # depth-field insets on a fine 1 mm grid so hairline cracks are visible
+    geom_fine = mesh3d.arc_geometry(section, mesh3d.default_arc_count(section, 1.0))
+    y_fine = np.arange(-config.SEG_LEN / 2, config.SEG_LEN / 2 + 0.5, 1.0)
+    mesh_ds = config.WVL / 4                       # review meshes: fine enough to show divots
 
-    fig = plt.figure(figsize=(16, 4.6))
-    y_grid = np.linspace(-config.SEG_LEN / 2, config.SEG_LEN / 2, 400)
+    files = sections.get_dataset_files("crack")
+    crack_csv = mesh3d.extract_csv_profile(
+        section, sections.match_reference_width(
+            sections.load_vertices_from_csv(files[csv_index]), section), n_arc)
 
-    for i, cls in enumerate(("intact",) + config.CLASS_NAMES):
-        if cls == "intact":
-            defect = None
-        else:
-            files = sections.get_dataset_files(cls)
+    cases = [("intact", None, None)]
+    for orient in ("longitudinal", "transverse", "oblique"):
+        _, p = _find_crack_seed(section, geom, orient, crack_csv, start=csv_index)
+        cases.append((f"crack ({orient})", "crack", p))
+    for cls in ("dent", "wear", "shell"):
+        defect = None
+        if cls in config.DATASET_DIRS:
+            fl = sections.get_dataset_files(cls)
             defect = sections.match_reference_width(
-                sections.load_vertices_from_csv(files[csv_index]), section)
-        seed = config.sample_seed(cls if cls != "intact" else "intact", csv_index)
-        v, f, meta = mesh3d.build_sample_mesh(section, cls, defect, seed,
-                                              n_arc=n_arc, augment=False)
-        ax = fig.add_subplot(1, 4, i + 1, projection="3d")
-        dz = (v[:, 2] - _intact_z_reference(section, v, n_arc)).numpy() if cls != "intact" else np.zeros(len(v))
-        ax.plot_trisurf(v[:, 0].numpy(), v[:, 1].numpy(), v[:, 2].numpy(),
-                        triangles=f.numpy(), cmap="viridis", edgecolor="none",
-                        alpha=0.95)
-        title = cls if cls == "intact" else f"{cls} (y0={meta['y0']:.0f} mm, L={meta['L']:.0f} mm)"
-        ax.set(title=title, xlabel="x", ylabel="y", zlabel="z")
-        ax.view_init(elev=35, azim=-75)
+                sections.load_vertices_from_csv(fl[csv_index]), section)
+        p, _ = mesh3d.defect_params_for_sample(section, cls, defect,
+                                               config.sample_seed(cls, csv_index),
+                                               n_arc=n_arc)
+        cases.append((cls, cls, p))
 
-        if cls != "intact":
-            gfun, _ = mesh3d.defect_envelope(cls, torch.Generator().manual_seed(seed))
-            ax2 = ax.inset_axes([0.02, 0.02, 0.4, 0.22])
-            ax2.plot(y_grid, gfun(y_grid), lw=1)
-            ax2.set_title("g(y)", fontsize=6)
+    fig = plt.figure(figsize=(19, 8.8))
+    for i, (title, cls, params) in enumerate(cases):
+        v, f = mesh3d.sweep_rail_mesh(section, defect_params=params,
+                                      slice_ds=mesh_ds, arc_ds=mesh_ds)
+        ax = fig.add_subplot(2, 4, i + 1, projection="3d")
+        ax.plot_trisurf(v[:, 0].numpy(), v[:, 1].numpy(), v[:, 2].numpy(),
+                        triangles=f.numpy(), cmap="viridis", edgecolor="none", alpha=0.95)
+        if params is not None:
+            extra = []
+            if "theta" in params:
+                extra.append(f"θ={np.degrees(params['theta']):.0f}°")
+            if "depth" in params:
+                extra.append(f"D={params['depth']:.1f}mm")
+            title = f"{title}  ({', '.join(extra)})"
+        ax.set(title=title, xlabel="x", ylabel="y", zlabel="z")
+        ax.view_init(elev=45, azim=-80)
+
+        if params is not None:
+            d = mesh3d.render_depth_field(params, geom_fine, y_fine)
+            ax2 = ax.inset_axes([0.0, 0.02, 0.34, 0.34])
+            ax2.imshow(d, origin="lower", cmap="hot", aspect="auto",
+                       extent=(geom_fine["s"][0], geom_fine["s"][-1],
+                               y_fine[0], y_fine[-1]))
+            ax2.set_title(f"d(s,y) top view (max {d.max():.1f} mm)", fontsize=6)
             ax2.tick_params(labelsize=5)
 
-    fig.suptitle("Swept rail meshes (illuminated region only), one per class", fontsize=11)
-    fig.tight_layout(rect=(0, 0, 1, 0.94))
+    fig.suptitle("Rev.2 defect geometry g(s,y): meshes + depth-field footprints "
+                 "(crack orientations, localized dent, shoulder wear, ragged shell)",
+                 fontsize=12)
+    fig.tight_layout(rect=(0, 0, 1, 0.95))
     if save_path:
         fig.savefig(save_path, dpi=200)
     return fig
-
-
-def _intact_z_reference(section, v, n_arc):
-    v0, _ = mesh3d.sweep_rail_mesh(section, n_arc=n_arc)
-    return v0[:, 2]
 
 
 def _sample_fields(device="cpu", csv_index: int = 0):
@@ -181,21 +223,20 @@ def _sample_fields(device="cpu", csv_index: int = 0):
             config.SIZE_ANT, config.DIST_ANT, config.RESOL_ANT)
 
     out = {"psi0": field3d.horn_to_plane(*args).cpu()}
-    faces = None
+    n_arc_fine = mesh3d.default_arc_count(section, config.MESH_DS)
     for cls in ("intact",) + config.CLASS_NAMES:
         defect = None
-        if cls != "intact":
+        if cls in config.DATASET_DIRS:
             files = sections.get_dataset_files(cls)
             defect = sections.match_reference_width(
                 sections.load_vertices_from_csv(files[csv_index]), section)
-        gen = _torch.Generator().manual_seed(config.sample_seed(cls, csv_index))
-        envelope = None
-        if cls != "intact":
-            envelope, _ = mesh3d.defect_envelope(cls, gen)
-        # generation config: λ/4 mesh, ray-cast shadow vs λ/2 occluders
-        v, f = mesh3d.sweep_rail_mesh(section, defect, envelope,
+        # generation config: λ/8 mesh, ray-cast shadow vs λ/2 occluders,
+        # unaugmented for a clean class comparison
+        params, _ = mesh3d.defect_params_for_sample(
+            section, cls, defect, config.sample_seed(cls, csv_index), n_arc=n_arc_fine)
+        v, f = mesh3d.sweep_rail_mesh(section, defect_params=params,
                                       slice_ds=config.MESH_DS, arc_ds=config.MESH_DS)
-        v_occ, f_occ = mesh3d.sweep_rail_mesh(section, defect, envelope)
+        v_occ, f_occ = mesh3d.sweep_rail_mesh(section, defect_params=params)
         psi1, psi2 = field3d.scattered_fields(
             v.to(device), f.to(device), *args, chunk_faces=2048,
             shadow=config.SHADOW_MODE,
@@ -372,19 +413,19 @@ def barcode_figure(save_path=None, device="cpu"):
     ref = dets["intact"]
     fig, axes = plt.subplots(1, 2, figsize=(12, 3.6))
     x = np.arange(len(ref))
-    width = 0.2
+    width = 0.8 / len(names)                       # scales with the class count
     for k, cls in enumerate(names):
-        axes[0].bar(x + (k - 1.5) * width, dets[cls].numpy(), width, label=cls)
+        axes[0].bar(x + (k - (len(names) - 1) / 2) * width,
+                    dets[cls].numpy(), width, label=cls)
     axes[0].set(title="untrained detector barcodes (hard powers)",
                 xlabel="detector index", ylabel="integrated intensity")
     axes[0].legend(fontsize=8)
 
-    gaps = [float(losses3d.relative_l2_gap(dets[c].unsqueeze(0), ref)) for c in config.CLASS_NAMES]
-    axes[1].bar(config.CLASS_NAMES, gaps, color=["tab:blue", "tab:orange", "tab:green"])
-    axes[1].axhline(losses3d.DETECTION_MARGIN, color="red", ls="--",
-                    label=f"detection margin {losses3d.DETECTION_MARGIN}")
-    axes[1].set(title="relative L2 gap vs intact (untrained)", ylabel="gap")
-    axes[1].legend(fontsize=8)
+    # rev.2 score: cosine gap (what the rank objective optimizes)
+    gaps = [float(losses3d.cos_gap(dets[c].unsqueeze(0), ref)) for c in config.CLASS_NAMES]
+    axes[1].bar(list(config.CLASS_NAMES), gaps)
+    axes[1].set(title="cosine gap vs intact (untrained)", ylabel="1 - cos")
+    axes[1].tick_params(axis="x", labelsize=8)
     fig.tight_layout()
     if save_path:
         fig.savefig(save_path, dpi=200)
@@ -392,10 +433,16 @@ def barcode_figure(save_path=None, device="cpu"):
 
 
 def cross_section_overlay_figure(save_path=None, csv_index: int = 0):
-    """Intact vs defect cross-section loops (the 2D input data), per class."""
+    """Intact vs defect cross-section loops (the 2D CSV input data).
+
+    Only the CSV-backed classes appear here; 'shell' is parametric (see the
+    depth-field insets in mesh_review_figure). The CSV deviation now serves as
+    the measured across-defect depth profile, localized by g(s, y).
+    """
     section = sections.load_reference_section()
-    fig, axes = plt.subplots(1, 3, figsize=(12, 4), sharex=True, sharey=True)
-    for ax, cls in zip(axes, config.CLASS_NAMES):
+    csv_classes = tuple(config.DATASET_DIRS)
+    fig, axes = plt.subplots(1, len(csv_classes), figsize=(12, 4), sharex=True, sharey=True)
+    for ax, cls in zip(axes, csv_classes):
         files = sections.get_dataset_files(cls)
         defect = sections.match_reference_width(
             sections.load_vertices_from_csv(files[csv_index]), section)

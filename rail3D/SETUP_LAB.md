@@ -179,6 +179,14 @@ resumable: shards are written atomically and existing shards are skipped, so
 an interrupted run just continues on relaunch — safe on the shared
 workstation.
 
+**Rev.2 note (4 classes, finer mesh).** The dataset now has **four** defect
+classes — `crack`, `dent`, `wear` and `shell` (shelling, fully parametric: it
+needs no CSV folder) — plus the intact pool, and the generation mesh is λ/8
+(1 mm facets) so hairline cracks are resolved. Expect **~1–2 h** on the 5090
+for 5000/class, and note that **shards from before this change are
+incompatible** (different geometry and label order): delete
+`data/generated/rail3d_*_shard*.pt` before regenerating.
+
 **Optional fidelity upgrade (lab only):** the laptop dataset uses the λ/4
 mesh (defect-signal cosine 0.993 vs λ/12; ~15% systematic magnitude bias
 shared across samples). On the 5090 you can afford λ/8: set

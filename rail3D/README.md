@@ -27,8 +27,8 @@ tiny linear head).
 2D cross-section loops (crosssection.png + 15k defect CSVs, reused from 2D repo)
         │  sections.py  (mm units; loops arc-length-uniform, width-matched)
         ▼
-swept 3D railhead mesh, defect blended in along y by class envelope g(y)
-        │  mesh3d.py    (λ/4 facets, fixed topology → batchable)
+swept 3D railhead mesh + per-point defect depth field d(s,y)
+        │  mesh3d.py    (λ/8 facets, fixed topology → batchable)
         ▼
 physical-optics scattering: horn (224 mm @ 55°) → rail → 60×30 plane @ z=160mm
         │  field3d.py   (exact RS-I kernel, chunked+batched, ray-cast shadow)
@@ -40,8 +40,32 @@ trainable optics: [SLM2D | MetaUnitSoft → RS-FFT propagator 160mm] → |·|²
         → SoftDetector2D (18→8 windows, trainable centers) → barcode
         │  optics3d.py, losses3d.py, train3d.py
         ▼
-metrics: pass rate / false alarm / gap-p5 / confusion / ROC-AUC / robustness
+metrics: AUC / pass@calibrated-threshold / false alarm / confusion / robustness
 ```
+
+### Defect geometry model (rev. 2)
+
+Defects are **per-point depth fields**, not per-slice cross-section blends:
+
+```
+displaced(s, y) = intact(s) − d(s, y) · n̂(s)
+```
+
+`s` = arc-length along the illuminated cross-section, `y` = rail axis,
+`n̂(s)` = outward section normal, `d ≥ 0` in mm. Each class has a parametric
+generator (`sample_defect_params` → `render_depth_field`), with ranges taken
+from laser-scan measurements — Ye et al. 2018 (*Proc IMechE F*, Table 1,
+Figs 14/23/24) and Ye et al. 2023 (*IEEE TIM*, Figs 7/9):
+
+| class | footprint | depth | region |
+|---|---|---|---|
+| `crack` | line-divot, 10–31 mm long × 1.5–3 mm wide; longitudinal / transverse / oblique (20–70°); 30% chance of 2–3 parallel lines | 2–6.9 mm | running band + gauge corner |
+| `dent` | 2D super-Gaussian, 16–20 mm (y) × 10–14 mm (s); 20% chance of a 2–4 pit chain | 1.5–2.5 mm | running band |
+| `wear` | CSV cross-section deviation × long y-envelope (120–300 mm) | CSV (~0.6–1 mm) | horn-facing shoulder |
+| `shell` | **parametric** (no CSVs): Fourier-modulated ellipse 8–20 mm + ragged interior; 30% chance of a second lobe | 1–3 mm | horn-facing shoulder |
+
+Parameters are resolution independent, so the fine simulation mesh (λ/8) and
+the coarse ray-cast occluder (λ/2) render the *same* physical defect.
 
 ## 3. File map
 
@@ -74,17 +98,26 @@ metrics: pass rate / false alarm / gap-p5 / confusion / ROC-AUC / robustness
   plane 160 mm further.
 - Horn: Face3D "config 55" verbatim (27.4×21.9 aperture, 224 mm, 55° in x–z).
 - Splits: stratified 80/10/10, seed 0 (comparable to the 2D notebooks).
-- Label order: crack=0, dent=1, wear=2 (`config.CLASS_NAMES`).
+- Label order: crack=0, dent=1, wear=2, **shell=3** (`config.CLASS_NAMES`).
+  `shell` is parametric — it has no entry in `config.DATASET_DIRS`; code that
+  loads CSVs must branch on `cls in config.DATASET_DIRS`, not on `!= "intact"`.
 - **Device**: never a bare `"cuda"`. The `lab` profile is `cuda:auto` →
   `config.best_cuda_device()` ranks visible GPUs by (compute capability,
   VRAM) and takes the strongest, because the 5090's index differs per
   machine (cuda:0 on the lab workstation). `RAIL3D_DEVICE` overrides.
 
-## 5. Verification status — ALL 8 GATES PASS (see `data/generated/verification_report.json`)
+## 5. Verification status (see `data/generated/verification_report.json`)
 
-V1 solver ≡ verbatim Face3D (1e-7) · V2 FFT ≡ conv2d (1e-6) · V3 ASM 0.13% ·
-V4 sanity · V5 3D-vs-2D r=0.984 · V6 shadow artifact 0.0 · V7 λ/4 signal
-cosine mean 0.976 · V8 resume mismatch 0.0.
+**V0** rev.2 geometry: crack orientations, band confinement, seed
+reproducibility, λ/1 vs λ/4 render consistency 0.11 mm · **V1** solver ≡
+verbatim Face3D (1e-7) · **V2** FFT ≡ conv2d (1e-6) · **V3** ASM 0.13% ·
+**V4** sanity · **V5** 3D-vs-2D r=0.984 · **V6** shadow artifact 0.0 ·
+**V7** λ/8-vs-λ/16 defect-signal cosine · **V8** end-to-end + resume
+mismatch 0.0, `full_evaluation` covered, legacy objective guarded.
+
+Run all of them: `python tests_physics_3d.py` (V0–V4, CPU),
+`python validation_3d.py` (V5–V7, GPU), `python v8_smoke_test.py` (V8, needs
+`--smoke` generation first).
 
 ## 6. Hard-won findings (READ BEFORE TOUCHING PHYSICS)
 
@@ -123,6 +156,53 @@ cosine mean 0.976 · V8 resume mismatch 0.0.
    changes, the crop must change.
 9. `chunk_faces` is the total face-slots per chunk **across the batch**
    (per-element chunk = chunk_faces // B) — this is what bounds memory.
+10. **A fixed absolute detection margin is ill-posed here.** With the required
+    ±4 mm / ±2° placement augmentation, the *intact* barcode distribution has
+    a self-spread comparable to the defect signal (first lab run: intact gap
+    mean 0.43 vs the hard-coded 0.40 margin → false alarm ≈ 0.5 while pass rate
+    and FA rose together). Default objective is therefore **`"rank"`**: a
+    pairwise soft-AUC hinge on per-sample-normalized barcodes (`cos_gap`), with
+    the operating threshold **calibrated** at `target_fpr` on the *validation*
+    intact spread (never on test). Checkpoint selection uses AUC + class
+    accuracy (threshold independent). `objective="margin"` restores the old
+    loss exactly, and V8 keeps it running as a regression guard.
+11. **`extract_csv_profile` must baseline-correct.** `match_reference_width`
+    rescales each defect loop by a few percent; without subtracting the 20th
+    percentile of the deviation, that inflation cancels the real material
+    removal and wear CSVs read as depth ≈ 0.
+12. The illuminated arc wraps *around* the head, so an `x >= GAUGE_X_MIN` test
+    alone also selects the downward-facing under-head fillet. Region bands
+    additionally gate on the normal (`nz`) — see `mesh3d.region_band`.
+13. **Ray-cast shadowing is inert for rev.2 hairline cracks.** The occluder
+    mesh is λ/2 (4 mm facets) and a crack is 1.5–3 mm wide, so the occluder
+    simply has no crack in it: V6's `worst_rel_l2` is exactly 0.0 — that is
+    the *occluder resolution*, not physics. Measured against a
+    generation-resolution (λ/8) occluder the omitted self-shadowing is
+    **0.5%** (V6 records it as `crack_shadow_with_resolved_occluder`), well
+    inside other accepted approximations, and capturing it would mean
+    ray-casting against 16× more triangles. Do not "conclude" shadowing is
+    unnecessary from the 0.0 — re-measure with a resolved occluder if the
+    defect geometry ever gets deeper or narrower.
+
+## 6b. Objective & metrics (rev. 2)
+
+`TrainConfig(objective="rank", metric="cos", target_fpr=0.05)` is the default.
+Loss terms (`losses3d.combined_loss`):
+
+| term | purpose |
+|---|---|
+| `rank` | pairwise hinge over all (defect, intact) pairs — soft-AUC surrogate |
+| `hardest` | same hinge on the worst 10% of pairs |
+| `intact` | mean intact cos-gap → keeps the intact cluster tight |
+| `class` | cross-entropy on normalized barcodes (4 classes) |
+| `power` | detected-power floor (ported from the 2D notebook) |
+| `centroid` | class-centroid separation on unit barcodes |
+| `tv` | total variation on the phase / pillar-width map (fabricability) |
+
+Reported: **AUC**, **pass@cal** and **false alarm** at the calibrated
+threshold, **balanced accuracy** at the swept optimum
+(`losses3d.best_threshold`, Face3D's argmin(FN+FP)), class accuracy, plus
+ROC / noise / alignment curves in `full_evaluation`.
 
 ## 7. Current state / what remains
 

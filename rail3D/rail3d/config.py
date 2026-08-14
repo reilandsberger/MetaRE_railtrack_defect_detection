@@ -51,7 +51,10 @@ DATASET_DIRS = {
     "dent": RAILDEFECT_DIR / "data_defect_dent2",
     "wear": RAILDEFECT_DIR / "data_defect_wear2",
 }
-CLASS_NAMES = ("crack", "dent", "wear")  # label order: crack=0, dent=1, wear=2
+# Label order: crack=0, dent=1, wear=2, shell=3. "shell" (shelling/spalling) is
+# fully parametric — no CSV folder; its cross-section statistics come from
+# Ye et al. 2023 Fig 9 (see SHELL_* below).
+CLASS_NAMES = ("crack", "dent", "wear", "shell")
 
 # ---------------------------------------------------------------------------
 # Physical constants (Face3D "config 55" standard, so the meta-atom library
@@ -87,21 +90,36 @@ N_BOUNDARY_VERTICES = 2400      # matches the 2D pipeline's loop resampling
 
 # Generation mesh fidelity (validated in V6/V7):
 #   - lambda/2 meshes are NOT converged (defect-signal cosine 0.66 vs lambda/12);
-#   - lambda/4 preserves the defect signal direction (cosine 0.993) at 1.7 s/sample
-#     on the MX250 — the systematic ~15% magnitude bias is shared across samples;
-#   - ray-cast shadowing changes psi1 by up to 27% on deep dents -> required.
+#   - the rev.2 geometry has ~2 mm-wide hairline cracks, under-resolved by the
+#     old lambda/4 mesh -> generation default is now lambda/8 (1 mm facets);
+#     the V7 convergence gate re-checks crack samples at lambda/8 vs lambda/16;
+#   - ray-cast shadowing changes psi1 by up to 27% on deep defects -> required.
 #     Casting against the lambda/2 occluder mesh keeps it cheap.
-MESH_DS = WVL / 4               # 2 mm slice/arc sampling for dataset generation
+MESH_DS = WVL / 8               # 1 mm slice/arc sampling for dataset generation
 OCCLUDER_DS = WVL / 2           # coarse occluder mesh for the ray-cast shadow test
 SHADOW_MODE = "raycast"
 
-# Defect longitudinal envelopes (per class): length range in mm
-DEFECT_LENGTH_RANGE = {
-    "crack": (5.0, 20.0),
-    "dent": (30.0, 100.0),
-    "wear": (120.0, 300.0),
-}
+# --- Defect geometry parameters (rev. 2: per-point depth fields d(s, y)) ---
+# Ranges cite laser-scan measurements: Ye et al. 2018 Table 1 (cracks 27-31 mm
+# long x ~2 mm wide x 3-4.3 mm deep at 45 deg; squats 16-20 x 12 mm x
+# 1.9-2.4 mm; deep notch 10.3 x 3.1 x 6.9 mm) and Ye et al. 2023 Fig 9
+# (shelling ~8-20 mm ragged patch, ~2 mm deep, on the head shoulder).
 DEFECT_CENTER_RANGE = (-40.0, 40.0)   # y0 range, keeps energy in the y-aperture
+DEFECT_LENGTH_RANGE = {"wear": (120.0, 300.0)}   # wear keeps its long y-envelope
+
+CRACK_LENGTH_RANGE = (10.0, 31.0)     # along the crack line (mm)
+CRACK_WIDTH_RANGE = (1.5, 3.0)        # across the line: hairline (Table 1 ~2 mm)
+CRACK_DEPTH_RANGE = (2.0, 6.9)        # max depth clip (mm)
+DENT_DEPTH_RANGE = (1.5, 2.5)
+DENT_FOOTPRINT_Y = (16.0, 20.0)       # FWHM along the rail (mm)
+DENT_FOOTPRINT_S = (10.0, 14.0)       # FWHM across the head (mm)
+SHELL_RADIUS_RANGE = (4.0, 10.0)      # semi-axes (mm) -> 8-20 mm footprints
+SHELL_DEPTH_RANGE = (1.0, 3.0)
+
+# Surface region bands (arc positions, mm in section coords)
+CROWN_HALF_WIDTH = 25.0               # running band: |x| <= 25
+GAUGE_X_MIN = 15.0                    # horn-facing shoulder band starts here
+GAUGE_X_MAX = 38.0                    # ... and ends at the gauge corner edge
 
 # Augmentation
 ROLL_DEG_STD = 2.0              # roll about the y axis (deg, uniform +/-)
@@ -245,7 +263,7 @@ def seeded_generator(seed: int, device: torch.device | str = "cpu") -> torch.Gen
 def sample_seed(class_name: str, csv_index: int) -> int:
     """Deterministic per-sample seed so interrupted generation regenerates
     bit-identical samples on any machine."""
-    base = {"intact": 0, "crack": 1, "dent": 2, "wear": 3}[class_name]
+    base = {"intact": 0, "crack": 1, "dent": 2, "wear": 3, "shell": 4}[class_name]
     return (base * 1_000_003 + csv_index * 7919 + SEED) % (2**31 - 1)
 
 

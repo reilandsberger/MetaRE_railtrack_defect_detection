@@ -90,16 +90,23 @@ def main() -> int:
     # checkpoint roundtrip: best.pt loads and evaluates
     model_best, _ = train3d.load_trained(cfg_a, device, "best")
     data = train3d.load_all_data(cfg_a, device)
-    val = train3d.evaluate(model_best, data, "val")
+    val = train3d.evaluate(model_best, data, "val", cfg_a)
     res["best_val"] = val
 
     # full_evaluation must run on the *training device* — the notebooks call it and
     # a CPU/GPU mismatch here (e.g. quantile positions built on CPU) would otherwise
     # only surface mid-notebook on the lab GPU.
-    ev = train3d.full_evaluation(model_best, data)
+    ev = train3d.full_evaluation(model_best, data, cfg_a)
     expected = {"test", "confusion", "roc", "noise_curve", "alignment_curve"}
     res["full_eval_keys_ok"] = expected.issubset(ev)
     res["full_eval_auc"] = ev["roc"]["auc"]
+
+    # legacy-objective regression guard: the pre-rev.2 margin loss must still run
+    cfg_legacy = replace(smoke_cfg("v8_smoke_legacy"), n_epoch=6,
+                         objective="margin", metric="l2")
+    fresh(cfg_legacy)
+    hist_legacy = train3d.train(cfg_legacy, device=device, verbose=False)
+    res["legacy_objective_ok"] = len(hist_legacy["val"]) == 6
 
     # resume equivalence (epochs 15..29)
     mism = 0.0
@@ -111,7 +118,7 @@ def main() -> int:
 
     res["pass"] = bool(res["score_improves"] and res["pruning_ok"]
                        and res["detector_centers_moved"] and res["resume_ok"]
-                       and res["full_eval_keys_ok"])
+                       and res["full_eval_keys_ok"] and res["legacy_objective_ok"])
 
     report = json.loads(REPORT_PATH.read_text()) if REPORT_PATH.exists() else {}
     report["V8_end_to_end_smoke"] = res

@@ -12,8 +12,8 @@ import torch.nn.functional as F
 
 from . import config
 
-DETECTION_MARGIN = 0.40      # defects must sit outside this relative gap
-INTACT_MARGIN = 0.15         # intact samples must stay inside this gap
+DETECTION_MARGIN = 0.40      # legacy absolute margin (objective="margin" only)
+INTACT_MARGIN = 0.15         # legacy intact compactness margin
 CLASS_CENTROID_MARGIN = 0.25
 TOPK_FRACTION = 0.10
 POWER_FLOOR_RATIO = 2.0
@@ -24,6 +24,21 @@ W_POWER = 0.2
 W_TOPK = 0.3
 W_CENTROID = 0.2
 W_TV = 1e-4
+
+# --- rank objective (default since rev.2) ---------------------------------
+# The first full lab run showed the fixed 0.40 margin is ill-posed against the
+# (deliberately kept) ±4 mm placement augmentation: the intact barcode
+# DISTRIBUTION spreads wider than the margin, so pass rate and false alarm rise
+# together (FA ≈ 0.5 at AUC 0.75-0.9). The rank objective optimizes what we
+# actually report — separation of the defect and intact score distributions
+# (a differentiable AUC surrogate) — on per-sample-normalized barcodes, and the
+# operating threshold is CALIBRATED from the intact validation spread
+# (Face3D's margin_opt approach) instead of being hard-coded.
+RANK_MARGIN = 0.1            # pairwise hinge margin (cos-gap units)
+W_HARDEST = 0.3              # extra weight on the worst 10% of pairs
+W_INTACT_RANK = 1.0          # pull the intact cluster tight (mean cos-gap)
+CENTROID_MARGIN_N = 0.1      # class-centroid margin on unit-normalized barcodes
+TARGET_FPR = 0.05            # default calibration point
 
 
 # ---------------------------------------------------------------------------
@@ -39,6 +54,26 @@ def linf_gap(det: torch.Tensor, det_ref: torch.Tensor) -> torch.Tensor:
     """max_i |det_i - ref_i| / ref_i — a single anomalous detector suffices."""
     ref = det_ref.reshape(1, -1)
     return ((det - ref).abs() / ref.abs().clamp_min(1e-12)).max(dim=1).values
+
+
+def normalize_barcode(det: torch.Tensor) -> torch.Tensor:
+    """Per-sample unit L2 normalization — removes the global-amplitude part of
+    placement jitter (Face3D normalized its detection vectors the same way)."""
+    return det / det.norm(dim=1, keepdim=True).clamp_min(1e-12)
+
+
+def cos_gap(det: torch.Tensor, det_ref: torch.Tensor) -> torch.Tensor:
+    """1 - cosine(barcode, intact reference direction); in [0, 2]."""
+    ref = normalize_barcode(det_ref.reshape(1, -1))
+    return 1.0 - (normalize_barcode(det) * ref).sum(dim=1)
+
+
+def gap_score(det: torch.Tensor, det_ref: torch.Tensor, metric: str = "cos") -> torch.Tensor:
+    if metric == "cos":
+        return cos_gap(det, det_ref)
+    if metric == "l2":
+        return relative_l2_gap(det, det_ref)
+    raise ValueError(f"Unknown metric: {metric}")
 
 
 # ---------------------------------------------------------------------------
@@ -86,6 +121,49 @@ def power_floor_loss(det: torch.Tensor, det0: torch.Tensor, power_floor: float) 
     return (F.relu(power_floor - p) / power_floor).mean() + (F.relu(power_floor - p0) / power_floor).mean()
 
 
+def ranking_loss(gap_defect: torch.Tensor, gap_intact: torch.Tensor,
+                 margin: float = RANK_MARGIN) -> torch.Tensor:
+    """Pairwise hinge over all (defect, intact) pairs — soft-AUC surrogate.
+
+    Zero when every defect score exceeds every intact score by >= margin;
+    minimizing it directly maximizes the reported AUC.
+    """
+    diff = margin + gap_intact.reshape(1, -1) - gap_defect.reshape(-1, 1)
+    return F.relu(diff).mean()
+
+
+def hardest_ranking_loss(gap_defect: torch.Tensor, gap_intact: torch.Tensor,
+                         margin: float = RANK_MARGIN,
+                         fraction: float = TOPK_FRACTION) -> torch.Tensor:
+    """Same hinge, averaged over only the worst ``fraction`` of pairs."""
+    diff = F.relu(margin + gap_intact.reshape(1, -1) - gap_defect.reshape(-1, 1))
+    k = max(1, int(round(fraction * diff.numel())))
+    return torch.topk(diff.reshape(-1), k).values.mean()
+
+
+@torch.no_grad()
+def calibrated_threshold(gap_intact: torch.Tensor, target_fpr: float = TARGET_FPR) -> float:
+    """Operating threshold = (1 - target_fpr) quantile of the intact spread."""
+    return float(torch.quantile(gap_intact, 1.0 - target_fpr))
+
+
+@torch.no_grad()
+def best_threshold(gap_defect: torch.Tensor, gap_intact: torch.Tensor,
+                   n: int = 251) -> tuple[float, float]:
+    """Face3D-style balanced sweep: argmin(FN + FP) over n thresholds.
+
+    Returns (threshold, balanced_accuracy). Port of Face3D's
+    compute_distance_statistics / margin_opt selection.
+    """
+    lo = float(min(gap_defect.min(), gap_intact.min()))
+    hi = float(max(gap_defect.max(), gap_intact.max()))
+    ts = torch.linspace(lo, hi, n, device=gap_defect.device)
+    fn = (gap_defect.reshape(-1, 1) <= ts.reshape(1, -1)).float().mean(dim=0)
+    fp = (gap_intact.reshape(-1, 1) > ts.reshape(1, -1)).float().mean(dim=0)
+    i = int(torch.argmin(fn + fp))
+    return float(ts[i]), float(1.0 - 0.5 * (fn[i] + fp[i]))
+
+
 def tv_loss(param_map: torch.Tensor) -> torch.Tensor:
     """Total-variation smoothness on the metasurface map (fabricability)."""
     dx = (param_map[1:, :] - param_map[:-1, :]).abs().mean()
@@ -100,24 +178,50 @@ def combined_loss(
     logits: torch.Tensor,       # (B, n_classes)
     surface_map: torch.Tensor | None,  # phase or w_pillar map for the TV term (None: no term)
     power_floor: float,
+    objective: str = "rank",    # "rank" (default) | "margin" (legacy, pre-rev.2)
+    metric: str = "cos",        # score used by the rank objective / reporting
 ) -> tuple[torch.Tensor, dict]:
-    """Full objective; returns (loss, dict of detached components)."""
-    d_ref = det0.mean(dim=0)
-    ref_norm = d_ref.norm()
-    gap = relative_l2_gap(det, d_ref)
-    gap0 = relative_l2_gap(det0, d_ref)
+    """Full objective; returns (loss, dict of detached components).
 
-    terms = {
-        "detect": detection_margin_loss(gap),
-        "intact": W_INTACT * intact_compact_loss(gap0),
-        "class": W_CLASS * F.cross_entropy(logits, labels),
-        "power": W_POWER * power_floor_loss(det, det0, power_floor),
-        "topk": W_TOPK * topk_margin_loss(gap),
-        "centroid": W_CENTROID * class_centroid_loss(det, labels, ref_norm),
-        "tv": W_TV * tv_loss(surface_map) if surface_map is not None else det.new_zeros(()),
-    }
+    objective="margin" reproduces the original absolute-margin loss exactly
+    (L2 gaps, fixed 0.40/0.15 margins) as a regression baseline.
+    """
+    d_ref = det0.mean(dim=0)
+    tv = W_TV * tv_loss(surface_map) if surface_map is not None else det.new_zeros(())
+
+    if objective == "margin":
+        ref_norm = d_ref.norm()
+        gap = relative_l2_gap(det, d_ref)
+        gap0 = relative_l2_gap(det0, d_ref)
+        terms = {
+            "detect": detection_margin_loss(gap),
+            "intact": W_INTACT * intact_compact_loss(gap0),
+            "class": W_CLASS * F.cross_entropy(logits, labels),
+            "power": W_POWER * power_floor_loss(det, det0, power_floor),
+            "topk": W_TOPK * topk_margin_loss(gap),
+            "centroid": W_CENTROID * class_centroid_loss(det, labels, ref_norm),
+            "tv": tv,
+        }
+    elif objective == "rank":
+        gap = gap_score(det, d_ref, metric)
+        gap0 = gap_score(det0, d_ref, metric)
+        terms = {
+            "rank": ranking_loss(gap, gap0),
+            "hardest": W_HARDEST * hardest_ranking_loss(gap, gap0),
+            "intact": W_INTACT_RANK * gap0.mean(),
+            "class": W_CLASS * F.cross_entropy(logits, labels),
+            "power": W_POWER * power_floor_loss(det, det0, power_floor),
+            "centroid": W_CENTROID * class_centroid_loss(
+                normalize_barcode(det), labels, det.new_ones(()),
+                margin=CENTROID_MARGIN_N),
+            "tv": tv,
+        }
+    else:
+        raise ValueError(f"Unknown objective: {objective}")
+
     loss = sum(terms.values())
     logs = {k: float(v.detach()) for k, v in terms.items()}
+    logs["loss"] = float(loss.detach())
     logs["gap_mean"] = float(gap.mean().detach())
     logs["gap0_mean"] = float(gap0.mean().detach())
     return loss, logs

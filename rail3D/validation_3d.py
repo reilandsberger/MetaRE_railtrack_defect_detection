@@ -172,74 +172,112 @@ def v5_2d_3d_consistency(device: torch.device) -> dict:
 # ---------------------------------------------------------------------------
 # V6 — shadowing check
 # ---------------------------------------------------------------------------
-def v6_shadowing(device: torch.device, n_per_class: int = 3) -> dict:
-    """Shadowing at the generation config (λ/4 mesh, λ/2 occluders, min_t=3).
+def _solve_sample(section, class_name, sample_idx, device, args,
+                  ds=None, shadow=True, roll=0.0, jit=(0.0, 0.0),
+                  params=None):
+    """Solve one sample's psi1 with the rev.2 depth-field geometry.
 
-    Two checks:
-      * effect size: raycast-vs-none rel L2 on the deepest samples per class —
-        informational (crack craters give a real ~2% effect; 2D ground truth
-        puts dents/wear at <1%);
-      * artifact guard: on AUGMENTED intact meshes (roll/jitter) the raycast
-        must stay within 3% of no-shadow (the 2D LOS reference says intact
-        shadowing is ~1%); grazing-ray false positives would blow this up.
+    ``params=None`` draws the defect from the sample seed (CSV classes load
+    their CSV); pass params explicitly to re-render the same defect at another
+    resolution. roll/jit override the augmentation (0 = unaugmented)."""
+    ds = ds or config.MESH_DS
+    if params is None:
+        defect = None
+        if class_name in config.DATASET_DIRS:
+            files = sections.get_dataset_files(class_name)
+            defect = sections.match_reference_width(
+                sections.load_vertices_from_csv(files[sample_idx]), section)
+        n_arc_fine = mesh3d.default_arc_count(section, config.MESH_DS)
+        params, _ = mesh3d.defect_params_for_sample(
+            section, class_name, defect, config.sample_seed(class_name, sample_idx),
+            n_arc=n_arc_fine)
+    v, f = mesh3d.sweep_rail_mesh(section, defect_params=params,
+                                  slice_ds=ds, arc_ds=ds, roll_deg=roll, jitter_xz=jit)
+    kw = {}
+    if shadow:
+        v_occ, f_occ = mesh3d.sweep_rail_mesh(section, defect_params=params,
+                                              slice_ds=config.OCCLUDER_DS,
+                                              arc_ds=config.OCCLUDER_DS,
+                                              roll_deg=roll, jitter_xz=jit)
+        kw = {"shadow": "raycast",
+              "shadow_occluders": (v_occ.to(device), f_occ.to(device))}
+    psi, _ = field3d.scattered_fields(v.to(device), f.to(device), *args,
+                                      chunk_faces=2048, compute_psi2=False, **kw)
+    return psi, params
+
+
+def v6_shadowing(device: torch.device, n_per_class: int = 2) -> dict:
+    """Shadowing at the generation config (λ/8 mesh, λ/2 occluders, min_t=3).
+
+    * effect size: raycast-vs-none rel L2 on deep samples of all four classes
+      (informational — crack craters give a real few-% effect);
+    * artifact guard: on AUGMENTED intact meshes the raycast must stay within
+      3% of no-shadow (2D LOS ground truth: intact shadowing ~1%).
     """
     section = sections.load_reference_section()
     X, Y = config.plane_grid(device)
     args = (X, Y, config.H_MS, config.WVL, config.THETA_INC,
             config.SIZE_ANT, config.DIST_ANT, config.RESOL_ANT)
 
-    def solve(dsec, envelope, shadow, roll=0.0, jit=(0.0, 0.0)):
-        v, f = mesh3d.sweep_rail_mesh(section, dsec, envelope,
-                                      slice_ds=config.MESH_DS, arc_ds=config.MESH_DS,
-                                      roll_deg=roll, jitter_xz=jit)
-        v_occ, f_occ = mesh3d.sweep_rail_mesh(section, dsec, envelope,
-                                              roll_deg=roll, jitter_xz=jit)
-        kw = {}
-        if shadow:
-            kw = {"shadow": "raycast",
-                  "shadow_occluders": (v_occ.to(device), f_occ.to(device))}
-        psi, _ = field3d.scattered_fields(v.to(device), f.to(device), *args,
-                                          chunk_faces=2048, compute_psi2=False, **kw)
-        return psi
-
     per_sample, worst = [], 0.0
     for cls in config.CLASS_NAMES:
-        files = sections.get_dataset_files(cls)
-        devs = []
-        for p in files[:200]:
-            d = sections.match_reference_width(sections.load_vertices_from_csv(p), section)
-            devs.append(float((d - section).norm(dim=1).max()))
-        for k in np.argsort(devs)[::-1][:n_per_class]:
-            d = sections.match_reference_width(sections.load_vertices_from_csv(files[k]), section)
-            gen = torch.Generator().manual_seed(config.sample_seed(cls, int(k)))
-            envelope, _ = mesh3d.defect_envelope(cls, gen)
-            rel = float((solve(d, envelope, True) - solve(d, envelope, False)).norm()
-                        / solve(d, envelope, False).norm())
-            per_sample.append({"class": cls, "csv": int(k), "max_dev_mm": devs[k], "rel_l2": rel})
+        for k in range(n_per_class):
+            a, params = _solve_sample(section, cls, k, device, args, shadow=True)
+            b, _ = _solve_sample(section, cls, k, device, args, shadow=False,
+                                 params=params)
+            rel = float((a - b).norm() / b.norm())
+            per_sample.append({"class": cls, "idx": k,
+                               "depth_mm": params.get("depth", 0.0), "rel_l2": rel})
             worst = max(worst, rel)
 
+    intact_params = {"class": "intact"}
     artifact_worst = 0.0
     for roll, jit in [(2.0, (4.0, -4.0)), (-2.0, (-4.0, 4.0)), (1.0, (0.0, 0.0))]:
-        a = solve(None, None, True, roll, jit)
-        b = solve(None, None, False, roll, jit)
+        a, _ = _solve_sample(section, "intact", 0, device, args, shadow=True,
+                             roll=roll, jit=jit, params=intact_params)
+        b, _ = _solve_sample(section, "intact", 0, device, args, shadow=False,
+                             roll=roll, jit=jit, params=intact_params)
         artifact_worst = max(artifact_worst, float((a - b).norm() / b.norm()))
+
+    # Informational: the generation occluder is λ/2, which CANNOT represent a
+    # ~2 mm hairline crack — so shadowing is inert for cracks at the production
+    # config (worst_rel_l2 = 0). Re-measure one crack against a generation-
+    # resolution occluder to record the true magnitude of what we are omitting.
+    files = sections.get_dataset_files("crack")
+    d0 = sections.match_reference_width(sections.load_vertices_from_csv(files[0]), section)
+    n_arc_fine = mesh3d.default_arc_count(section, config.MESH_DS)
+    crack_params, _ = mesh3d.defect_params_for_sample(
+        section, "crack", d0, config.sample_seed("crack", 0), n_arc=n_arc_fine)
+    v_f, f_f = mesh3d.sweep_rail_mesh(section, defect_params=crack_params,
+                                      slice_ds=config.MESH_DS, arc_ds=config.MESH_DS)
+    no_sh, _ = field3d.scattered_fields(v_f.to(device), f_f.to(device), *args,
+                                        chunk_faces=2048, compute_psi2=False)
+    with_sh, _ = field3d.scattered_fields(
+        v_f.to(device), f_f.to(device), *args, chunk_faces=2048, compute_psi2=False,
+        shadow="raycast", shadow_occluders=(v_f.to(device), f_f.to(device)))
+    resolved = float((with_sh - no_sh).norm() / no_sh.norm())
 
     return {"worst_rel_l2": worst, "samples": per_sample,
             "intact_augmented_artifact": artifact_worst,
+            "crack_shadow_with_resolved_occluder": resolved,
             "generation_shadow_mode": config.SHADOW_MODE,
-            "pass": artifact_worst < 0.03}
+            "note": ("lambda/2 occluders cannot resolve hairline cracks, so the "
+                     "production shadow test is inert for them; the resolved-occluder "
+                     "figure is the magnitude being omitted (accepted if < 0.02)"),
+            "pass": artifact_worst < 0.03 and resolved < 0.02}
 
 
 # ---------------------------------------------------------------------------
 # V7 — mesh convergence
 # ---------------------------------------------------------------------------
-def v7_mesh_convergence(device: torch.device, n_samples: int = 5) -> dict:
-    """Detector-level convergence of the generation mesh (λ/4) vs λ/8.
+def v7_mesh_convergence(device: torch.device) -> dict:
+    """Detector-level convergence of the generation mesh (λ/8) vs λ/16.
 
     Raw complex-field L2 does not converge at these facet sizes (PO glint
-    speckle); what the task consumes is the detector barcode, so the criteria
-    are (a) defect-signal direction: cosine of (defect - intact) barcode
-    between λ/4 and λ/8 > 0.95, and (b) intact barcode error reported.
+    speckle); the task consumes detector barcodes, so the criterion is the
+    defect-signal direction cosine between resolutions. Cracks (2 mm hairlines,
+    the sharpest features of the rev.2 geometry) get the most samples; one
+    shell + one dent + one wear round out the check.
     """
     from rail3d import optics3d
 
@@ -249,45 +287,41 @@ def v7_mesh_convergence(device: torch.device, n_samples: int = 5) -> dict:
             config.SIZE_ANT, config.DIST_ANT, config.RESOL_ANT)
     psi0 = field3d.horn_to_plane(*args)
     det = optics3d.SoftDetector2D().to(device)
+    fine = config.WVL / 16
 
-    def barcode(dsec, envelope, ds):
-        v, f = mesh3d.sweep_rail_mesh(section, dsec, envelope, slice_ds=ds, arc_ds=ds)
-        v_occ, f_occ = mesh3d.sweep_rail_mesh(section, dsec, envelope)
-        psi, _ = field3d.scattered_fields(
-            v.to(device), f.to(device), *args, chunk_faces=2048, compute_psi2=False,
-            shadow="raycast", shadow_occluders=(v_occ.to(device), f_occ.to(device)))
-        return det.hard_powers(((psi0 + psi).abs() ** 2).unsqueeze(0))[0]
+    def barcode(cls, idx, ds, params=None):
+        if params is None and cls == "intact":
+            params = {"class": "intact"}
+        psi, params = _solve_sample(section, cls, idx, device, args, ds=ds,
+                                    shadow=True, params=params)
+        return det.hard_powers(((psi0 + psi).abs() ** 2).unsqueeze(0))[0], params
 
-    cosines, intact_errs = [], []
-    for ds in (config.MESH_DS,):
-        b_i4 = barcode(None, None, ds)
-        b_i8 = barcode(None, None, config.WVL / 8)
-        intact_errs.append(float((b_i4 - b_i8).norm() / b_i8.norm()))
-        for i in range(n_samples):
-            cls = config.CLASS_NAMES[i % 3]
-            files = sections.get_dataset_files(cls)
-            d = sections.match_reference_width(sections.load_vertices_from_csv(files[i]), section)
-            gen = torch.Generator().manual_seed(config.sample_seed(cls, i))
-            envelope, _ = mesh3d.defect_envelope(cls, gen)
-            s4 = barcode(d, envelope, ds) - b_i4
-            s8 = barcode(d, envelope, config.WVL / 8) - b_i8
-            cosines.append(float(torch.dot(s4, s8) / (s4.norm() * s8.norm())))
+    b_i8, ip = barcode("intact", 0, config.MESH_DS)
+    b_i16, _ = barcode("intact", 0, fine, params=ip)
+    intact_err = float((b_i8 - b_i16).norm() / b_i16.norm())
 
-    fig, ax = plt.subplots(figsize=(6, 3.4))
-    ax.bar(range(len(cosines)), cosines)
+    cases = [("crack", 0), ("crack", 1), ("crack", 2), ("dent", 0),
+             ("wear", 0), ("shell", 0)]
+    cosines, labels = [], []
+    for cls, idx in cases:
+        s8, params = barcode(cls, idx, config.MESH_DS)
+        s16, _ = barcode(cls, idx, fine, params=params)
+        sig8, sig16 = s8 - b_i8, s16 - b_i16
+        cosines.append(float(torch.dot(sig8, sig16) / (sig8.norm() * sig16.norm())))
+        labels.append(f"{cls}{idx}")
+
+    fig, ax = plt.subplots(figsize=(6.5, 3.4))
+    ax.bar(labels, cosines)
     ax.axhline(0.95, color="red", ls="--", label="0.95 target")
-    ax.set(xlabel="sample", ylabel="signal cosine (λ/4 vs λ/8)",
+    ax.set(ylabel="signal cosine (λ/8 vs λ/16)",
            title="V7: defect-signal consistency of the generation mesh", ylim=(0, 1.05))
     ax.legend()
     fig.tight_layout()
     fig.savefig(config.FIGURE_DIR / "v7_convergence.png", dpi=200)
-    # Criterion: mean cosine > 0.95, min > 0.90. Cracks (smallest, sharpest
-    # defects) sit lowest (~0.94); accepted as the laptop fidelity/cost
-    # tradeoff — SETUP_LAB.md documents optional λ/8 regeneration on the 5090.
+
     mean_cos = float(np.mean(cosines))
-    return {"signal_cosines": cosines, "min_cosine": min(cosines),
-            "mean_cosine": mean_cos,
-            "intact_barcode_rel_err": intact_errs[0],
+    return {"cases": dict(zip(labels, cosines)), "min_cosine": min(cosines),
+            "mean_cosine": mean_cos, "intact_barcode_rel_err": intact_err,
             "pass": mean_cos > 0.95 and min(cosines) > 0.90}
 
 

@@ -115,6 +115,98 @@ def _small_rail_mesh(seg_len: float = 40.0):
 
 
 # ---------------------------------------------------------------------------
+# V0 — rev.2 defect geometry unit checks (CPU, no field solves)
+# ---------------------------------------------------------------------------
+def test_v0_geometry() -> dict:
+    """Depth-field constructors behave as specified:
+    crack orientation moves the line the right way, bands confine footprints,
+    depth fields are resolution independent, and seeds reproduce exactly."""
+    import numpy as np
+
+    section = sections.load_reference_section()
+    geom = mesh3d.arc_geometry(section, mesh3d.default_arc_count(section, 1.0))
+    y = np.arange(-120.0, 120.5, 1.0)
+    res = {}
+
+    # (a) crack orientations: extent along y vs s must follow theta
+    base = {"class": "crack", "y0": 0.0, "s0": float(geom["s"][len(geom["s"]) // 2]),
+            "L": 24.0, "depth": 4.0, "offsets": [0.0], "band": "crack",
+            "profile_v": np.linspace(-1.0, 1.0, 9),
+            "profile_d": np.maximum(0.0, 1.0 - np.abs(np.linspace(-1, 1, 9)))}
+
+    def extent(theta):
+        d = mesh3d.render_depth_field({**base, "theta": theta}, geom, y)
+        m = d > 0.5
+        ys = np.flatnonzero(m.any(axis=1))
+        ss = np.flatnonzero(m.any(axis=0))
+        return (int(ys[-1] - ys[0] + 1) if len(ys) else 0,
+                float(geom["s"][ss[-1]] - geom["s"][ss[0]]) if len(ss) else 0.0)
+
+    ey_long, es_long = extent(0.0)
+    ey_tr, es_tr = extent(np.pi / 2)
+    ey_ob, es_ob = extent(np.pi / 4)
+    res["long_extent_y_mm"], res["long_extent_s_mm"] = ey_long, es_long
+    res["trans_extent_y_mm"], res["trans_extent_s_mm"] = ey_tr, es_tr
+    ok_orient = (ey_long > 15 and es_long < 5 and         # line along y, hairline in s
+                 ey_tr < 5 and es_tr > 15 and             # line along s
+                 ey_ob > 10 and es_ob > 10)               # diagonal spans both
+    res["orientations_ok"] = bool(ok_orient)
+
+    # (b) bands: dent footprint on the running band, wear/shell on the horn side,
+    #     nothing on downward-facing surface (nz < -0.3)
+    band_ok = True
+    for cls in ("crack", "dent", "wear", "shell"):
+        defect = None
+        if cls in config.DATASET_DIRS:
+            files = sections.get_dataset_files(cls)
+            defect = sections.match_reference_width(
+                sections.load_vertices_from_csv(files[0]), section)
+        p, _ = mesh3d.defect_params_for_sample(section, cls, defect,
+                                               config.sample_seed(cls, 0),
+                                               n_arc=geom["n_arc"])
+        d = mesh3d.render_depth_field(p, geom, y)
+        if d.max() <= 0:
+            band_ok = False
+            res[f"{cls}_empty"] = True
+            continue
+        cols = d.max(axis=0) > 0.1 * d.max()
+        nz = geom["normal"][cols, 1]
+        if (nz < -0.3).any():
+            band_ok = False
+            res[f"{cls}_on_underside"] = True
+        if cls in ("wear", "shell") and geom["x"][cols].min() < config.GAUGE_X_MIN - 5:
+            band_ok = False
+            res[f"{cls}_off_gauge_band"] = True
+    res["bands_ok"] = bool(band_ok)
+
+    # (c) resolution independence + seed reproducibility (shell has the most
+    #     internal randomness — exercise it)
+    p1, _ = mesh3d.defect_params_for_sample(section, "shell", None,
+                                            config.sample_seed("shell", 7),
+                                            n_arc=geom["n_arc"])
+    p2, _ = mesh3d.defect_params_for_sample(section, "shell", None,
+                                            config.sample_seed("shell", 7),
+                                            n_arc=geom["n_arc"])
+    d_fine = mesh3d.render_depth_field(p1, geom, y)
+    d_fine2 = mesh3d.render_depth_field(p2, geom, y)
+    res["seed_reproducible"] = bool(np.array_equal(d_fine, d_fine2))
+
+    geom_c = mesh3d.arc_geometry(section, mesh3d.default_arc_count(section, 4.0))
+    y_c = np.arange(-120.0, 120.5, 4.0)
+    d_coarse = mesh3d.render_depth_field(p1, geom_c, y_c)
+    # compare coarse rendering against fine rendering subsampled at nearest pts
+    ii = [int(np.argmin(np.abs(geom["s"] - sc))) for sc in geom_c["s"]]
+    jj = [int(np.argmin(np.abs(y - yc))) for yc in y_c]
+    diff = np.abs(d_coarse - d_fine[np.ix_(jj, ii)]).max()
+    res["resolution_consistency_mm"] = float(diff)
+    res["resolution_ok"] = bool(diff < 0.35)   # interp differences only, no shape change
+
+    res["pass"] = bool(ok_orient and band_ok and res["seed_reproducible"]
+                       and res["resolution_ok"])
+    return res
+
+
+# ---------------------------------------------------------------------------
 # V1 — solver equivalence + chunk/batch invariance
 # ---------------------------------------------------------------------------
 def test_v1_solver_equivalence() -> dict:
@@ -235,6 +327,7 @@ def main() -> int:
     report = {"device": str(DEVICE), "torch": torch.__version__}
     ok = True
     for name, fn in [
+        ("V0_geometry", test_v0_geometry),
         ("V1_solver_equivalence", test_v1_solver_equivalence),
         ("V2_propagator_equivalence", test_v2_propagator_equivalence),
         ("V3_asm_vs_rs", test_v3_asm_vs_rs),
@@ -253,7 +346,7 @@ def main() -> int:
         print(f"[{status}] {name}: {detail}")
 
     with open(REPORT_PATH, "w") as fh:
-        json.dump(report, fh, indent=2)
+        json.dump(report, fh, indent=2, default=str)
     print(f"report -> {REPORT_PATH}")
     return 0 if ok else 1
 
