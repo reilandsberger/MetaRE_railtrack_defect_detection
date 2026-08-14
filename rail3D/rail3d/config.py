@@ -107,10 +107,14 @@ SHADOW_MODE = "raycast"
 DEFECT_CENTER_RANGE = (-40.0, 40.0)   # y0 range, keeps energy in the y-aperture
 DEFECT_LENGTH_RANGE = {"wear": (120.0, 300.0)}   # wear keeps its long y-envelope
 
+# Crack/dent depth is SAMPLED uniformly from these ranges (they are not clips —
+# clipping raw CSV depths pinned 66% of cracks and 49% of dents at the cap).
+# The CSV still provides the across-defect profile shape. Wear is deliberately
+# left on its raw CSV depth (up to ~12 mm), so it stays the strongest signal.
 CRACK_LENGTH_RANGE = (10.0, 31.0)     # along the crack line (mm)
 CRACK_WIDTH_RANGE = (1.5, 3.0)        # across the line: hairline (Table 1 ~2 mm)
-CRACK_DEPTH_RANGE = (2.0, 6.9)        # max depth clip (mm)
-DENT_DEPTH_RANGE = (1.5, 2.5)
+CRACK_DEPTH_RANGE = (2.0, 6.9)        # sampled (mm)
+DENT_DEPTH_RANGE = (1.5, 2.5)         # sampled (mm)
 DENT_FOOTPRINT_Y = (16.0, 20.0)       # FWHM along the rail (mm)
 DENT_FOOTPRINT_S = (10.0, 14.0)       # FWHM across the head (mm)
 SHELL_RADIUS_RANGE = (4.0, 10.0)      # semi-axes (mm) -> 8-20 mm footprints

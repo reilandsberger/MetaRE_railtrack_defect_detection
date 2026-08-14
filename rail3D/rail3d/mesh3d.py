@@ -210,8 +210,13 @@ def sample_defect_params(class_name: str, gen: torch.Generator,
         v_span = float(v.max() - v.min())
         if v_span > 1e-6:
             v = v * (w_hair / v_span)
-        depth = float(np.clip(csv_profile["depth"] if csv_profile else 3.0,
-                              *config.CRACK_DEPTH_RANGE))
+        # Depth is SAMPLED in the measured range, not taken-and-clipped from the
+        # CSV: raw CSV crack depths (median 7.8 mm, p95 10.8) exceed the cap, so
+        # clipping pinned 66% of samples at exactly 6.9 mm and destroyed depth
+        # diversity. The CSV still supplies the across-crack profile SHAPE (and
+        # its width is rescaled to hairline anyway, so its depth carried little
+        # meaning). Range from Ye 2018 Table 1.
+        depth = _u(gen, *config.CRACK_DEPTH_RANGE)
         n_lines = 1
         if _u(gen, 0, 1) < 0.3:
             n_lines = 2 if _u(gen, 0, 1) < 0.7 else 3
@@ -220,8 +225,9 @@ def sample_defect_params(class_name: str, gen: torch.Generator,
                  profile_v=v, profile_d=prof, offsets=offsets, band="crack")
 
     elif class_name == "dent":
-        depth = float(np.clip(csv_profile["depth"] if csv_profile else 2.0,
-                              *config.DENT_DEPTH_RANGE))
+        # sampled, not clipped — see the crack note above (49% of dents were
+        # pinned at exactly 2.5 mm). Range from Ye 2018 Table 1 rows 4-5.
+        depth = _u(gen, *config.DENT_DEPTH_RANGE)
         fw_y = _u(gen, *config.DENT_FOOTPRINT_Y)      # FWHM along the rail
         fw_s = _u(gen, *config.DENT_FOOTPRINT_S)      # FWHM across the head
         pits = [(0.0, 0.0, 1.0)]

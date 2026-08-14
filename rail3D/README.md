@@ -59,13 +59,26 @@ Figs 14/23/24) and Ye et al. 2023 (*IEEE TIM*, Figs 7/9):
 
 | class | footprint | depth | region |
 |---|---|---|---|
-| `crack` | line-divot, 10–31 mm long × 1.5–3 mm wide; longitudinal / transverse / oblique (20–70°); 30% chance of 2–3 parallel lines | 2–6.9 mm | running band + gauge corner |
-| `dent` | 2D super-Gaussian, 16–20 mm (y) × 10–14 mm (s); 20% chance of a 2–4 pit chain | 1.5–2.5 mm | running band |
-| `wear` | CSV cross-section deviation × long y-envelope (120–300 mm) | CSV (~0.6–1 mm) | horn-facing shoulder |
+| `crack` | line-divot, 10–31 mm long × 1.5–3 mm wide; longitudinal / transverse / oblique (20–70°); 30% chance of 2–3 parallel lines | 2–6.9 mm *(sampled)* | running band + gauge corner |
+| `dent` | 2D super-Gaussian, 16–20 mm (y) × 10–14 mm (s); 20% chance of a 2–4 pit chain | 1.5–2.5 mm *(sampled)* | running band |
+| `wear` | CSV cross-section deviation × long y-envelope (120–300 mm) | raw CSV, 0.7–12.5 mm | horn-facing shoulder |
 | `shell` | **parametric** (no CSVs): Fourier-modulated ellipse 8–20 mm + ragged interior; 30% chance of a second lobe | 1–3 mm | horn-facing shoulder |
 
 Parameters are resolution independent, so the fine simulation mesh (λ/8) and
 the coarse ray-cast occluder (λ/2) render the *same* physical defect.
+
+**Crack and dent depth is sampled, not taken from the CSV.** Raw CSV depths
+(crack median 7.8 mm, p95 10.8; dent median 2.5, p95 3.7) overshoot the
+measured ranges, so clipping them pinned 66% of cracks at exactly 6.9 mm and
+49% of dents at 2.5 mm — destroying depth diversity. The CSV supplies the
+across-defect profile *shape*; depth is drawn uniformly from the paper range.
+**Wear is deliberately left on its raw CSV depth** (up to ~12.5 mm) and is by
+far the strongest signal — mean intensity change ≈ 51% of peak, vs ≈ 15% for
+the other three classes. Expect it to be the easiest class to separate.
+
+Check any dataset with `python inspect_dataset.py [--root ...]`: it re-derives
+each stored sample's geometry from its seed and shows it next to the stored
+field, plus parameter histograms.
 
 ## 3. File map
 
