@@ -26,6 +26,10 @@ import torch
 
 from rail3d import config, field3d, mesh3d, optics3d, sections
 
+# V0-V4 default to CPU ON PURPOSE: they use tiny meshes, run in ~5 s, and this
+# keeps them safe on a 2 GB laptop GPU. That means they show NO NVIDIA activity
+# in Task Manager — which is expected, not a misconfiguration. Force the GPU
+# with RAIL3D_TEST_DEVICE=cuda:0 if you want to check the CUDA path.
 DEVICE = torch.device(os.environ.get("RAIL3D_TEST_DEVICE", "cpu"))
 REPORT_PATH = config.GENERATED_DIR / "verification_report.json"
 
@@ -324,6 +328,10 @@ def test_v4_sanity() -> dict:
 def main() -> int:
     warnings.filterwarnings("ignore", message=".*torch.meshgrid.*")
     config.ensure_dirs()
+    print(f"[rail3d] V0-V4 running on {DEVICE}"
+          + ("  (CPU by design - set RAIL3D_TEST_DEVICE=cuda:0 to use the GPU)"
+             if DEVICE.type == "cpu" else
+             f"  ({torch.cuda.get_device_name(DEVICE.index or 0)})"))
     report = {"device": str(DEVICE), "torch": torch.__version__}
     ok = True
     for name, fn in [

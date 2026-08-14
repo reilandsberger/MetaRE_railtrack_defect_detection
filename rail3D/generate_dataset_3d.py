@@ -16,6 +16,7 @@ interrupted run resumes losslessly on any machine.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import time
 from pathlib import Path
@@ -82,7 +83,7 @@ def generate_class(
         path = data3d.shard_path(class_name, k, root=root)
         lo, hi = k * shard_size, min((k + 1) * shard_size, n_samples)
         if path.exists():
-            log(f"{class_name} shard {k:03d} exists — skipped", root)
+            log(f"{class_name} shard {k:03d} exists - skipped", root)
             continue
 
         psis, metas = [], []
@@ -184,7 +185,13 @@ def main() -> int:
 
     profile = config.PROFILES[args.profile]
     device = config.get_device(args.profile)
-    log(f"start: profile={args.profile} device={device} counts={counts} shard_size={shard_size}", root)
+    # log the physical GPU name, not just the index: CUDA indices do not match
+    # Task Manager's GPU numbering, and Intel integrated graphics is never a
+    # CUDA device (so "it's on the Intel GPU" is always a misread).
+    gpu = (torch.cuda.get_device_name(device.index or 0) if device.type == "cuda"
+           else "CPU")
+    log(f"start: profile={args.profile} device={device} ({gpu}) pid={os.getpid()} "
+        f"counts={counts} shard_size={shard_size}", root)
 
     # psi0 (face independent) — once
     psi0_file = data3d.psi0_path(root=root)

@@ -198,6 +198,8 @@ regenerate (~4-6× the λ/4 cost — still around an hour).
 | Symptom | Cause / fix |
 |---|---|
 | `git pull` → "Your local changes to the following files would be overwritten by merge" | You ran the scripts, which rewrite generated output. Everything under `rail3D/data/` is regenerated and safe to discard: `git checkout -- rail3D/data/` then pull. (Keep real edits instead with `git stash` → `git pull` → `git stash pop`.) |
+| "It's running on the Intel GPU / the wrong GPU" in Task Manager | Almost always a misread — **CUDA never uses Intel integrated graphics**, and Task Manager's GPU numbering does not match CUDA's (on the lab box the 5090 is Task Manager GPU 1 but CUDA `cuda:0`). Trust the banner each script prints (`[rail3d] ... running on cuda:N (NVIDIA ...)`) and `nvidia-smi`, not Task Manager indices. Note Task Manager also hides CUDA work unless you switch a graph to the **Compute_0** engine. |
+| `tests_physics_3d.py` shows no GPU activity at all | Expected: **V0–V4 run on CPU by design** (tiny meshes, ~5 s, safe on a 2 GB laptop card). Force the GPU with `RAIL3D_TEST_DEVICE=cuda:0`. V5–V7, generation and training always use the GPU. |
 | `ValueError: crack: requested 5000 but only 0 CSVs` | `RAILDEFECT_DATA_DIR` unset in *this* process, wrong shell syntax (§3), an MSYS `/c/...` path, or it points inside a `data_defect_*2` folder instead of their parent |
 | Reference rail width prints ~94 mm instead of 157.4 mm | wrong image loader for `crosssection.png` — see `README.md` §6.1 |
 | CUDA "no kernel image available" | a non-cu128 torch got installed; re-run §2 and do not use `pip install -U` |

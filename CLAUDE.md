@@ -29,6 +29,12 @@ Trainable metasurface + detector "barcode" system for rail defect detection.
   (torch 2.7.1+cu118, MX250 2 GB — small batches only; no full generation/training here).
   Lab workstation: RTX 5090, cu128 torch, auto-selected via `cuda:auto`
   (`config.best_cuda_device()`); setup in `rail3D/SETUP_LAB.md`.
+- **GPU identity**: never trust Task Manager's GPU indices — they differ from
+  CUDA's, and CUDA cannot use Intel integrated graphics at all. Every entry
+  point prints a `[rail3d] ... running on cuda:N (NVIDIA ...)` banner; the
+  generator also logs the GPU name and PID so it can be matched to `nvidia-smi`.
+  `tests_physics_3d.py` (V0–V4) deliberately defaults to **CPU** (laptop-safe);
+  override with `RAIL3D_TEST_DEVICE`.
 - Defect CSVs live outside the repo: `RAILDEFECT_DATA_DIR` env var (see SETUP_LAB §3;
   read at import time). Generated data/checkpoints are gitignored under `rail3D/data/`.
 - Commit on `3D_railhead_upgrade`; bulk `.pt` data never gets committed.

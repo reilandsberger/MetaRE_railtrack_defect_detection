@@ -332,6 +332,9 @@ def main() -> int:
                         help="e.g. cuda:0; default = RAIL3D_DEVICE, else strongest CUDA card")
     args = parser.parse_args()
     device = torch.device(args.device) if args.device else config.get_device("lab")
+    print(f"[rail3d] V5-V7 running on {device}"
+          + (f"  ({torch.cuda.get_device_name(device.index or 0)})"
+             if device.type == "cuda" else "  (CPU - this will be slow)"))
     config.ensure_dirs()
 
     report = {}
