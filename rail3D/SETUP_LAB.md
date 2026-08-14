@@ -8,6 +8,17 @@ unchanged on the lab machine except where marked.
 
 ---
 
+## 0. Read this first
+
+- **Start the defect-CSV copy now** (§5a) — it is ~2 GB and everything from §4's
+  V5–V7 onward needs it. It can transfer while you do §1–§3.
+- **If you cloned earlier in the session, `git pull` before running anything.**
+  Fixes land on `3D_railhead_upgrade` between sessions; the `cuda:auto` GPU
+  selection in §3 is one of them.
+- **Shell syntax matters.** §3's environment variables use `export` in Git Bash,
+  `$env:` in PowerShell, `set` in cmd — the wrong one fails *silently* and you
+  only find out when a script reports "0 CSVs".
+
 ## 1. Get the code
 
 ```bash
@@ -40,6 +51,10 @@ pip install torch --index-url https://download.pytorch.org/whl/cu128
 pip install -r requirements.txt
 ```
 
+**Never add `-U` / `--upgrade` to that second command.** `requirements.txt` only
+asks for `torch>=2.7`, which your cu128 build already satisfies; an upgrade would
+resolve against PyPI and replace it with a CPU-only wheel, silently killing CUDA.
+
 Sanity check (should print the 5090's compute capability `(12, 0)` without
 errors):
 
@@ -49,45 +64,91 @@ python -c "import torch; print(torch.__version__); [print(i, torch.cuda.get_devi
 
 ## 3. Point the code at the right GPU and data
 
-Two environment variables (set them in the VS Code terminal, or a `.env`):
+One required environment variable, `RAILDEFECT_DATA_DIR`. **Use your shell's own
+syntax** — the wrong form does not error, it just leaves the variable unset:
 
 ```bash
-set RAILDEFECT_DATA_DIR=C:\path\to\RailDefect\RailDefect
-:: optional — only if you want to pin a specific GPU:
-:: set RAIL3D_DEVICE=cuda:0
+# Git Bash (MINGW64) — note the Windows-style C:/ path, NOT /c/...
+export RAILDEFECT_DATA_DIR='C:/Users/<you>/Documents/Rei/RailDefect'
 ```
 
-- **GPU selection is automatic.** The `lab` profile uses `cuda:auto`:
+```powershell
+# PowerShell
+$env:RAILDEFECT_DATA_DIR = 'C:\Users\<you>\Documents\Rei\RailDefect'
+```
+
+```bat
+:: cmd.exe
+set RAILDEFECT_DATA_DIR=C:\Users\<you>\Documents\Rei\RailDefect
+```
+
+In Git Bash an MSYS path like `/c/Users/...` is *not* translated for an exported
+variable, and Python on Windows cannot resolve it — always give `C:/...`.
+
+The variable is read at **import time** by `rail3d/config.py`, so it must be set
+before Python starts. For notebooks, launch VS Code from the same shell (`code .`)
+so the kernel inherits it; otherwise set `os.environ['RAILDEFECT_DATA_DIR'] = ...`
+in the first cell, **above** the `from rail3d import ...` line.
+
+- **GPU selection is automatic** — no `RAIL3D_DEVICE` needed. The `lab` profile
+  uses `cuda:auto`:
   `config.best_cuda_device()` ranks the visible CUDA devices by compute
   capability, then VRAM, and takes the strongest — the 5090 regardless of
   whether it is index 0 or 1. It prints which one it chose when more than one
   device is present. Set `RAIL3D_DEVICE=cuda:N` only to override that choice
   (e.g. to leave the 5090 free for someone else). Nothing ever uses a bare
   `"cuda"`.
-- `RAILDEFECT_DATA_DIR` — folder containing the defect CSV datasets
-  (`data_defect_crack2/`, `data_defect_dent2/`, `data_defect_wear2/`).
-  **Only needed to (re)generate fields** — training runs entirely from the
-  generated `.pt` shards. Copy the three CSV folders (~a few hundred MB) if
-  you want to regenerate on the lab machine.
+- `RAILDEFECT_DATA_DIR` — the **parent** folder holding the three defect CSV
+  datasets (`data_defect_crack2/`, `data_defect_dent2/`, `data_defect_wear2/`).
+  Required by V5–V7, the V8 smoke test, and all dataset generation — see §5a.
+  Only training-from-existing-shards works without it.
 
 `config.py` fails fast with an actionable message if the torch build cannot
 drive the GPU.
 
 ## 4. Run the verification suite (do this once, before anything long)
 
+Ordered so the CSV-free gates run while the §5a copy is still transferring:
+
 ```bash
 cd rail3D
-python tests_physics_3d.py          # V1-V4: solver/propagator equivalence, sanity  (~1 min, CPU)
-python validation_3d.py             # V5-V7: 2D-vs-3D, shadowing, mesh convergence (~3 min GPU)
-python v8_smoke_test.py             # V8: end-to-end smoke train + kill-and-resume  (~5 min GPU)
+python tests_physics_3d.py          # V1-V4: solver/propagator equivalence, sanity (~1 min, CPU)
 ```
 
-All eight gates must PASS (they do on the laptop; results are appended to
-`data/generated/verification_report.json`). V8 needs the smoke dataset first:
+V1–V4 need only `crosssection.png`, which is committed — they work immediately.
+The rest need the defect CSVs of §5a in place:
 
 ```bash
-python generate_dataset_3d.py --profile lab --smoke
+python validation_3d.py             # V5-V7: 2D-vs-3D, shadowing, mesh convergence (~3 min GPU)
+python generate_dataset_3d.py --profile lab --smoke   # 20/class + 32 intact (~1 min)
+python v8_smoke_test.py             # V8: end-to-end smoke train + kill-and-resume (~5 min GPU)
 ```
+
+All eight gates must PASS (they do on the laptop). Results are written to
+`data/generated/verification_report.json`, which is **untracked** — running the
+suite never dirties your working tree, so `git pull` stays conflict-free. The
+laptop's reference numbers live in `README.md` §5.
+
+## 5a. Get the defect CSVs onto this machine (~2 GB — start this first)
+
+`rail3D` reads only these three folders from `RAILDEFECT_DATA_DIR`; nothing else
+in the old `RailDefect/` tree is used:
+
+| folder | contents | size |
+|---|---|---|
+| `data_defect_crack2/` | 5000 CSVs | ~667 MB |
+| `data_defect_dent2/`  | 5000 CSVs | ~667 MB |
+| `data_defect_wear2/`  | 5000 CSVs | ~667 MB |
+
+Copy them under one parent (that parent is what `RAILDEFECT_DATA_DIR` points at).
+With the source mounted as `Z:`:
+
+```bat
+robocopy Z:\RailDefect\data_defect_crack2 C:\Users\<you>\Documents\Rei\RailDefect\data_defect_crack2 /E /MT:16
+```
+
+Repeat for `data_defect_dent2` and `data_defect_wear2`. Many small files — expect
+this to be slower than 2 GB of bulk data suggests, which is why it goes first.
 
 ## 5. Getting the dataset
 
@@ -110,6 +171,15 @@ mesh (defect-signal cosine 0.993 vs λ/12; ~15% systematic magnitude bias
 shared across samples). On the 5090 you can afford λ/8: set
 `MESH_DS = WVL / 8` in `rail3d/config.py`, delete/rename the old shards, and
 regenerate (~4-6× the λ/4 cost — still around an hour).
+
+### Troubleshooting
+
+| Symptom | Cause / fix |
+|---|---|
+| `ValueError: crack: requested 5000 but only 0 CSVs` | `RAILDEFECT_DATA_DIR` unset in *this* process, wrong shell syntax (§3), an MSYS `/c/...` path, or it points inside a `data_defect_*2` folder instead of their parent |
+| Reference rail width prints ~94 mm instead of 157.4 mm | wrong image loader for `crosssection.png` — see `README.md` §6.1 |
+| CUDA "no kernel image available" | a non-cu128 torch got installed; re-run §2 and do not use `pip install -U` |
+| Generation looks stalled | it logs every ~50 samples to `data/generated/generation.log`; `--status` lists shards done/remaining |
 
 ## 6. Training
 

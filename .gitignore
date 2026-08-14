@@ -23,3 +23,6 @@ rail3D/**/__pycache__/
 # small meta-atom library fits ARE tracked
 !rail3D/rail3d/library_amp_fit.npy
 !rail3D/rail3d/library_phase_fit.npy
+# verification_report.json is rewritten by every test run — keep it out of the
+# tree so running the suite never blocks a pull (numbers live in rail3D/README.md)
+rail3D/data/generated/verification_report.json

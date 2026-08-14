@@ -130,8 +130,13 @@ Done: all modules, all verification, smoke dataset
 (`data/generated/smoke/`), design/validation/training notebooks, SETUP_LAB.md.
 Everything committed on branch **`3D_railhead_upgrade`**.
 
-**Remaining (on the lab 5090, in order):**
-1. `SETUP_LAB.md` §1–4: env setup + re-run the three verification scripts.
+**Remaining (on the lab 5090, in order — full detail in `SETUP_LAB.md`):**
+0. Copy the three `data_defect_*2` CSV folders (~2 GB) to the workstation and
+   point `RAILDEFECT_DATA_DIR` at their parent — needed by V5–V8 and all
+   generation, not just generation. `git pull` before running anything.
+1. `SETUP_LAB.md` §1–4: venv (cu128 torch, never `pip -U`), then
+   `tests_physics_3d.py` (V1–V4, CSV-free) → `validation_3d.py` (V5–V7) →
+   `--smoke` generation → `v8_smoke_test.py`.
 2. `python generate_dataset_3d.py --profile lab` (full 5000/class + 512
    intact, ≲1 h, resumable).
 3. Run `training_3d_ms_notebook.ipynb` (SLM run, then MetaUnit run).
