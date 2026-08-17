@@ -167,10 +167,20 @@ def main() -> int:
                         help="subset of {crack,dent,wear,shell,intact}")
     parser.add_argument("--shard-size", type=int, default=data3d.SHARD_SIZE)
     parser.add_argument("--status", action="store_true", help="report shard status and exit")
+    parser.add_argument("--name", default=None,
+                        help="save into data/generated/<name>/ instead of data/generated/ "
+                             "- use this to keep several datasets side by side")
+    parser.add_argument("--note", default="",
+                        help="free-text note stored in dataset_config.json")
     args = parser.parse_args()
 
     config.ensure_dirs()
-    root = config.GENERATED_DIR / "smoke" if args.smoke else config.GENERATED_DIR
+    if args.smoke:
+        root = config.GENERATED_DIR / "smoke"
+    elif args.name:
+        root = config.GENERATED_DIR / args.name
+    else:
+        root = config.GENERATED_DIR
     root.mkdir(parents=True, exist_ok=True)
     shard_size = min(args.shard_size, SMOKE_PER_CLASS) if args.smoke else args.shard_size
     counts = plan_counts(args)
@@ -192,7 +202,7 @@ def main() -> int:
            else "CPU")
     # record the geometry these fields are generated with, so training can
     # refuse to silently use a dataset built for a different setup
-    prov = data3d.write_dataset_config(root)
+    prov = data3d.write_dataset_config(root, note=args.note)
     log(f"geometry: H_MS={prov['H_MS']} grid={prov['NX']}x{prov['NY']} "
         f"seg={prov['SEG_LEN']} mesh_ds={prov['MESH_DS']} classes={prov['CLASS_NAMES']}",
         root)
@@ -211,7 +221,19 @@ def main() -> int:
     t0 = time.time()
     for cls, n in counts.items():
         generate_class(cls, n, device, profile, root, shard_size)
-    log(f"all requested shards complete in {(time.time() - t0) / 3600:.2f} h", root)
+    dt_h = (time.time() - t0) / 3600
+    total = sum(counts.values())
+    size_mb = sum(p.stat().st_size for p in root.glob("*.pt")) / 1e6
+    data3d.finalize_dataset_config(
+        root, counts=counts, duration_hours=round(dt_h, 3),
+        samples_per_second=round(total / max(dt_h * 3600, 1e-9), 2))
+    log(f"all requested shards complete in {dt_h:.2f} h "
+        f"({total / max(dt_h * 3600, 1e-9):.2f} samples/s, {size_mb:.0f} MB on disk)", root)
+    print("\n" + "=" * 72)
+    print(data3d.describe_dataset(root))
+    print("=" * 72)
+    print(f"\nTrain on it with:  TrainConfig(..., data_root='{root}')")
+    print(f"Inspect it with :  python inspect_dataset.py --root {root}")
     return 0
 
 

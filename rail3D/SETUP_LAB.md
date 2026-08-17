@@ -2,9 +2,99 @@
 
 Step-by-step replication of the 3D rail-defect pipeline on the lab computer
 (VS Code + local filesystem, GPU = **RTX 5090**; its device index varies by
-machine, so the code selects it automatically — see §3). Developed and
-verified on the laptop (MX250); every command below was designed to run
-unchanged on the lab machine except where marked.
+machine, so the code selects it automatically — see §3).
+
+## Which document do I use?
+
+| you want to… | use |
+|---|---|
+| run the experiment day to day, terminal, unattended jobs | **this file** — §A below is the short loop |
+| understand *why* each choice was made, see figures inline | **`rail3D_pipeline.ipynb`** — the same steps, narrated, with plots |
+| know the conventions and the traps before editing code | `README.md` §4 (conventions) and §6 (hard-won findings) |
+
+They do not duplicate logic: the notebook calls the same scripts documented
+here, so neither can drift from the other.
+
+---
+
+## A. The short loop (machine already set up)
+
+If §1–§4 are done, this is the whole cycle. **Every command prints what it is
+using**, so read the banners rather than assuming.
+
+```bash
+cd ~/Documents/Rei/MetaRE_railtrack_defect_detection && git checkout -- rail3D/data/ && git pull
+```
+
+```bash
+export RAILDEFECT_DATA_DIR='C:/Users/ct2443/Downloads/RailDefect/RailDefect'
+```
+
+```bash
+cd rail3D && python preflight.py
+```
+
+Pre-flight lists **every dataset on disk with its creation date, geometry and
+git commit**, marks the one that would be used, and stops on anything
+inconsistent. Then generate (naming it), inspect, train, analyse:
+
+```bash
+python generate_dataset_3d.py --profile lab --name H240_v1 --note "H=240, 4 classes, lambda/8"
+```
+
+```bash
+python inspect_dataset.py --root data/generated/H240_v1
+```
+
+```bash
+python -c "from rail3d import config, train3d; train3d.train(train3d.TrainConfig(run_name='ms3d_slm_v1', surface='slm', n_epoch=1200, batch_size=config.PROFILES['lab'].train_batch, data_root='data/generated/H240_v1'))"
+```
+
+```bash
+python analyze_results.py --run-name ms3d_slm_v1 --data-root data/generated/H240_v1
+```
+
+### Keeping several datasets
+
+`--name X` writes to `data/generated/X/` instead of the default
+`data/generated/`. Use it whenever you change geometry, so old and new datasets
+coexist and can be compared instead of overwriting each other:
+
+```bash
+python generate_dataset_3d.py --profile lab --name H320_v1 --note "plane at 320 mm"
+```
+
+Point training at one with `TrainConfig(..., data_root='data/generated/H320_v1')`.
+Every dataset carries a `dataset_config.json` recording its geometry, creation
+time, git commit and host — and **training refuses to run against a dataset
+whose geometry differs from the current config**, so a stale dataset cannot
+silently produce meaningless numbers.
+
+### Knowing what is feeding training
+
+Training prints a banner before the first epoch:
+
+```
+========================================================================
+run     : ms3d_slm_v1   surface=slm  objective=rank/cos  epochs=1200  batch=1024
+device  : cuda:0 (NVIDIA GeForce RTX 5090)
+detectors: start (6, 3) -> 8 final, fraction schedule (prune 60-150)
+optics  : 1 layer(s), distances (160.0,) mm
+dataset : .../data/generated/H240_v1
+created : 2026-08-17 00:45:43  (0.4 h ago)  commit 8325c9c  host DESKTOP-KO34JH5
+geometry: H_MS=240.0 mm  grid 60x30  seg=120.0 mm  mesh=lambda/8  shadow=raycast
+classes : ['crack', 'dent', 'wear', 'shell']
+samples : {'crack': 5000, ...}  (total 20512)
+splits  : train 16409  val 2051  test 2052   intact 409/51/52
+========================================================================
+```
+
+If the dataset line or its date is not what you expect, stop there. You can also
+query any dataset directly:
+
+```bash
+python -c "from rail3d import data3d; print(data3d.describe_dataset('data/generated/H240_v1'))"
+```
 
 ---
 

@@ -78,16 +78,94 @@ def dataset_config_path(root: Path | None = None) -> Path:
     return (root or config.GENERATED_DIR) / "dataset_config.json"
 
 
-def write_dataset_config(root: Path | None = None) -> dict:
-    """Record the geometry a dataset was generated with, beside its shards."""
+def _git_commit() -> str:
+    import subprocess
+    try:
+        return subprocess.run(["git", "rev-parse", "--short", "HEAD"],
+                              cwd=config.REPO_ROOT, capture_output=True,
+                              text=True, timeout=10).stdout.strip() or "unknown"
+    except Exception:  # noqa: BLE001
+        return "unknown"
+
+
+def write_dataset_config(root: Path | None = None, note: str = "") -> dict:
+    """Record the geometry AND provenance a dataset was generated with.
+
+    Geometry so training can refuse a mismatch; provenance (when, by which
+    commit, on which machine) so you can always tell which dataset you are
+    looking at and how old it is.
+    """
     import json
+    import platform
+    import time
 
     cfg = {k: getattr(config, k) for k in PROVENANCE_KEYS}
     cfg["CLASS_NAMES"] = list(cfg["CLASS_NAMES"])
+    cfg["_created"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    cfg["_created_epoch"] = time.time()
+    cfg["_git_commit"] = _git_commit()
+    cfg["_host"] = platform.node()
+    cfg["_note"] = note
     path = dataset_config_path(root)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
     return cfg
+
+
+def finalize_dataset_config(root: Path | None = None, **extra) -> None:
+    """Append post-generation facts (counts, duration) to dataset_config.json."""
+    import json
+
+    path = dataset_config_path(root)
+    if not path.exists():
+        return
+    cfg = json.loads(path.read_text())
+    cfg.update({f"_{k}": v for k, v in extra.items()})
+    path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+
+
+def describe_dataset(root: Path | None = None) -> str:
+    """One-block human summary of a dataset: where, when, what, how big."""
+    import json
+    import time
+
+    root = root or config.GENERATED_DIR
+    path = dataset_config_path(root)
+    lines = [f"dataset : {root}"]
+    if not path.exists():
+        lines.append("          (no dataset_config.json - geometry UNVERIFIED, "
+                     "predates provenance recording)")
+    else:
+        c = json.loads(path.read_text())
+        age_h = (time.time() - c.get("_created_epoch", time.time())) / 3600
+        lines.append(f"created : {c.get('_created', '?')}  ({age_h:.1f} h ago)"
+                     f"  commit {c.get('_git_commit', '?')}  host {c.get('_host', '?')}")
+        lines.append(f"geometry: H_MS={c['H_MS']} mm  grid {c['NX']}x{c['NY']}  "
+                     f"seg={c['SEG_LEN']} mm  mesh=lambda/{c['WVL']/c['MESH_DS']:.0f}  "
+                     f"shadow={c['SHADOW_MODE']}")
+        lines.append(f"classes : {c['CLASS_NAMES']}")
+        if c.get("_note"):
+            lines.append(f"note    : {c['_note']}")
+    counts = {}
+    for cls in list(config.CLASS_NAMES) + ["intact"]:
+        ks = existing_shards(cls, root=root)
+        counts[cls] = sum(
+            len(torch.load(shard_path(cls, k, root=root), map_location="cpu",
+                           weights_only=False)["meta"]) for k in ks)
+    lines.append(f"samples : {counts}  (total {sum(counts.values())})")
+    return "\n".join(lines)
+
+
+def list_datasets() -> list[Path]:
+    """Every dataset directory under data/generated (a dir holding shards)."""
+    roots = []
+    base = config.GENERATED_DIR
+    if any(base.glob("rail3d_*_shard*.pt")):
+        roots.append(base)
+    for d in sorted(p for p in base.glob("*") if p.is_dir()):
+        if any(d.glob("rail3d_*_shard*.pt")):
+            roots.append(d)
+    return roots
 
 
 def check_dataset_config(root: Path | None = None, strict: bool = True) -> list[str]:

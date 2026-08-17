@@ -135,6 +135,30 @@ def check_config(r: Report) -> None:
     r.ok(f"classes {list(config.CLASS_NAMES)}")
 
 
+def list_all_datasets(r: Report, chosen: Path) -> None:
+    """Show every dataset on disk with its age and geometry, marking the one in use."""
+    print("\n--- datasets available ---")
+    roots = data3d.list_datasets()
+    if not roots:
+        r.warn("none found under data/generated",
+               "python generate_dataset_3d.py --profile lab")
+        return
+    for d in roots:
+        mark = " <== selected" if d.resolve() == chosen.resolve() else ""
+        cfgp = data3d.dataset_config_path(d)
+        n = sum(len(data3d.existing_shards(c, root=d))
+                for c in list(config.CLASS_NAMES) + ["intact"])
+        if cfgp.exists():
+            c = json.loads(cfgp.read_text())
+            age = (time.time() - c.get("_created_epoch", time.time())) / 3600
+            print(f"  {d.name or 'generated':16s} {c.get('_created', '?'):19s} "
+                  f"({age:5.1f} h old)  H={c.get('H_MS')}  {n} shards"
+                  f"  commit {c.get('_git_commit', '?')}{mark}")
+        else:
+            print(f"  {d.name or 'generated':16s} {'(no provenance)':19s} "
+                  f"{'':16s} {n} shards{mark}")
+
+
 def check_dataset(r: Report, root: Path) -> None:
     print(f"\n--- dataset ({root}) ---")
     if not root.exists():
@@ -232,6 +256,7 @@ def main() -> int:
     check_env(r, args.profile)
     check_csvs(r)
     check_config(r)
+    list_all_datasets(r, root)
     check_dataset(r, root)
     check_checkpoints(r)
 

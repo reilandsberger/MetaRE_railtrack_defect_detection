@@ -82,3 +82,19 @@ python generate_dataset_3d.py --profile laptop --smoke
 python v8_smoke_test.py                          # V8 end-to-end + resume test
 python setup_diagram.py                          # review figures
 ```
+
+## Dataset hygiene (added 2026-08-17)
+
+- Datasets can be named: `generate_dataset_3d.py --name X --note "..."` writes to
+  `rail3D/data/generated/X/`; train against it with `TrainConfig(data_root=...)`.
+- Every dataset carries `dataset_config.json` (geometry + creation time + git
+  commit + host). `train3d.load_all_data` calls `data3d.check_dataset_config`
+  and REFUSES a geometry mismatch; `data3d.describe_dataset(root)` summarises one.
+- `python preflight.py` is the standing check before any run: code freshness,
+  GPU, CSVs, active geometry, all datasets with dates, shard consistency
+  (mtime spread catches shards mixed across runs, since the generator skips
+  existing files), and checkpoint loadability.
+- Training prints a banner naming the run, device, detector schedule, dataset
+  and its age, and the split sizes. Read it rather than assuming.
+- `rail3D_pipeline.ipynb` is the narrated end-to-end path; it shells out to the
+  same scripts (subprocess for long jobs, to keep kernel GPU memory bounded).

@@ -137,9 +137,12 @@ def surface_map(model: optics3d.ONN3D) -> torch.Tensor | None:
     return None  # "none" baseline: no TV term
 
 
-def load_all_data(cfg: TrainConfig, device: torch.device):
+def load_all_data(cfg: TrainConfig, device: torch.device, verbose: bool = True):
     root = Path(cfg.data_root) if cfg.data_root else None
     data3d.check_dataset_config(root)      # refuse fields built for another geometry
+    if verbose:
+        # always state WHICH dataset is being trained on, and how old it is
+        print(data3d.describe_dataset(root))
     fields, labels, metas, rms = data3d.load_dataset(cfg.mode, root=root)
     intact, _ = data3d.load_intact(cfg.mode, rms=rms, root=root)
     tr, va, te = data3d.stratified_split(labels, seed=cfg.seed)
@@ -290,7 +293,23 @@ def train(cfg: TrainConfig, device: torch.device | None = None,
     device = device or config.get_device()
     torch.manual_seed(cfg.seed)
 
-    data = load_all_data(cfg, device)
+    if verbose:
+        print("=" * 72)
+        print(f"run     : {cfg.run_name}   surface={cfg.surface}  objective={cfg.objective}"
+              f"/{cfg.metric}  epochs={cfg.n_epoch}  batch={cfg.batch_size}")
+        print(f"device  : {device}"
+              + (f" ({torch.cuda.get_device_name(device.index or 0)})"
+                 if device.type == "cuda" else ""))
+        print(f"detectors: start {cfg.det_grid or config.DET_GRID} -> "
+              f"{cfg.n_det_final} final, {cfg.prune_schedule} schedule "
+              f"(prune {cfg.prune_start}-{cfg.prune_end})")
+        print(f"optics  : {cfg.n_layer} layer(s), distances {cfg.layer_distances} mm")
+    data = load_all_data(cfg, device, verbose=verbose)
+    if verbose:
+        print(f"splits  : train {len(data['train'])}  val {len(data['val'])}  "
+              f"test {len(data['test'])}   intact {len(data['i_train'])}/"
+              f"{len(data['i_val'])}/{len(data['i_test'])}")
+        print("=" * 72)
     model = build_model(cfg, device)
     optimizer = build_optimizer(cfg, model)
 
