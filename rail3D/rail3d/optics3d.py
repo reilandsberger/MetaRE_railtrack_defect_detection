@@ -257,17 +257,68 @@ class SoftDetector2D(nn.Module):
     def hard_powers(self, intensity: torch.Tensor, shift: tuple[float, float] = (0.0, 0.0)) -> torch.Tensor:
         return self._integrate(intensity, self.hard_masks(shift=shift))
 
+    def min_separation(self) -> float:
+        """Smallest distance between any two detector centres, in mm.
+
+        Nothing in the loss repels detectors from each other, so trained centres
+        can converge onto the same spot and produce duplicate barcode entries.
+        A value below ~1 pixel (dx) means detectors have effectively collapsed.
+        """
+        c = self.centers().detach()
+        if c.shape[0] < 2:
+            return float("inf")
+        d = torch.cdist(c, c)
+        d.fill_diagonal_(float("inf"))
+        return float(d.min())
+
     @staticmethod
-    def prune_indices(det_values: torch.Tensor, num_remove: int) -> torch.Tensor:
-        """Face3D variance criterion: drop the lowest-variance detectors.
+    def prune_indices(det_values: torch.Tensor, num_remove: int,
+                      criterion: str = "redundancy") -> torch.Tensor:
+        """Choose which detectors to KEEP. Returns sorted indices.
 
         det_values: (N_samples, N_det) hard powers on the validation split.
-        Returns the sorted indices of detectors to KEEP.
+
+        "variance" (Face3D): drop the lowest-variance detectors. Valid when the
+        layout is SPARSE — Face3D's 6x6 grid covered 7.2% of its aperture with
+        30-37 mm gaps, so windows were near-independent and low variance really
+        did mean uninformative.
+
+        "redundancy" (default): greedy backward elimination that accounts for
+        detectors seeing the SAME light. A dense start (13x10 = 92% coverage)
+        has overlapping windows whose variances are nearly identical, so the
+        variance ranking cannot tell "duplicate of my neighbour" from "uniquely
+        informative" — it will keep several copies of one hotspot and discard a
+        quiet but unique detector. Here each detector is valued by its UNIQUE
+        contribution, ``std_i * (1 - max_j |corr_ij|)`` over the surviving set:
+        signal strength times the share of it not already covered by another
+        detector. The least valuable is removed one at a time, so the scores
+        always reflect the set that remains. A bright duplicate scores near zero
+        (corr -> 1) while a quiet but independent detector keeps its value.
         """
-        norm = det_values / det_values.norm(dim=1, keepdim=True)
-        deviation = norm.std(dim=0)
-        keep = torch.argsort(deviation)[num_remove:]
-        return torch.sort(keep).values
+        norm = det_values / det_values.norm(dim=1, keepdim=True).clamp_min(1e-12)
+        std = norm.std(dim=0)
+
+        if criterion == "variance" or det_values.shape[0] < 8:
+            # too few samples for meaningful correlations -> variance ranking
+            keep = torch.argsort(std)[num_remove:]
+            return torch.sort(keep).values
+        if criterion != "redundancy":
+            raise ValueError(f"Unknown prune criterion: {criterion}")
+
+        alive = list(range(norm.shape[1]))
+        for _ in range(num_remove):
+            if len(alive) <= 1:
+                break
+            sub = norm[:, alive]
+            c = sub - sub.mean(dim=0, keepdim=True)
+            s = c.std(dim=0).clamp_min(1e-12)
+            corr = (c.T @ c) / (c.shape[0] * s[:, None] * s[None, :])
+            corr = corr.abs()
+            corr.fill_diagonal_(0.0)
+            similarity = corr.max(dim=1).values            # most similar neighbour
+            value = s * (1.0 - similarity)                 # unique contribution
+            alive.pop(int(torch.argmin(value)))            # drop the least useful
+        return torch.sort(torch.tensor(alive, dtype=torch.long)).values
 
 
 # ---------------------------------------------------------------------------
@@ -353,13 +404,14 @@ class ONN3D(nn.Module):
         return self.head(det_normalized)
 
     @torch.no_grad()
-    def prune_detectors(self, det_values: torch.Tensor, num_remove: int) -> torch.Tensor:
+    def prune_detectors(self, det_values: torch.Tensor, num_remove: int,
+                        criterion: str = "redundancy") -> torch.Tensor:
         """Drop the lowest-variance detectors; slims u and the head to match.
 
         The caller must rebuild the optimizer afterwards (parameter objects
         change). Returns the kept indices.
         """
-        keep = SoftDetector2D.prune_indices(det_values, num_remove)
+        keep = SoftDetector2D.prune_indices(det_values, num_remove, criterion=criterion)
         self.detector.u = nn.Parameter(self.detector.u.data[keep].clone())
         old = self.head
         new = nn.Linear(len(keep), old.out_features).to(old.weight.device)

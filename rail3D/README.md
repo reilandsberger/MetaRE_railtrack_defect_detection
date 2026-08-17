@@ -213,7 +213,36 @@ Run all of them: `python tests_physics_3d.py` (V0–V4, CPU),
 12. The illuminated arc wraps *around* the head, so an `x >= GAUGE_X_MIN` test
     alone also selects the downward-facing under-head fillet. Region bands
     additionally gate on the normal (`nz`) — see `mesh3d.region_band`.
-13. **Ray-cast shadowing became active once the defect ranges widened.** With
+13. **Variance-based detector pruning is only valid for SPARSE layouts.** Face3D's
+    6×6 grid covered 7.2% of its aperture with 30–37 mm gaps, so windows were
+    near-independent and "lowest variance" really did mean "least informative".
+    A dense start (13×10 = 92% coverage, windows overlapping by ~1 mm) breaks
+    that: neighbours see almost the same light and therefore have almost the
+    same variance, so the ranking cannot separate "duplicate of my neighbour"
+    from "uniquely informative". Demonstrated failure: with three bright
+    duplicates and one quiet unique detector, pruning to 3 keeps *two duplicates
+    and discards the unique signal*. Default is now
+    `prune_criterion="redundancy"` — greedy backward elimination valuing each
+    detector by `std × (1 − max|corr| to survivors)` — which keeps the unique
+    one and drops the duplicates, and empirically ends with detectors ~2×
+    further apart (12.6 mm vs 6.6 mm min separation). `"variance"` is retained
+    for comparison and guarded by V8.
+14. **Never anneal the detector τ below the pixel pitch.** Windows are
+    18.2 × 11.2 mm = 4.5 × 2.8 px at dx = 4 mm (13 of 1800 pixels). The old
+    `tau_end = w/16 = 1.14 mm` is far under one pixel, so the soft mask could no
+    longer represent sub-pixel motion and position gradients died partway
+    through the anneal. Now `w/8 = 2.3 mm` (~0.6 px), already at the useful
+    limit — detector placement cannot be learned more finely than the field is
+    sampled.
+15. **The power term is a floor plus a concentration reward.**
+    `power_floor_loss` is a hinge that goes flat once satisfied, so nothing used
+    to push the metasurface to route light *onto* the surviving detectors —
+    which is what receiver SNR depends on. `W_CAPTURE` adds a reward on the
+    captured-power fraction. It is near-inactive at the dense start (130 tiling
+    windows already catch ~98% of the plane) and becomes operative after pruning
+    to a handful. Set `W_CAPTURE = 0.0` to reproduce the earlier objective;
+    results are **not comparable across this change**.
+16. **Ray-cast shadowing became active once the defect ranges widened.** With
     the earlier 1.5–3 mm hairline cracks the λ/2 (4 mm) occluder mesh had no
     crack in it at all and V6's `worst_rel_l2` was exactly 0.0 — occluder
     resolution, not physics. With the current ranges (cracks 2–5 mm wide ×

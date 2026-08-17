@@ -363,10 +363,27 @@ the model was still improving at the end.
 python sweep_detectors.py --counts 4 6 8 10
 ```
 
-Starts from a dense 13×10 = 130-detector grid (~92% plane coverage) and prunes
-to each final count, one full training run per count. Writes
-`data/figures/detector_sweep.png` (AUC and class accuracy vs count, plus the
-surviving layout) and `data/generated/detector_sweep.json`.
+Starts from a dense 13×10 = 130-detector grid and prunes to each final count,
+one full training run per count. Writes `data/figures/detector_sweep.png` (AUC,
+class accuracy, redundancy/throughput, and the surviving layout) plus
+`data/generated/detector_sweep.json`.
+
+**Why start dense.** Detector density relative to the reference implementation:
+
+| layout | detectors | pitch | window gap | coverage |
+|---|---|---|---|---|
+| Face3D 6×6 | 36 | 48 × 48 mm | +29.8 / +36.8 mm | 7.2% |
+| rail3D old 6×3 | 18 | 36 × 36 mm | +17.8 / +24.8 mm | 12.7% |
+| **rail3D 13×10 (now)** | 130 | 17.1 × 10.9 mm | −1.1 / −0.3 mm | **92%** |
+
+Pruning from a dense lattice lets the training select from a rich candidate set
+instead of a handful of fixed spots. It requires the **redundancy** criterion:
+overlapping windows have near-identical variance, so Face3D's variance ranking
+cannot tell a duplicate from a uniquely informative detector (README §6 finding
+13). Compare the two directly with `--prune-criterion variance`.
+
+Detector *positions* are trained, not swept — see §10. Watch `mean |corr|` in
+the third panel: if it stays high as the count falls, pruning kept duplicates.
 
 Add `--dist 120 160 200` to sweep the metasurface→detector distance at the same
 time — that is a training-time propagation, so it needs no regeneration.

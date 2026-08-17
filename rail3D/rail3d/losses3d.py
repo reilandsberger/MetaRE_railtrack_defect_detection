@@ -39,6 +39,11 @@ W_HARDEST = 0.3              # extra weight on the worst 10% of pairs
 W_INTACT_RANK = 1.0          # pull the intact cluster tight (mean cos-gap)
 CENTROID_MARGIN_N = 0.1      # class-centroid margin on unit-normalized barcodes
 TARGET_FPR = 0.05            # default calibration point
+# Reward for concentrating light onto the retained detectors. Set to 0.0 to
+# reproduce the pre-2026-08-17 objective exactly (runs are not comparable across
+# this change). Secondary to the rank term by design: it should improve SNR
+# without buying throughput at the cost of class separation.
+W_CAPTURE = 0.2
 
 
 # ---------------------------------------------------------------------------
@@ -114,6 +119,18 @@ def class_centroid_loss(det: torch.Tensor, labels: torch.Tensor, ref_norm: torch
     return F.relu(margin - dist[iu[0], iu[1]]).mean()
 
 
+def capture_fraction(det: torch.Tensor, total_power: torch.Tensor) -> torch.Tensor:
+    """Share of the light on the plane that actually lands on the detectors.
+
+    The power floor below is a hinge: it stops the detectors going dark and then
+    goes flat, so above the floor nothing pushes the metasurface to route light
+    ONTO the few surviving windows. Receiver SNR in hardware depends exactly on
+    that, hence this term. With 8 windows of 13 px each on an 1800 px plane the
+    geometric ceiling without focusing is ~6%, so there is real headroom.
+    """
+    return (det.sum(dim=1) / total_power.clamp_min(1e-12)).mean()
+
+
 def power_floor_loss(det: torch.Tensor, det0: torch.Tensor, power_floor: float) -> torch.Tensor:
     """Hinge keeping total detected power above the floor (2D notebook port)."""
     p = det.sum(dim=1)
@@ -180,6 +197,7 @@ def combined_loss(
     power_floor: float,
     objective: str = "rank",    # "rank" (default) | "margin" (legacy, pre-rev.2)
     metric: str = "cos",        # score used by the rank objective / reporting
+    total_power: torch.Tensor | None = None,  # plane power per sample, for capture
 ) -> tuple[torch.Tensor, dict]:
     """Full objective; returns (loss, dict of detached components).
 
@@ -216,6 +234,11 @@ def combined_loss(
                 margin=CENTROID_MARGIN_N),
             "tv": tv,
         }
+        if W_CAPTURE > 0 and total_power is not None:
+            # Near-inactive at the dense start (130 tiling windows already catch
+            # ~98% of the plane); it becomes the operative term after pruning to
+            # a handful of windows, which is exactly when receiver SNR matters.
+            terms["capture"] = W_CAPTURE * (1.0 - capture_fraction(det, total_power))
     else:
         raise ValueError(f"Unknown objective: {objective}")
 
@@ -224,6 +247,9 @@ def combined_loss(
     logs["loss"] = float(loss.detach())
     logs["gap_mean"] = float(gap.mean().detach())
     logs["gap0_mean"] = float(gap0.mean().detach())
+    if total_power is not None:
+        # the raw fraction, logged separately from the "capture" LOSS term above
+        logs["capture_frac"] = float(capture_fraction(det, total_power).detach())
     return loss, logs
 
 

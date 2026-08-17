@@ -55,12 +55,21 @@ class TrainConfig:
     prune_every: int = 5
     prune_schedule: str = "fraction"  # "fraction" | "fixed"
     prune_keep: float = 0.75          # fraction retained per prune step
+    # "redundancy" values each detector by its UNIQUE contribution -- required
+    # for a dense start where overlapping windows have near-identical variance.
+    # "variance" is the Face3D criterion, valid only for sparse layouts.
+    prune_criterion: str = "redundancy"
     prune_per_step: int = 2           # used only by the "fixed" schedule
     n_det_final: int = config.N_DET_FINAL
     det_grid: tuple | None = None     # override config.DET_GRID (dense start)
     # tau anneal: tau_scale from 1/4 to 1/16 over [0, tau_anneal_end]
     tau_start: float = 0.25
-    tau_end: float = 1 / 16
+    # Do NOT anneal tau below the pixel pitch: windows are 18.2x11.2 mm = 4.5x2.8
+    # px at dx=4 mm, so a tau under 4 mm cannot represent sub-pixel motion and
+    # detector-position gradients stop being meaningful. w/8 = 2.3 mm (~0.6 px)
+    # is already at the useful limit; the old w/16 = 1.14 mm froze positions
+    # partway through the anneal.
+    tau_end: float = 1 / 8
     tau_anneal_end: int = 250
     checkpoint_every: int = 10
     seed: int = config.SEED
@@ -85,9 +94,10 @@ def tau_for_epoch(cfg: TrainConfig, epoch: int) -> float:
 
 
 def build_model(cfg: TrainConfig, device: torch.device) -> optics3d.ONN3D:
-    detector = None
-    if cfg.det_grid is not None:
-        detector = optics3d.SoftDetector2D(centers=dense_centers(cfg.det_grid))
+    # default layout is the dense lattice from config.DET_GRID; cfg.det_grid
+    # overrides it per run
+    detector = optics3d.SoftDetector2D(
+        centers=dense_centers(cfg.det_grid or config.DET_GRID))
     model = optics3d.ONN3D(
         n_layer=cfg.n_layer, layer_distances=cfg.layer_distances,
         surface=cfg.surface, noise=cfg.noise, seed=cfg.seed, detector=detector,
@@ -353,14 +363,16 @@ def train(cfg: TrainConfig, device: torch.device | None = None,
             i0 = data["i_train"][torch.randint(len(data["i_train"]), (cfg.b0,), device=device)]
 
             psi = torch.cat([data["fields"][idx], data["intact"][i0]], dim=0)
-            _, det_all = model(psi)
+            intensity, det_all = model(psi)
+            # total power on the plane, for the capture (concentration) term
+            total_power = (model.detector.dx ** 2) * intensity.sum(dim=(1, 2))[: len(idx)]
             det_d, det_0 = det_all[: len(idx)], det_all[len(idx):]
             d_ref = det_0.mean(dim=0)
             logits = model.classify(_classify_input(det_d, d_ref, cfg.objective))
 
             loss, logs = losses3d.combined_loss(
                 det_d, data["labels"][idx], det_0, logits, surface_map(model), power_floor,
-                objective=cfg.objective, metric=cfg.metric)
+                objective=cfg.objective, metric=cfg.metric, total_power=total_power)
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
             optimizer.step()
@@ -380,7 +392,7 @@ def train(cfg: TrainConfig, device: torch.device | None = None,
                 _hard_dets(model, data["intact"], data["i_val"]),
             ], dim=0)
             n_rm = prune_count(cfg, model.detector.n_det)
-            model.prune_detectors(det_all, n_rm)
+            model.prune_detectors(det_all, n_rm, criterion=cfg.prune_criterion)
             optimizer = build_optimizer(cfg, model)
             history["prune_epochs"].append({"epoch": epoch, "n_det": model.detector.n_det})
 
@@ -412,7 +424,15 @@ def train(cfg: TrainConfig, device: torch.device | None = None,
     be, ne = history["best_epoch"], cfg.n_epoch
     stationary = ne - max(cfg.tau_anneal_end, cfg.prune_end)
     if verbose:
-        print(f"\nbest epoch {be}/{ne}  ({100 * be / max(ne, 1):.0f}% of the run); "
+        cap = history["train"][-1].get("capture_frac") if history["train"] else None
+        print(f"\ndetectors: {model.detector.n_det} kept "
+              f"(criterion={cfg.prune_criterion}), min separation "
+              f"{model.detector.min_separation():.1f} mm"
+              + (f", captured power {100 * cap:.1f}%" if cap is not None else ""))
+        if model.detector.min_separation() < config.DX:
+            print("  -> WARNING: centres closer than one pixel; detectors have "
+                  "effectively collapsed onto the same spot")
+        print(f"best epoch {be}/{ne}  ({100 * be / max(ne, 1):.0f}% of the run); "
               f"{stationary} epochs were stationary "
               f"(after tau anneal {cfg.tau_anneal_end} and pruning {cfg.prune_end})")
         if be > 0.9 * ne:

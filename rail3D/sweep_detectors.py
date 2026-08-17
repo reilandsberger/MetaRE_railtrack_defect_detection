@@ -50,6 +50,9 @@ def main() -> int:
     ap.add_argument("--profile", default="lab")
     ap.add_argument("--data-root", default=None)
     ap.add_argument("--surface", default="slm")
+    ap.add_argument("--prune-criterion", default="redundancy",
+                    choices=["redundancy", "variance"],
+                    help="'variance' is the Face3D criterion, only valid for sparse layouts")
     args = ap.parse_args()
 
     device = config.get_device(args.profile)
@@ -73,6 +76,7 @@ def main() -> int:
                 det_grid=grid, n_det_final=n_final,
                 prune_schedule="fraction", prune_keep=0.75,
                 prune_start=40, prune_end=args.epochs // 2, prune_every=5,
+                prune_criterion=args.prune_criterion,
                 layer_distances=(dist,),
                 data_root=args.data_root,
             )
@@ -81,9 +85,26 @@ def main() -> int:
             model, _ = train3d.load_trained(cfg, device, "best")
             data = train3d.load_all_data(cfg, device)
             ev = train3d.full_evaluation(model, data, cfg)
+            # how complementary are the surviving detectors? mean |off-diagonal
+            # correlation| of their barcodes: high means pruning kept duplicates
+            det_te = train3d._hard_dets(model, data["fields"], data["test"])
+            dn = det_te - det_te.mean(dim=0, keepdim=True)
+            sd = dn.std(dim=0).clamp_min(1e-12)
+            corr = ((dn.T @ dn) / (dn.shape[0] * sd[:, None] * sd[None, :])).abs()
+            n_d = corr.shape[0]
+            off = (corr.sum() - corr.diagonal().sum()) / max(n_d * (n_d - 1), 1)
+            with torch.no_grad():
+                inten = model.propagate(data["fields"][data["test"][:256]]).abs() ** 2
+                dets = model.detector.hard_powers(inten)
+                cap = float((dets.sum(dim=1) /
+                             ((model.detector.dx ** 2) * inten.sum(dim=(1, 2)))).mean())
             row = {
                 "dist": dist, "n_final": n_final,
                 "n_det_actual": int(model.detector.n_det),
+                "mean_abs_corr": float(off),
+                "min_separation_mm": model.detector.min_separation(),
+                "capture_fraction": cap,
+                "prune_criterion": args.prune_criterion,
                 "auc": ev["test"]["auc"],
                 "class_acc": ev["test"]["class_acc"],
                 "pass_rate": ev["test"]["pass_rate"],
@@ -102,7 +123,7 @@ def main() -> int:
                   f"TPR@1% {row['tpr_at_1pct']:.3f}  [{pc}]  ({row['minutes']:.1f} min)")
 
     # ---- figure -----------------------------------------------------------
-    fig, axes = plt.subplots(1, 3, figsize=(16, 4.2))
+    fig, axes = plt.subplots(1, 4, figsize=(21, 4.2))
     for dist in dists:
         sel = [r for r in rows if r["dist"] == dist]
         xs = [r["n_final"] for r in sel]
@@ -117,8 +138,20 @@ def main() -> int:
         a.legend(fontsize=8)
         a.grid(alpha=0.3)
 
-    best = max(rows, key=lambda r: r["auc"] + r["class_acc"])
+    # redundancy + throughput: is pruning selecting COMPLEMENTARY detectors?
     ax = axes[2]
+    for dist in dists:
+        sel = [r for r in rows if r["dist"] == dist]
+        xs = [r["n_final"] for r in sel]
+        ax.plot(xs, [r["mean_abs_corr"] for r in sel], "o-", label=f"mean |corr| d={dist:.0f}")
+        ax.plot(xs, [r["capture_fraction"] for r in sel], "s--",
+                label=f"captured power d={dist:.0f}")
+    ax.set(xlabel="final detector count", ylim=(0, 1),
+           title=f"redundancy & throughput ({args.prune_criterion})")
+    ax.legend(fontsize=7); ax.grid(alpha=0.3)
+
+    best = max(rows, key=lambda r: r["auc"] + r["class_acc"])
+    ax = axes[3]
     ax.add_patch(Rectangle((-config.WY / 2, -config.WX / 2), config.WY, config.WX,
                            fill=False, edgecolor="black", lw=1))
     dw, dh = config.DET_SIZE

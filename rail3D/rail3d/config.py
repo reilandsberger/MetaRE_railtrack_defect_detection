@@ -180,10 +180,20 @@ GAUGE_X_MAX = 38.0                    # ... and ends at the gauge corner edge
 ROLL_DEG_STD = 2.0              # roll about the y axis (deg, uniform +/-)
 JITTER_XZ_STD = 4.0             # rigid x/z jitter (mm, Gaussian)
 
-# Detectors: 6x3 grid over the 240x120 mm aperture, pruned to N_DET_FINAL
+# Detectors. The starting layout is DENSE and gets pruned to N_DET_FINAL, so
+# pruning selects from a rich candidate set rather than a handful of fixed spots:
+#
+#   layout                 n   pitch (mm)   gap (mm)      coverage
+#   Face3D 6x6            36   48.0 x 48.0  +29.8/+36.8      7.2%   (sparse)
+#   rail3D old 6x3        18   36.0 x 36.0  +17.8/+24.8     12.7%   (sparse)
+#   rail3D 13x10 (now)   130   17.1 x 10.9   -1.1/ -0.3     92.0%   (tiling)
+#
+# A dense start only works with prune_criterion="redundancy": overlapping
+# windows have near-identical variance, so the Face3D variance ranking cannot
+# tell a duplicate from a uniquely informative detector (see optics3d).
 DET_SIZE = (18.2, 11.2)         # window size in mm (Face3D waveguide aperture)
-DET_GRID = (6, 3)
-DET_PITCH = (36.0, 36.0)        # grid pitch in mm (x, y)
+DET_GRID = (13, 10)             # 130 detectors, ~92% nominal plane coverage
+DET_PITCH = (36.0, 36.0)        # only used by the legacy sparse-grid helper
 N_DET_FINAL = 8
 
 # Noise model (Face3D values)

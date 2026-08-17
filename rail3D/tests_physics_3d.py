@@ -210,6 +210,40 @@ def test_v0_geometry() -> dict:
     return res
 
 
+def test_v0b_pruning() -> dict:
+    """Redundancy pruning must survive the dense-layout failure mode.
+
+    With overlapping windows, several detectors see the same bright hotspot and
+    therefore share a variance; a quieter but independent detector ranks below
+    them. The Face3D variance criterion then discards the unique signal and
+    keeps duplicates. This constructs exactly that case.
+    """
+    torch.manual_seed(0)
+    n = 64
+    hotspot = torch.randn(n)             # bright: duplicates get HIGH variance
+    unique = torch.randn(n) * 0.25       # independent but QUIET
+    det = torch.stack([
+        hotspot + 0.01 * torch.randn(n),
+        hotspot + 0.01 * torch.randn(n),
+        hotspot + 0.01 * torch.randn(n),
+        unique,
+        torch.randn(n) * 0.9,
+        torch.randn(n) * 0.8,
+    ], dim=1).abs() + 1.0
+
+    res = {}
+    for crit in ("variance", "redundancy"):
+        keep = optics3d.SoftDetector2D.prune_indices(det, 3, criterion=crit).tolist()
+        res[f"{crit}_keeps"] = keep
+        res[f"{crit}_kept_unique"] = 3 in keep
+        res[f"{crit}_duplicates_kept"] = sum(1 for k in keep if k < 3)
+
+    # the fix: redundancy keeps the unique detector and drops the duplicates
+    res["pass"] = bool(res["redundancy_kept_unique"]
+                       and res["redundancy_duplicates_kept"] <= 1)
+    return res
+
+
 # ---------------------------------------------------------------------------
 # V1 — solver equivalence + chunk/batch invariance
 # ---------------------------------------------------------------------------
@@ -292,16 +326,28 @@ def test_v4_sanity() -> dict:
                    torch.stack([b, d, c], -1).reshape(-1, 3)])
     v_, f_ = verts.to(DEVICE), f.to(DEVICE)
     X, Y = config.plane_grid(DEVICE)
+    # This sub-test uses its OWN plane height, not config.H_MS. With theta ~ 0
+    # the synthetic horn sits at z = DIST_ANT = 224 mm; once H_MS moved to
+    # 240 mm the source fell BETWEEN the plate and the measurement plane, which
+    # is geometrically incoherent for a specular check and shifted the peak.
+    # Half the horn distance keeps the source well above the plane for any H_MS.
+    h_test = config.DIST_ANT / 2
     psi1, _ = field3d.scattered_fields(
-        v_, f_, X, Y, config.H_MS, config.WVL, 1e-6,   # theta ~ 0: overhead horn
+        v_, f_, X, Y, h_test, config.WVL, 1e-6,        # theta ~ 0: overhead horn
         config.SIZE_ANT, config.DIST_ANT, config.RESOL_ANT,
         chunk_faces=512, compute_psi2=False,
     )
+    # Measure the intensity-weighted CENTROID, not the argmax pixel. A finite
+    # plate produces Fresnel fringes, so which fringe is brightest depends on
+    # the propagation distance -- the argmax wandered from 2 px to 14 mm off
+    # centre as H changed, while the centroid stays exactly on axis. The
+    # centroid is both the robust estimator and the stronger assertion.
     intensity = psi1.abs() ** 2
-    peak = torch.nonzero(intensity == intensity.max())[0]
-    center = torch.tensor([config.NX // 2, config.NY // 2], device=DEVICE)
-    res["specular_peak_offset_px"] = float((peak - center).abs().max())
-    res["specular_ok"] = res["specular_peak_offset_px"] <= 2
+    tot = intensity.sum()
+    cx = float((intensity.sum(dim=1) * X[0, :, 0]).sum() / tot)
+    cy = float((intensity * Y[0]).sum() / tot)
+    res["specular_centroid_mm"] = (round(cx, 3), round(cy, 3))
+    res["specular_ok"] = max(abs(cx), abs(cy)) < config.DX   # within one pixel of axis
 
     # (b) power conservation of the trainable propagator
     Xg, Yg = config.plane_grid(DEVICE)
@@ -336,6 +382,7 @@ def main() -> int:
     ok = True
     for name, fn in [
         ("V0_geometry", test_v0_geometry),
+        ("V0b_pruning", test_v0b_pruning),
         ("V1_solver_equivalence", test_v1_solver_equivalence),
         ("V2_propagator_equivalence", test_v2_propagator_equivalence),
         ("V3_asm_vs_rs", test_v3_asm_vs_rs),
