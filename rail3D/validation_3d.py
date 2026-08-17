@@ -2,11 +2,12 @@
 
 V5 — 2D<->3D consistency: a y-uniform extruded intact rail's central intensity
      profile vs the established 2D Hankel boundary-integral method
-     (re-parameterized to the 3D geometry: λ=8 mm, 55°, horn at 224 mm,
-     plane 160 mm above the crown).
+     (re-parameterized to the ACTIVE 3D geometry from config: wavelength,
+     incidence, horn distance and plane height all read from config.py).
 V6 — shadowing: ray-cast line-of-sight vs back-face culling only, on the
      deepest dent/wear samples.
-V7 — mesh convergence: λ/2 vs λ/4 sampling.
+V7 — mesh convergence: the generation mesh (MESH_DS = λ/8) vs a λ/16
+     reference, judged at the detector-barcode level.
 
 Run:  python validation_3d.py [--device cuda:0]
 Figures land in rail3D/data/figures/, metrics appended to the verification
@@ -44,8 +45,8 @@ def hankel(x: torch.Tensor) -> torch.Tensor:
 
 def field_2d_reference(section: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
     """The 2D pipeline's two-stage Kirchhoff integral, re-parameterized to the
-    3D geometry (λ=8 mm, horn 224 mm @ 55° on the +x side, MS plane 160 mm
-    above the crown, 60 samples at dx=4 mm). Returns (x_ms, psi_ms).
+    active 3D geometry (everything — λ, horn, incidence, plane height, grid —
+    is read from config below). Returns (x_ms, psi_ms).
 
     Kernel, illumination test, and segment-intersection shadowing are copied
     from 2Dmesh_from_vertex.field / compute_line_of_sight_mask_v3 (units mm).

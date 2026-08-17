@@ -8,15 +8,16 @@ Design notes
     are checkpointed, so a killed run resumes bit-identically;
   * soft (differentiable, jittered) detector masks train; hard binary masks
     produce every reported metric;
-  * detector pruning (Face3D variance criterion) shrinks 18 -> N_DET_FINAL
-    inside a window; the optimizer is rebuilt after each prune.
+  * detector pruning (redundancy criterion by default) shrinks the dense
+    config.DET_GRID start down to N_DET_FINAL inside a window; the optimizer
+    is rebuilt and the power floor recomputed after each prune.
 """
 
 from __future__ import annotations
 
 import os
 import time
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field, fields as _dc_fields, asdict
 from pathlib import Path
 
 import numpy as np
@@ -62,13 +63,14 @@ class TrainConfig:
     prune_per_step: int = 2           # used only by the "fixed" schedule
     n_det_final: int = config.N_DET_FINAL
     det_grid: tuple | None = None     # override config.DET_GRID (dense start)
-    # tau anneal: tau_scale from 1/4 to 1/16 over [0, tau_anneal_end]
+    # tau anneal: tau_scale from 1/4 to 1/8 over [0, tau_anneal_end]
     tau_start: float = 0.25
-    # Do NOT anneal tau below the pixel pitch: windows are 18.2x11.2 mm = 4.5x2.8
-    # px at dx=4 mm, so a tau under 4 mm cannot represent sub-pixel motion and
-    # detector-position gradients stop being meaningful. w/8 = 2.3 mm (~0.6 px)
-    # is already at the useful limit; the old w/16 = 1.14 mm froze positions
-    # partway through the anneal.
+    # Do NOT anneal tau below the pixel pitch: below the grid pitch the soft
+    # mask cannot represent sub-pixel motion and detector-position gradients
+    # stop being meaningful (the old w/16 froze positions mid-anneal). The
+    # per-axis floor of 0.5*dx in SoftDetector2D._axis_soft enforces this for
+    # BOTH axes — tau_scale*w on the short (y) window axis is below the floor
+    # by design, so the floor, not this value, governs y near the anneal end.
     tau_end: float = 1 / 8
     tau_anneal_end: int = 250
     checkpoint_every: int = 10
@@ -80,6 +82,9 @@ class TrainConfig:
     objective: str = "rank"
     metric: str = "cos"               # "cos" | "l2" score for rank/reporting
     target_fpr: float = losses3d.TARGET_FPR
+    # weight of the captured-power reward (recorded in checkpoints so runs
+    # remain attributable); 0.0 reproduces the pre-capture objective exactly.
+    w_capture: float = losses3d.W_CAPTURE
 
 
 def _ckpt_dir(cfg: TrainConfig) -> Path:
@@ -106,19 +111,9 @@ def build_model(cfg: TrainConfig, device: torch.device) -> optics3d.ONN3D:
 
 
 def dense_centers(grid: tuple[int, int]) -> torch.Tensor:
-    """Detector centres on a gx x gy lattice spanning the whole aperture.
-
-    Spacing is aperture/(g+1) so windows sit inside the plane rather than on its
-    edge; with a dense enough grid the windows tile most of the measurement
-    plane, which is the starting point for prune-down experiments.
-    """
-    gx, gy = grid
-    px = config.WX / (gx + 1)
-    py = config.WY / (gy + 1)
-    cx = (torch.arange(gx) - (gx - 1) / 2) * px
-    cy = (torch.arange(gy) - (gy - 1) / 2) * py
-    CX, CY = torch.meshgrid(cx, cy, indexing="ij")
-    return torch.stack([CX.reshape(-1), CY.reshape(-1)], dim=1)
+    """Thin wrapper kept for API stability — see config.dense_detector_centers,
+    the single source for every detector lattice."""
+    return config.dense_detector_centers(grid=grid)
 
 
 def prune_count(cfg: TrainConfig, n_now: int) -> int:
@@ -270,6 +265,11 @@ def _shape_model_to_checkpoint(model: optics3d.ONN3D, state: dict,
     of letting load_state_dict raise a bare size-mismatch.
     """
     sd = state["model"]
+    # Checkpoints written before 2026-08-17 persisted the detector's geometry
+    # buffers; they are config-derived (persistent=False now), so drop them
+    # rather than letting them overwrite the freshly built grid coordinates.
+    for legacy in ("detector.grid_x", "detector.grid_y", "detector.half_buf"):
+        sd.pop(legacy, None)
     n_cls_ckpt = sd["head.bias"].shape[0]
     n_cls_now = model.head.out_features
     where = f"\n  checkpoint: {path}" if path else ""
@@ -339,16 +339,24 @@ def train(cfg: TrainConfig, device: torch.device | None = None,
         optimizer.load_state_dict(state["optimizer"])
         history = state["history"]
         start_epoch = state["epoch"] + 1
-        power_floor = state["power_floor"]
+        power_floor = state.get("power_floor")
+        if power_floor is None and verbose:
+            print("[resume] WARNING: checkpoint has no power_floor (pre-2026-08); "
+                  "recomputing from the current model — bit-identity with the "
+                  "original run is not guaranteed for this run")
         _restore_rng(state["rng"])
         if verbose:
             print(f"[resume] {cfg.run_name} at epoch {start_epoch} (n_det={model.detector.n_det})")
 
     if power_floor is None:
+        # Initial floor from the TRAIN intact pool at the dense start (the
+        # pre-prune legacy behaviour — keeps fresh runs comparable). After each
+        # prune the floor is recomputed from the VAL intact pool; do not unify
+        # the two without re-baselining V8.
         model.eval()
         with torch.no_grad():
             det0 = _hard_dets(model, data["intact"], data["i_train"])
-        power_floor = float(2.0 * det0.sum(dim=1).mean())
+        power_floor = float(losses3d.POWER_FLOOR_RATIO * det0.sum(dim=1).mean())
 
     n_train = len(data["train"])
     for epoch in range(start_epoch, cfg.n_epoch):
@@ -372,7 +380,8 @@ def train(cfg: TrainConfig, device: torch.device | None = None,
 
             loss, logs = losses3d.combined_loss(
                 det_d, data["labels"][idx], det_0, logits, surface_map(model), power_floor,
-                objective=cfg.objective, metric=cfg.metric, total_power=total_power)
+                objective=cfg.objective, metric=cfg.metric, total_power=total_power,
+                w_capture=cfg.w_capture)
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
             optimizer.step()
@@ -392,9 +401,23 @@ def train(cfg: TrainConfig, device: torch.device | None = None,
                 _hard_dets(model, data["intact"], data["i_val"]),
             ], dim=0)
             n_rm = prune_count(cfg, model.detector.n_det)
-            model.prune_detectors(det_all, n_rm, criterion=cfg.prune_criterion)
+            keep = model.prune_detectors(det_all, n_rm, criterion=cfg.prune_criterion)
             optimizer = build_optimizer(cfg, model)
-            history["prune_epochs"].append({"epoch": epoch, "n_det": model.detector.n_det})
+            # dedupe by epoch: a resume from a pre-prune checkpoint REPLAYS this
+            # prune, and a duplicate entry would corrupt the keep-index
+            # composition that maps surviving detectors back to lattice sites
+            history["prune_epochs"] = [e for e in history["prune_epochs"]
+                                       if e["epoch"] != epoch]
+            history["prune_epochs"].append(
+                {"epoch": epoch, "n_det": model.detector.n_det,
+                 "keep": keep.tolist()})
+            # The floor was set by the dense start; after pruning to a few
+            # windows it would sit permanently saturated (a constant "maximise
+            # power" pull that double-counts the capture term). Recompute from
+            # the pruned model. Hard masks in eval mode consume no RNG, so a
+            # killed-and-resumed run replays this identically (V8 guards it).
+            det0_new = _hard_dets(model, data["intact"], data["i_val"])
+            power_floor = float(losses3d.POWER_FLOOR_RATIO * det0_new.sum(dim=1).mean())
 
         val = evaluate(model, data, "val", cfg)
         val["epoch"] = epoch
@@ -443,11 +466,42 @@ def train(cfg: TrainConfig, device: torch.device | None = None,
     return history
 
 
+def effective_config(base_cfg: TrainConfig, state: dict) -> TrainConfig:
+    """The TrainConfig a checkpoint was actually trained with.
+
+    Rebuilds from ``state["config"]`` filtered to the current dataclass fields
+    (fields added since the run take their defaults), keeping run_name and
+    data_root from the caller. Use this before scoring a loaded run — scoring a
+    margin-objective checkpoint with the default rank/cos config silently
+    mis-reports it.
+    """
+    stored = dict(state.get("config") or {})
+    known = {f.name for f in _dc_fields(TrainConfig)}
+    kept = {k: v for k, v in stored.items() if k in known}
+    if isinstance(kept.get("layer_distances"), list):
+        kept["layer_distances"] = tuple(kept["layer_distances"])
+    if isinstance(kept.get("det_grid"), list):
+        kept["det_grid"] = tuple(kept["det_grid"])
+    kept["run_name"] = base_cfg.run_name
+    kept["data_root"] = base_cfg.data_root
+    return TrainConfig(**kept)
+
+
 def load_trained(cfg: TrainConfig, device: torch.device, which: str = "best"):
-    """Rebuild a trained model from a checkpoint. Returns (model, state)."""
+    """Rebuild a trained model from a checkpoint. Returns (model, state).
+
+    The model is built with the checkpoint's own stored config (surface,
+    layer distances, ...), not the caller's guess — pass the returned state to
+    ``effective_config`` when you also need the right config for scoring.
+    """
     path = _ckpt_dir(cfg) / f"{which}.pt"
     state = torch.load(path, map_location=device, weights_only=False)
-    model = build_model(cfg, device)
+    eff = effective_config(cfg, state)
+    if eff.surface != cfg.surface and state.get("config"):
+        print(f"[rail3d] note: checkpoint {path.name} was trained with "
+              f"surface={eff.surface!r} (caller asked {cfg.surface!r}); "
+              f"using the checkpoint's")
+    model = build_model(eff, device)
     _shape_model_to_checkpoint(model, state, path)
     model.load_state_dict(state["model"])
     model.eval()

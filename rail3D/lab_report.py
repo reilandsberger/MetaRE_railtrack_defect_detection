@@ -18,20 +18,15 @@ samples/second used to extrapolate the full generation.
 from __future__ import annotations
 
 import argparse
-import io
-import json
 import platform
-import re
 import shutil
 import subprocess
 import sys
 import time
-from contextlib import redirect_stdout
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import numpy as np
 import torch
 
 from rail3d import config, data3d, losses3d, optics3d
@@ -91,7 +86,7 @@ def main() -> int:
     out, dt, ok = run([PY, "tests_physics_3d.py"])
     for ln in gate_lines(out):
         A(ln)
-    A(f"(V0-V4 in {dt:.0f}s)")
+    A(f"(tests_physics_3d in {dt:.0f}s)")
 
     # ---- V5-V7 ----------------------------------------------------------
     if not args.quick:
@@ -110,11 +105,12 @@ def main() -> int:
         if root.exists():
             shutil.rmtree(root)
         out, dt, ok = run([PY, "generate_dataset_3d.py", "--profile", args.profile, "--smoke"])
-        n_gen = 4 * 20 + 32
+        n_gen = (len(config.CLASS_NAMES) * config.SMOKE_PER_CLASS
+                 + config.smoke_intact_count())
         A("## Smoke generation")
         A("```")
         A(f"{n_gen} samples in {dt:.0f}s  ->  {n_gen / max(dt, 1e-9):.2f} samples/s")
-        full = 4 * 5000 + 512
+        full = len(config.CLASS_NAMES) * config.FULL_PER_CLASS + config.FULL_INTACT
         A(f"extrapolated full run ({full} samples): {full / max(n_gen / max(dt, 1e-9), 1e-9) / 3600:.2f} h")
         if not ok:
             A("GENERATION FAILED:")
@@ -122,13 +118,23 @@ def main() -> int:
         A("```")
         A("")
 
+    if not root.exists():
+        A("## Stored shards / separability / V8")
+        A("```")
+        A(f"smoke set absent ({root}) - sections skipped; rerun without --skip-smoke")
+        A("```")
+        text = "\n".join(L)
+        path = config.GENERATED_DIR / "lab_report.md"
+        path.write_text(text, encoding="utf-8")
+        print(text)
+        print(f"\n[saved to {path}]")
+        return 1
+
     # ---- stored-shard statistics ----------------------------------------
     A("## Stored shards (geometry as generated)")
     A("```")
-    buf = io.StringIO()
-    with redirect_stdout(buf):
-        rc = subprocess.run([PY, "inspect_dataset.py", "--root", str(root)],
-                            cwd=HERE, capture_output=True, text=True)
+    rc = subprocess.run([PY, "inspect_dataset.py", "--root", str(root)],
+                        cwd=HERE, capture_output=True, text=True)
     for ln in rc.stdout.splitlines():
         if ln.startswith(("===", "    ")) and "wrote" not in ln:
             A(ln.rstrip())

@@ -2,9 +2,11 @@
 
 Motivation: the detector layout is a design choice with a real hardware cost —
 each detector is a waveguide/receiver. Starting dense (windows tiling most of
-the measurement plane, Face3D-style) and pruning by variance answers "where do
-the informative spots actually sit", while sweeping the final count answers
-"how few receivers can we get away with".
+the measurement plane) and pruning by redundancy — each detector valued by its
+UNIQUE contribution — answers "where do the informative spots actually sit",
+while sweeping the final count answers "how few receivers can we get away
+with". (--prune-criterion variance restores the Face3D ranking, which is only
+valid for sparse layouts.)
 
 Detectors act on the STORED fields, so this needs no regeneration — only
 training minutes. Optionally also sweeps the metasurface-to-detector distance,
@@ -45,7 +47,8 @@ def main() -> int:
     ap.add_argument("--counts", type=int, nargs="*", default=[4, 6, 8, 10])
     ap.add_argument("--dist", type=float, nargs="*", default=None,
                     help="MS->detector distances to sweep (default: config value)")
-    ap.add_argument("--grid", default="13x10", help="dense starting grid, e.g. 13x10")
+    ap.add_argument("--grid", default=None,
+                    help="dense starting grid, e.g. 13x10 (default: config.DET_GRID)")
     ap.add_argument("--epochs", type=int, default=400)
     ap.add_argument("--profile", default="lab")
     ap.add_argument("--data-root", default=None)
@@ -56,7 +59,8 @@ def main() -> int:
     args = ap.parse_args()
 
     device = config.get_device(args.profile)
-    grid = tuple(int(v) for v in args.grid.split("x"))
+    grid = (tuple(int(v) for v in args.grid.split("x"))
+            if args.grid else config.DET_GRID)
     n_start = grid[0] * grid[1]
     dists = args.dist or [config.LAYER_DISTANCES[-1]]
 
@@ -163,7 +167,8 @@ def main() -> int:
            xlabel="y (mm)", ylabel="x (mm)",
            title=f"kept detectors: n={best['n_final']}, d={best['dist']:.0f} mm")
     ax.set_aspect("equal")
-    fig.suptitle(f"Detector sweep: dense {grid[0]}x{grid[1]} start pruned to 4-10")
+    fig.suptitle(f"Detector sweep: dense {grid[0]}x{grid[1]} start pruned to "
+                 f"{min(args.counts)}-{max(args.counts)}")
     fig.tight_layout(rect=(0, 0, 1, 0.94))
     p = config.FIGURE_DIR / "detector_sweep.png"
     fig.savefig(p, dpi=170)

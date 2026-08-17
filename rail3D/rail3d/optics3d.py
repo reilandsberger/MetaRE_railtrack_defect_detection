@@ -5,7 +5,8 @@ plan: FFT propagation (same exact RS kernel, ~10^3x faster than the original
 spatial conv2d), registered buffers (no per-forward host->device copies),
 noise gated on ``self.training``, initialized parameters, a soft-clamped
 meta-unit parameterization, and differentiable 2D soft detectors with
-variance pruning.
+redundancy-aware pruning (default; the Face3D variance criterion is kept
+for sparse layouts).
 
 All modules work on the rectangular (NX, NY) grid.
 """
@@ -189,8 +190,9 @@ class SoftDetector2D(nn.Module):
     2D extension of the repo's SoftDetectorPlane: separable sigmoid-edged
     windows of fixed size, centers stored as normalized coordinates
     u in [-1, 1]^2. ``tau_scale`` (edge softness as a fraction of the window
-    size) is annealed from 1/4 to 1/16 during training; ``hard_powers`` uses
-    binary masks and is what all reported metrics use.
+    size) is annealed from 1/4 to 1/8 during training, floored at half a
+    pixel per axis (see ``_axis_soft``); ``hard_powers`` uses binary masks
+    and is what all reported metrics use.
     """
 
     def __init__(
@@ -206,7 +208,9 @@ class SoftDetector2D(nn.Module):
     ):
         super().__init__()
         if centers is None:
-            centers = config.detector_grid_centers()
+            # NOTE: callers with a non-default aperture (nx/ny/wx/wy) must pass
+            # centers explicitly — the default lattice spans the config aperture.
+            centers = config.dense_detector_centers()
         self.det_size = det_size
         self.dx = dx
         self.half = torch.tensor([wx / 2, wy / 2])
@@ -216,9 +220,12 @@ class SoftDetector2D(nn.Module):
         self.u = nn.Parameter(centers / self.half)
         x = torch.arange(-wx / 2 + dx / 2, wx / 2, dx)
         y = torch.arange(-wy / 2 + dx / 2, wy / 2, dx)
-        self.register_buffer("grid_x", x)
-        self.register_buffer("grid_y", y)
-        self.register_buffer("half_buf", self.half)
+        # persistent=False: these are geometry derived from config, not learned
+        # state. Persisting them let a checkpoint from one geometry silently
+        # overwrite the grid coordinates of a model built for another.
+        self.register_buffer("grid_x", x, persistent=False)
+        self.register_buffer("grid_y", y, persistent=False)
+        self.register_buffer("half_buf", self.half, persistent=False)
 
     @property
     def n_det(self) -> int:
@@ -228,7 +235,11 @@ class SoftDetector2D(nn.Module):
         return torch.clamp(self.u, -1.0, 1.0) * self.half_buf
 
     def _axis_soft(self, grid: torch.Tensor, c: torch.Tensor, w: float) -> torch.Tensor:
-        tau = max(self.tau_scale * w, 1e-3)
+        # Floor tau at half a pixel PER AXIS: below the grid pitch the sigmoid
+        # edge cannot represent sub-pixel motion and position gradients die
+        # (README finding 14). The old 1e-3 floor never bound, so the y-axis
+        # window (w/8 = 1.4 mm at dx=4) was silently sub-pixel.
+        tau = max(self.tau_scale * w, 0.5 * self.dx)
         lo = torch.sigmoid((grid.reshape(1, -1) - (c.reshape(-1, 1) - w / 2)) / tau)
         hi = torch.sigmoid(((c.reshape(-1, 1) + w / 2) - grid.reshape(1, -1)) / tau)
         return lo * hi
@@ -299,6 +310,12 @@ class SoftDetector2D(nn.Module):
         std = norm.std(dim=0)
 
         if criterion == "variance" or det_values.shape[0] < 8:
+            if criterion == "redundancy":
+                # never downgrade silently: variance ranking on a dense layout
+                # keeps duplicates (V0b) — the caller should know it happened
+                print(f"[rail3d] WARNING: redundancy pruning requested with only "
+                      f"{det_values.shape[0]} samples (<8); falling back to the "
+                      f"variance ranking, which is only valid for sparse layouts")
             # too few samples for meaningful correlations -> variance ranking
             keep = torch.argsort(std)[num_remove:]
             return torch.sort(keep).values
@@ -406,10 +423,12 @@ class ONN3D(nn.Module):
     @torch.no_grad()
     def prune_detectors(self, det_values: torch.Tensor, num_remove: int,
                         criterion: str = "redundancy") -> torch.Tensor:
-        """Drop the lowest-variance detectors; slims u and the head to match.
+        """Drop the least useful detectors (see ``SoftDetector2D.prune_indices``
+        for the criterion); slims u and the head to match.
 
         The caller must rebuild the optimizer afterwards (parameter objects
-        change). Returns the kept indices.
+        change). Returns the kept indices (sorted; row i of the new ``u`` is
+        row keep[i] of the old one — training records these for provenance).
         """
         keep = SoftDetector2D.prune_indices(det_values, num_remove, criterion=criterion)
         self.detector.u = nn.Parameter(self.detector.u.data[keep].clone())

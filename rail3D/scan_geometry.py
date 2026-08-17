@@ -127,13 +127,7 @@ def _edge_fraction(I: torch.Tensor) -> float:
 
 def _scaled_centers(nx, ny):
     """Detector grid scaled to whatever aperture is being tested."""
-    gx, gy = config.DET_GRID
-    px = nx * config.DX / (gx + 1)
-    py = ny * config.DX / (gy + 1)
-    cx = (torch.arange(gx) - (gx - 1) / 2) * px
-    cy = (torch.arange(gy) - (gy - 1) / 2) * py
-    CX, CY = torch.meshgrid(cx, cy, indexing="ij")
-    return torch.stack([CX.reshape(-1), CY.reshape(-1)], dim=1)
+    return config.dense_detector_centers(nx=nx, ny=ny)
 
 
 def main() -> int:
@@ -155,21 +149,32 @@ def main() -> int:
     if args.heights or args.centers or args.grids:
         heights = args.heights or [config.H_MS]
         centers = args.centers or [config.PLANE_X_CENTER]
-        grids = [tuple(int(v) for v in g.split("x")) for g in (args.grids or ["60x30"])]
+        grids = [tuple(int(v) for v in g.split("x"))
+                 for g in (args.grids or [f"{config.NX}x{config.NY}"])]
         cands = [(h, c, g) for h, c, g in itertools.product(heights, centers, grids)]
     else:
-        # default: current setup, specular-centred variants, lower planes, wider apertures
+        # default candidates DERIVED from the active config: the current setup
+        # first (so "current setup:" in the summary is honest), then specular-
+        # centred variants, wider apertures, and lower/higher planes expressed
+        # as multiples of the wavelength so the scan stays meaningful after a
+        # wavelength change.
+        H0, g0 = config.H_MS, (config.NX, config.NY)
         spec = lambda h: -h * np.tan(config.THETA_INC)
+        lam = config.WVL
         cands = [
-            (160.0, 0.0, (60, 30)),                 # current
-            (160.0, spec(160) / 2, (60, 30)),       # half-way to the lobe
-            (160.0, spec(160), (60, 30)),           # specular-centred
-            (160.0, 0.0, (80, 40)),                 # wider, same centre
-            (160.0, 0.0, (80, 80)),                 # Face3D-sized
-            (80.0, 0.0, (60, 30)),                  # lower: lobe nearly inside
-            (80.0, spec(80), (60, 30)),             # lower + specular-centred
-            (240.0, 0.0, (60, 30)),                 # higher
+            (H0, config.PLANE_X_CENTER, g0),        # current
+            (H0, spec(H0) / 2, g0),                 # half-way to the lobe
+            (H0, spec(H0), g0),                     # specular-centred
+            (H0, 0.0, (int(g0[0] * 4 / 3), int(g0[1] * 4 / 3))),  # wider
+            (H0, 0.0, (int(g0[0] * 4 / 3), int(g0[0] * 4 / 3))),  # square, Face3D-like
+            (10 * lam, 0.0, g0),                    # low: lobe nearly inside
+            (10 * lam, spec(10 * lam), g0),         # low + specular-centred
+            (20 * lam, 0.0, g0),                    # mid heights around current
+            (40 * lam, 0.0, g0),                    # higher
         ]
+        cands = [c for i, c in enumerate(cands)
+                 if i == 0 or (abs(c[0] - H0) > 1e-9 or abs(c[1]) > 1e-9
+                               or c[2] != g0)]      # drop dupes of "current"
 
     print(f"[rail3d] geometry scan on {device}  ({args.n} samples/class/config)")
     if args.n < 10:

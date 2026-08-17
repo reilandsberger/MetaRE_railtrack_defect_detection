@@ -1,11 +1,12 @@
 """Shard IO, dataset classes, and splits for the 3D rail fields.
 
 Shard layout (written by generate_dataset_3d.py, all under
-``rail3D/data/generated/``):
+``rail3D/data/generated/`` or a named subdirectory):
     rail3d_{class}_shard{k:03d}.pt : {"psi": complex64 (n, NX, NY, 2),  # [psi1, psi2]
                                       "meta": list[dict]}
-    rail3d_intact.pt               : same layout (augmented intact pool)
+    rail3d_intact_shard{k:03d}.pt  : same layout (augmented intact pool)
     psi0_ms.pt                     : complex64 (NX, NY) direct horn term
+    dataset_config.json            : geometry + provenance (see PROVENANCE_KEYS)
 
 Field modes (Face3D convention): "sca" = psi1 only (scattered single bounce),
 "tot" = psi0 + psi1 + psi2 (what a real measurement sees).

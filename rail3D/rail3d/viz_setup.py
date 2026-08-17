@@ -43,7 +43,7 @@ def setup_diagram(save_path=None, show=False):
     xc = config.PLANE_X_CENTER                 # planes may be laterally offset
     wx2, wy2 = config.WX / 2, config.WY / 2
     x_lo, x_hi = xc - wx2, xc + wx2
-    det_c = config.detector_grid_centers().numpy()
+    det_c = config.dense_detector_centers().numpy()
     dw, dh = config.DET_SIZE
     # everything below is derived from config so the figure stays correct when
     # the plane height / offset / aperture change (it silently clipped the
@@ -127,11 +127,13 @@ def setup_diagram(save_path=None, show=False):
     ax.set_aspect("equal")
     ax.legend(loc="upper right", fontsize=7)
 
+    freq_ghz = 299.792458 / config.WVL
     fig.suptitle(
-        f"rail3D simulated setup — λ={config.WVL:.0f} mm (37.5 GHz), dx={config.DX:.0f} mm, "
-        f"grid {config.NX}x{config.NY}, horn {config.DIST_ANT:.0f} mm @ "
-        f"{np.degrees(config.THETA_INC):.0f}°, crown→MS {z_ms:.0f} mm, "
-        f"MS→det {d_det:.0f} mm, segment {config.SEG_LEN:.0f} mm",
+        f"rail3D simulated setup — λ={config.WVL:.1f} mm ({freq_ghz:.1f} GHz), "
+        f"dx={config.DX:.1f} mm, grid {config.NX}x{config.NY}, horn "
+        f"{config.DIST_ANT:.0f} mm @ {np.degrees(config.THETA_INC):.0f}°, "
+        f"crown→MS {z_ms:.0f} mm, MS→det {d_det:.0f} mm, "
+        f"segment {config.SEG_LEN:.0f} mm",
         fontsize=10,
     )
     fig.tight_layout(rect=(0, 0, 1, 0.95))
@@ -170,9 +172,10 @@ def mesh_review_figure(save_path=None, csv_index: int = 0):
     section = sections.load_reference_section()
     n_arc = mesh3d.default_arc_count(section)      # λ/2: used only for param sampling
     geom = mesh3d.arc_geometry(section, n_arc)
-    # depth-field insets on a fine 1 mm grid so hairline cracks are visible
-    geom_fine = mesh3d.arc_geometry(section, mesh3d.default_arc_count(section, 1.0))
-    y_fine = np.arange(-config.SEG_LEN / 2, config.SEG_LEN / 2 + 0.5, 1.0)
+    # depth-field insets on the fine generation grid so hairline cracks are visible
+    ds = config.MESH_DS
+    geom_fine = mesh3d.arc_geometry(section, mesh3d.default_arc_count(section, ds))
+    y_fine = np.arange(-config.SEG_LEN / 2, config.SEG_LEN / 2 + ds / 2, ds)
     mesh_ds = config.WVL / 4                       # review meshes: fine enough to show divots
 
     files = sections.get_dataset_files("crack")
@@ -290,7 +293,8 @@ def field_maps_figure(save_path=None, device="cpu", csv_index: int = 0):
             if c == 0:
                 ax.set_ylabel(f"{cls}\nx (mm)", fontsize=8)
             ax.set_xlabel("y (mm)", fontsize=7)
-    fig.suptitle("Fields at the metasurface plane (z = 160 mm), one sample per class")
+    fig.suptitle(f"Fields at the metasurface plane (z = {config.H_MS:.0f} mm), "
+                 f"one sample per class")
     fig.tight_layout(rect=(0, 0, 1, 0.97))
     if save_path:
         fig.savefig(save_path, dpi=200)
@@ -306,7 +310,8 @@ def propagator_figure(save_path=None):
     prop = optics3d.PropagatorRSFFT(config.LAYER_DISTANCES[-1])
     asm = optics3d.PropagatorASM2D(config.LAYER_DISTANCES[-1], pad_factor=4)
     X, Y = config.plane_grid()
-    beam = _torch.exp(-(X[0] ** 2 + Y[0] ** 2) / (2 * 25.0**2)) + 0j
+    sigma = min(config.WX, config.WY) / 5
+    beam = _torch.exp(-(X[0] ** 2 + Y[0] ** 2) / (2 * sigma**2)) + 0j
 
     out_fft = prop(beam.unsqueeze(0))[0]
     out_dir = prop.forward_direct(beam.unsqueeze(0))[0]
@@ -319,7 +324,8 @@ def propagator_figure(save_path=None):
     plt.colorbar(im, ax=axes[0], fraction=0.04)
 
     im = axes[1].imshow((out_fft.abs() ** 2).numpy(), cmap="inferno", origin="lower")
-    axes[1].set_title("Gaussian beam after 160 mm (RS-FFT)", fontsize=9)
+    axes[1].set_title(f"Gaussian beam after {config.LAYER_DISTANCES[-1]:.0f} mm (RS-FFT)",
+                      fontsize=9)
     plt.colorbar(im, ax=axes[1], fraction=0.04)
 
     diff = (out_fft - out_dir).abs().numpy()
@@ -349,7 +355,9 @@ def metaunit_figure(save_path=None):
     w = _torch.linspace(1.0, 3.8, 200)
 
     fig, axes = plt.subplots(1, 4, figsize=(15, 3.4))
-    pix = [(0, 0), (30, 15), (59, 29), (15, 7), (45, 22)]
+    nx, ny = config.NX, config.NY               # corners / centre / quarter points
+    pix = [(0, 0), (nx // 2, ny // 2), (nx - 1, ny - 1),
+           (nx // 4, ny // 4), (3 * nx // 4, 3 * ny // 4)]
     for (i, j) in pix:
         amp = sum(unit.ampfit[d, i, j] * w**d for d in range(unit.ampfit.shape[0]))
         ph = sum(unit.phasefit[d, i, j] * w**d for d in range(unit.phasefit.shape[0]))
@@ -362,8 +370,11 @@ def metaunit_figure(save_path=None):
     full = np.load(_LIB_DIR_PATH() / "library_amp_fit.npy").reshape(-1, 80, 80)[::-1]
     im = axes[2].imshow(full[0], cmap="viridis", origin="lower")
     from matplotlib.patches import Rectangle as _Rect
-    axes[2].add_patch(_Rect((25, 10), 30, 60, fill=False, edgecolor="red", lw=1.5))
-    axes[2].set_title("amp-fit coeff (deg 0) on 80x80\nred = 60x30 crop used", fontsize=9)
+    cr, cc = optics3d._LIB_CROP                 # draw the crop actually used
+    axes[2].add_patch(_Rect((cc.start, cr.start), cc.stop - cc.start,
+                            cr.stop - cr.start, fill=False, edgecolor="red", lw=1.5))
+    axes[2].set_title(f"amp-fit coeff (deg 0) on 80x80\nred = "
+                      f"{cr.stop - cr.start}x{cc.stop - cc.start} crop used", fontsize=9)
     plt.colorbar(im, ax=axes[2], fraction=0.04)
 
     w_map = unit.w_pillar.detach()
@@ -385,13 +396,16 @@ def detector_figure(save_path=None):
     """Initial detector layout with soft masks at anneal start and end."""
     from . import optics3d
 
+    from . import train3d                      # tau schedule lives on TrainConfig
+
     det = optics3d.SoftDetector2D()
     fig, axes = plt.subplots(1, 3, figsize=(13, 3.6))
 
+    tc = train3d.TrainConfig()
     extent = (-config.WY / 2, config.WY / 2, -config.WX / 2, config.WX / 2)
     for ax, tau, title in [
-        (axes[0], 0.25, "soft masks, τ = w/4 (train start)"),
-        (axes[1], 1 / 16, "soft masks, τ = w/16 (train end)"),
+        (axes[0], tc.tau_start, f"soft masks, τ = w/{1 / tc.tau_start:.0f} (train start)"),
+        (axes[1], tc.tau_end, f"soft masks, τ = w/{1 / tc.tau_end:.0f} (train end)"),
         (axes[2], None, "hard masks (evaluation readout)"),
     ]:
         if tau is None:

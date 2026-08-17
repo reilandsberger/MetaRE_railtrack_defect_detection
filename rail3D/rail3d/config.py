@@ -193,7 +193,6 @@ JITTER_XZ_STD = 4.0             # rigid x/z jitter (mm, Gaussian)
 # tell a duplicate from a uniquely informative detector (see optics3d).
 DET_SIZE = (18.2, 11.2)         # window size in mm (Face3D waveguide aperture)
 DET_GRID = (13, 10)             # 130 detectors, ~92% nominal plane coverage
-DET_PITCH = (36.0, 36.0)        # only used by the legacy sparse-grid helper
 N_DET_FINAL = 8
 
 # Noise model (Face3D values)
@@ -202,6 +201,16 @@ SNR_MULTIPLE = 0.005
 DET_JITTER_MM = 3.0             # detector-center jitter during training
 
 SEED = 0
+
+# Dataset sizes (single source: generator, lab_report and the docs all read these)
+FULL_PER_CLASS = 5000
+FULL_INTACT = 512
+SMOKE_PER_CLASS = 20
+
+
+def smoke_intact_count(per_class: int = SMOKE_PER_CLASS) -> int:
+    """Intact count for a smoke set, keeping the historical 32:20 ratio."""
+    return round(per_class * 32 / 20)
 
 
 # ---------------------------------------------------------------------------
@@ -227,12 +236,27 @@ def plane_grid(device: torch.device | str = "cpu",
     return X.reshape(1, nx, ny), Y.reshape(1, nx, ny)
 
 
-def detector_grid_centers() -> torch.Tensor:
-    """Initial detector centers, shape (N_det, 2) in mm: 6x3 grid, 36 mm pitch."""
-    nx, ny = DET_GRID
-    px, py = DET_PITCH
-    cx = (torch.arange(nx) - (nx - 1) / 2) * px
-    cy = (torch.arange(ny) - (ny - 1) / 2) * py
+def dense_detector_centers(grid: tuple[int, int] | None = None,
+                           nx: int | None = None, ny: int | None = None) -> torch.Tensor:
+    """Detector centres on a gx x gy lattice spanning the whole aperture.
+
+    THE single source for detector layouts — every construction of a detector
+    grid (training, validation probes, figures, geometry scans) must come
+    through here. Its predecessor (`detector_grid_centers`, a 36 mm-pitch
+    helper) silently emitted centres outside the aperture once DET_GRID went
+    dense; SoftDetector2D then clamped 130 windows onto 54 unique spots.
+
+    Spacing is aperture/(g+1) so windows sit inside the plane rather than on
+    its edge. `nx`/`ny` override the aperture cell counts (scan_geometry
+    compares alternate planes); they default to the module constants.
+    """
+    gx, gy = grid if grid is not None else DET_GRID
+    nx = NX if nx is None else nx
+    ny = NY if ny is None else ny
+    px = (nx * DX) / (gx + 1)
+    py = (ny * DX) / (gy + 1)
+    cx = (torch.arange(gx) - (gx - 1) / 2) * px
+    cy = (torch.arange(gy) - (gy - 1) / 2) * py
     CX, CY = torch.meshgrid(cx, cy, indexing="ij")
     return torch.stack([CX.reshape(-1), CY.reshape(-1)], dim=1)
 

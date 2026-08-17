@@ -60,12 +60,16 @@ def main() -> int:
     ap.add_argument("--data-root", default=None)
     ap.add_argument("--which", default="best", choices=["best", "latest"])
     ap.add_argument("--n-fail", type=int, default=8, help="failure montage size")
+    ap.add_argument("--profile", default="lab")
     args = ap.parse_args()
 
-    device = config.get_device("lab")
+    device = config.get_device(args.profile)
     cfg = train3d.TrainConfig(run_name=args.run_name, surface=args.surface,
                               data_root=args.data_root)
     model, state = train3d.load_trained(cfg, device, args.which)
+    # score with the config the run was TRAINED with (objective/metric/fpr),
+    # not the CLI defaults — a margin run scored as rank/cos reads wrong
+    cfg = train3d.effective_config(cfg, state)
     data = train3d.load_all_data(cfg, device)
     metric = cfg.metric if cfg.objective == "rank" else "l2"
     root = Path(cfg.data_root) if cfg.data_root else None

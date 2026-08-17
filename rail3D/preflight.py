@@ -152,8 +152,8 @@ def list_all_datasets(r: Report, chosen: Path) -> None:
             c = json.loads(cfgp.read_text())
             age = (time.time() - c.get("_created_epoch", time.time())) / 3600
             print(f"  {d.name or 'generated':16s} {c.get('_created', '?'):19s} "
-                  f"({age:5.1f} h old)  H={c.get('H_MS')}  {n} shards"
-                  f"  commit {c.get('_git_commit', '?')}{mark}")
+                  f"({age:5.1f} h old)  lam={c.get('WVL', '?')}  H={c.get('H_MS')}  "
+                  f"{n} shards  commit {c.get('_git_commit', '?')}{mark}")
         else:
             print(f"  {d.name or 'generated':16s} {'(no provenance)':19s} "
                   f"{'':16s} {n} shards{mark}")
@@ -172,23 +172,20 @@ def check_dataset(r: Report, root: Path) -> None:
               "recording, so their geometry CANNOT be verified",
               f"rm -f {root}/rail3d_*_shard*.pt   # then regenerate")
     else:
-        try:
-            diffs = data3d.check_dataset_config(root)
-            if diffs:
-                for d in diffs:
-                    r.bad(f"geometry mismatch: {d}")
-                r.fixes.append(f"rm -f {root}/rail3d_*_shard*.pt   # then regenerate")
-            else:
-                stored = json.loads(cfgp.read_text())
-                r.ok(f"generated with the current geometry (H_MS={stored['H_MS']}, "
-                     f"classes {stored['CLASS_NAMES']})")
-        except RuntimeError as err:
-            for line in str(err).splitlines():
-                if line.strip().startswith(("H_MS", "NX", "NY", "CLASS", "SEG",
-                                            "MESH", "DX", "WVL", "PLANE", "THETA",
-                                            "DIST", "OCCLUDER", "SHADOW")):
-                    r.bad(f"geometry mismatch: {line.strip()}")
-            r.fixes.append(f"rm -f {root}/rail3d_*_shard*.pt   # then regenerate")
+        # strict=False returns the mismatch list instead of raising, so every
+        # differing key is reported (the old except-path re-parsed the raised
+        # message by string prefix and silently dropped unknown keys)
+        diffs = data3d.check_dataset_config(root, strict=False)
+        if diffs:
+            for d in diffs:
+                r.bad(f"geometry mismatch: {d}")
+            r.fixes.append(f"generate into a NEW named root: "
+                           f"python generate_dataset_3d.py --profile lab --name <name>")
+        else:
+            stored = json.loads(cfgp.read_text())
+            r.ok(f"generated with the current geometry "
+                 f"(lam={stored.get('WVL', '?')}, H_MS={stored['H_MS']}, "
+                 f"classes {stored['CLASS_NAMES']})")
 
     # shard inventory + timestamps: mixed mtimes mean shards from different runs
     times, total = [], 0

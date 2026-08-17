@@ -16,6 +16,9 @@ DETECTION_MARGIN = 0.40      # legacy absolute margin (objective="margin" only)
 INTACT_MARGIN = 0.15         # legacy intact compactness margin
 CLASS_CENTROID_MARGIN = 0.25
 TOPK_FRACTION = 0.10
+# power floor = this ratio x the mean intact detected power; train3d computes
+# the initial floor from the dense start and RECOMPUTES it after every prune
+# (a floor frozen at the dense start saturates once most windows are gone).
 POWER_FLOOR_RATIO = 2.0
 
 W_INTACT = 0.5
@@ -125,10 +128,17 @@ def capture_fraction(det: torch.Tensor, total_power: torch.Tensor) -> torch.Tens
     The power floor below is a hinge: it stops the detectors going dark and then
     goes flat, so above the floor nothing pushes the metasurface to route light
     ONTO the few surviving windows. Receiver SNR in hardware depends exactly on
-    that, hence this term. With 8 windows of 13 px each on an 1800 px plane the
-    geometric ceiling without focusing is ~6%, so there is real headroom.
+    that, hence this term. At the final count the windows cover only a few
+    percent of the plane (8 windows x window-area/dx^2 pixels of the NX*NY
+    total), so there is real headroom without focusing.
+
+    Clamped to <=1 per sample: OVERLAPPING windows double-count shared pixels,
+    so the raw sum can exceed the true plane power — unclamped, the loss term
+    1 - capture would go negative and reward stacking detectors on top of each
+    other (nothing else in the loss repels detector centres).
     """
-    return (det.sum(dim=1) / total_power.clamp_min(1e-12)).mean()
+    frac = det.sum(dim=1) / total_power.clamp_min(1e-12)
+    return frac.clamp(max=1.0).mean()
 
 
 def power_floor_loss(det: torch.Tensor, det0: torch.Tensor, power_floor: float) -> torch.Tensor:
@@ -198,6 +208,7 @@ def combined_loss(
     objective: str = "rank",    # "rank" (default) | "margin" (legacy, pre-rev.2)
     metric: str = "cos",        # score used by the rank objective / reporting
     total_power: torch.Tensor | None = None,  # plane power per sample, for capture
+    w_capture: float = W_CAPTURE,             # TrainConfig.w_capture; 0 = legacy objective
 ) -> tuple[torch.Tensor, dict]:
     """Full objective; returns (loss, dict of detached components).
 
@@ -234,22 +245,24 @@ def combined_loss(
                 margin=CENTROID_MARGIN_N),
             "tv": tv,
         }
-        if W_CAPTURE > 0 and total_power is not None:
-            # Near-inactive at the dense start (130 tiling windows already catch
-            # ~98% of the plane); it becomes the operative term after pruning to
-            # a handful of windows, which is exactly when receiver SNR matters.
-            terms["capture"] = W_CAPTURE * (1.0 - capture_fraction(det, total_power))
     else:
         raise ValueError(f"Unknown objective: {objective}")
+
+    cap = capture_fraction(det, total_power) if total_power is not None else None
+    if objective == "rank" and w_capture > 0 and cap is not None:
+        # Near-inactive at the dense start (the tiling windows already catch
+        # nearly all of the plane); it becomes the operative term after pruning
+        # to a handful of windows, which is exactly when receiver SNR matters.
+        terms["capture"] = w_capture * (1.0 - cap)
 
     loss = sum(terms.values())
     logs = {k: float(v.detach()) for k, v in terms.items()}
     logs["loss"] = float(loss.detach())
     logs["gap_mean"] = float(gap.mean().detach())
     logs["gap0_mean"] = float(gap0.mean().detach())
-    if total_power is not None:
+    if cap is not None:
         # the raw fraction, logged separately from the "capture" LOSS term above
-        logs["capture_frac"] = float(capture_fraction(det, total_power).detach())
+        logs["capture_frac"] = float(cap.detach())
     return loss, logs
 
 

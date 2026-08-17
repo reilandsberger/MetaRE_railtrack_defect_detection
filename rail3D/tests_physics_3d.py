@@ -1,13 +1,15 @@
-"""Automated physics verification (V1-V4) for the rail3D pipeline.
+"""Automated physics + guard verification (V0-V4) for the rail3D pipeline.
 
 Laptop-safe: tiny meshes, CPU by default (set RAIL3D_TEST_DEVICE to override).
 Run:  python tests_physics_3d.py
-Results are also cached to rail3D/data/generated/verification_report.json.
+Results are merged into rail3D/data/generated/verification_report.json.
 
-V1 — chunked/batched solver vs the verbatim Face3D farfield_from_antenna_2nd
-V2 — PropagatorRSFFT (FFT) vs the original conv2d formulation
-V3 — angular-spectrum propagator vs RS-FFT on a Gaussian beam
-V4 — physics sanity: specular lobe, power conservation, mesh orientation
+V0  — rev.2 defect-geometry unit checks (orientation, bands, seeds, resolution)
+V0b — redundancy pruning survives the dense-layout failure mode
+V1  — chunked/batched solver vs the verbatim Face3D farfield_from_antenna_2nd
+V2  — PropagatorRSFFT (FFT) vs the original conv2d formulation
+V3  — angular-spectrum propagator vs RS-FFT on a Gaussian beam
+V4  — physics sanity: specular lobe, power conservation, mesh orientation
 """
 
 from __future__ import annotations
@@ -128,8 +130,11 @@ def test_v0_geometry() -> dict:
     import numpy as np
 
     section = sections.load_reference_section()
-    geom = mesh3d.arc_geometry(section, mesh3d.default_arc_count(section, 1.0))
-    y = np.arange(-120.0, 120.5, 1.0)
+    dy = config.MESH_DS                    # fine render at the generation mesh step
+    geom = mesh3d.arc_geometry(section, mesh3d.default_arc_count(section, dy))
+    # generous y span (2x the segment half-length) — a standalone unit check of
+    # render_depth_field, so it need not match the swept-mesh extent
+    y = np.arange(-config.SEG_LEN, config.SEG_LEN + dy / 2, dy)
     res = {}
 
     # (a) crack orientations: extent along y vs s must follow theta
@@ -143,7 +148,9 @@ def test_v0_geometry() -> dict:
         m = d > 0.5
         ys = np.flatnonzero(m.any(axis=1))
         ss = np.flatnonzero(m.any(axis=0))
-        return (int(ys[-1] - ys[0] + 1) if len(ys) else 0,
+        # both extents in mm (the y index count only equalled mm while dy was
+        # exactly 1.0; the thresholds below are physical lengths)
+        return (float((ys[-1] - ys[0] + 1) * dy) if len(ys) else 0.0,
                 float(geom["s"][ss[-1]] - geom["s"][ss[0]]) if len(ss) else 0.0)
 
     ey_long, es_long = extent(0.0)
@@ -195,8 +202,9 @@ def test_v0_geometry() -> dict:
     d_fine2 = mesh3d.render_depth_field(p2, geom, y)
     res["seed_reproducible"] = bool(np.array_equal(d_fine, d_fine2))
 
-    geom_c = mesh3d.arc_geometry(section, mesh3d.default_arc_count(section, 4.0))
-    y_c = np.arange(-120.0, 120.5, 4.0)
+    dc = config.SLICE_DS                   # coarse render at the occluder step
+    geom_c = mesh3d.arc_geometry(section, mesh3d.default_arc_count(section, dc))
+    y_c = np.arange(-config.SEG_LEN, config.SEG_LEN + dc / 2, dc)
     d_coarse = mesh3d.render_depth_field(p1, geom_c, y_c)
     # compare coarse rendering against fine rendering subsampled at nearest pts
     ii = [int(np.argmin(np.abs(geom["s"] - sc))) for sc in geom_c["s"]]
@@ -291,7 +299,8 @@ def test_v2_propagator_equivalence() -> dict:
 def test_v3_asm_vs_rs() -> dict:
     X, Y = config.plane_grid(DEVICE)
     X, Y = X[0], Y[0]
-    beam = torch.exp(-(X**2 + Y**2) / (2 * 25.0**2)) + 0j
+    sigma = min(config.WX, config.WY) / 5      # aperture-proportional: λ-invariant test
+    beam = torch.exp(-(X**2 + Y**2) / (2 * sigma**2)) + 0j
     rs = optics3d.PropagatorRSFFT(config.LAYER_DISTANCES[-1]).to(DEVICE)
     asm = optics3d.PropagatorASM2D(config.LAYER_DISTANCES[-1], pad_factor=4).to(DEVICE)
     out_rs = rs(beam.unsqueeze(0))[0]
@@ -309,9 +318,12 @@ def test_v4_sanity() -> dict:
     res = {}
 
     # (a) flat plate under normal incidence -> specular peak at plane center
+    # plate half-size in wavelengths (60 mm = 7.5λ at λ=8) so the Fresnel
+    # geometry — and with it the centroid check — is λ-invariant
     nx_p, nz = 30, 30
-    gx = torch.linspace(-60, 60, nx_p)
-    gy = torch.linspace(-60, 60, nz)
+    half = 7.5 * config.WVL
+    gx = torch.linspace(-half, half, nx_p)
+    gy = torch.linspace(-half, half, nz)
     GX, GY = torch.meshgrid(gx, gy, indexing="ij")
     nv = nx_p * nz
     verts = torch.stack([GX.reshape(-1), GY.reshape(-1), torch.zeros(nv)], dim=1)
@@ -351,7 +363,8 @@ def test_v4_sanity() -> dict:
 
     # (b) power conservation of the trainable propagator
     Xg, Yg = config.plane_grid(DEVICE)
-    beam = torch.exp(-(Xg[0] ** 2 + Yg[0] ** 2) / (2 * 20.0**2)) + 0j
+    sigma = config.WY / 6                      # 20 mm at λ=8; aperture-proportional
+    beam = torch.exp(-(Xg[0] ** 2 + Yg[0] ** 2) / (2 * sigma**2)) + 0j
     prop = optics3d.PropagatorRSFFT(config.LAYER_DISTANCES[-1]).to(DEVICE)
     out = prop(beam.unsqueeze(0))[0]
     ratio = float((out.abs() ** 2).sum() / (beam.abs() ** 2).sum())
@@ -378,7 +391,10 @@ def main() -> int:
           + ("  (CPU by design - set RAIL3D_TEST_DEVICE=cuda:0 to use the GPU)"
              if DEVICE.type == "cpu" else
              f"  ({torch.cuda.get_device_name(DEVICE.index or 0)})"))
-    report = {"device": str(DEVICE), "torch": torch.__version__}
+    # merge-load: validation_3d.py and v8_smoke_test.py append their gates to
+    # the same file — a wholesale rewrite here would erase them on re-run
+    report = json.loads(REPORT_PATH.read_text()) if REPORT_PATH.exists() else {}
+    report.update({"device": str(DEVICE), "torch": torch.__version__})
     ok = True
     for name, fn in [
         ("V0_geometry", test_v0_geometry),

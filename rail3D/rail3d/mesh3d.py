@@ -333,7 +333,9 @@ def render_depth_field(p: dict, geom: dict, y_slices: np.ndarray) -> np.ndarray:
             # ragged interior (Fig 9): seeded roughness on a fixed PHYSICAL
             # 4 mm lattice around the defect center, bilinearly interpolated —
             # resolution independent, so fine mesh and coarse occluder carry
-            # the same roughness pattern.
+            # the same roughness pattern. The 4 mm is the shelling roughness
+            # scale from the paper, INTENTIONALLY independent of WVL/DX — do
+            # not scale it with the wavelength.
             lat = rng.standard_normal((17, 17))
             ly = np.linspace(-32.0, 32.0, 17)
             iy = np.clip((Y[:, 0] - ly[0]) / 4.0, 0, 15.999)
