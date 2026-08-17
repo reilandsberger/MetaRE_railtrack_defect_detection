@@ -70,9 +70,51 @@ def load_class_fields(class_name: str, root: Path | None = None) -> tuple[torch.
 
 # Geometry that the stored fields depend on. If any of these differ between
 # generation and use, the dataset simply does not describe the current setup.
+# Expanded 2026-08-17 (λ=5 migration): the horn, the section normalization,
+# the augmentation and every defect range also shape the stored fields —
+# changing any of them silently invalidated a dataset with no detection.
+# Datasets written before the expansion fail the check (missing keys), which
+# is correct: they are λ=8 sets and cannot be used at λ=5 anyway.
 PROVENANCE_KEYS = ("WVL", "DX", "NX", "NY", "H_MS", "PLANE_X_CENTER", "SEG_LEN",
                    "MESH_DS", "OCCLUDER_DS", "SHADOW_MODE", "THETA_INC",
-                   "DIST_ANT", "CLASS_NAMES")
+                   "DIST_ANT", "CLASS_NAMES",
+                   "SIZE_ANT", "RESOL_ANT", "Z_CUT", "RAIL_HEIGHT",
+                   "N_BOUNDARY_VERTICES", "ROLL_DEG_STD", "JITTER_XZ_STD",
+                   "SEED", "CROWN_HALF_WIDTH", "GAUGE_X_MIN", "GAUGE_X_MAX",
+                   "DEFECT_CENTER_RANGE", "DEFECT_LENGTH_RANGE",
+                   "CRACK_LENGTH_RANGE", "CRACK_WIDTH_RANGE",
+                   "CRACK_DEPTH_RANGE", "DENT_DEPTH_RANGE",
+                   "DENT_FOOTPRINT_Y", "DENT_FOOTPRINT_S",
+                   "SHELL_RADIUS_RANGE", "SHELL_DEPTH_RANGE",
+                   "WEAR_DEPTH_RANGE")
+
+
+def _jsonable(v):
+    """Recursively convert config values to what json.loads would return.
+
+    JSON has no tuples: a tuple stored via json round-trips as a list, so the
+    stored/current comparison must normalize BOTH sides identically or every
+    tuple-valued key (SIZE_ANT, the defect ranges) mismatches on every dataset,
+    including freshly generated ones. V0c guards this round-trip.
+    """
+    if isinstance(v, (tuple, list)):
+        return [_jsonable(x) for x in v]
+    if isinstance(v, dict):
+        return {k: _jsonable(x) for k, x in v.items()}
+    return v
+
+
+def _values_equal(was, now) -> bool:
+    """Compare a stored (json) value against the current config value."""
+    if isinstance(now, float) and isinstance(was, (int, float)):
+        return abs(float(was) - now) < 1e-9
+    if isinstance(now, (list, tuple)):
+        return (isinstance(was, list) and len(was) == len(now)
+                and all(_values_equal(w, n) for w, n in zip(was, now)))
+    if isinstance(now, dict):
+        return (isinstance(was, dict) and was.keys() == now.keys()
+                and all(_values_equal(was[k], now[k]) for k in now))
+    return was == now
 
 
 def dataset_config_path(root: Path | None = None) -> Path:
@@ -100,8 +142,7 @@ def write_dataset_config(root: Path | None = None, note: str = "") -> dict:
     import platform
     import time
 
-    cfg = {k: getattr(config, k) for k in PROVENANCE_KEYS}
-    cfg["CLASS_NAMES"] = list(cfg["CLASS_NAMES"])
+    cfg = {k: _jsonable(getattr(config, k)) for k in PROVENANCE_KEYS}
     cfg["_created"] = time.strftime("%Y-%m-%d %H:%M:%S")
     cfg["_created_epoch"] = time.time()
     cfg["_git_commit"] = _git_commit()
@@ -189,24 +230,49 @@ def check_dataset_config(root: Path | None = None, strict: bool = True) -> list[
     stored = json.loads(path.read_text())
     diffs = []
     for k in PROVENANCE_KEYS:
-        now = getattr(config, k)
-        if k == "CLASS_NAMES":
-            now = list(now)
+        now = _jsonable(getattr(config, k))
         was = stored.get(k)
-        if isinstance(now, float) and isinstance(was, (int, float)):
-            same = abs(float(was) - now) < 1e-9
-        else:
-            same = was == now
-        if not same:
+        if not _values_equal(was, now):
             diffs.append(f"  {k}: dataset={was!r}  current={now!r}")
     if diffs and strict:
         raise RuntimeError(
             "This dataset was generated with a different geometry:\n"
             + "\n".join(diffs)
-            + f"\nEither restore the config values above, or regenerate:\n"
-              f"  rm -f {(root or config.GENERATED_DIR)}/rail3d_*_shard*.pt\n"
-              f"  python generate_dataset_3d.py --profile lab")
+            + "\nEither restore the config values above, or generate a NEW "
+              "named dataset (old ones stay on disk as the record):\n"
+              "  python generate_dataset_3d.py --profile lab --name <name>")
     return [d.strip() for d in diffs]
+
+
+def check_generation_root(root: Path | None = None) -> None:
+    """Refuse to GENERATE into a root holding artifacts of another geometry.
+
+    The generator skips existing shards and overwrites dataset_config.json, so
+    without this check a λ change would MIX old and new shards in one root and
+    then relabel the whole set as the new geometry — undetectable afterwards.
+    Raises RuntimeError; silent on a clean or matching root. V0c covers all
+    three cases.
+    """
+    root = root or config.GENERATED_DIR
+    if dataset_config_path(root).exists():
+        try:
+            check_dataset_config(root, strict=True)
+        except RuntimeError as err:
+            raise RuntimeError(
+                f"REFUSING to generate into {root}: it already holds a dataset "
+                f"with a DIFFERENT geometry, and the generator would mix old "
+                f"and new shards while relabelling them all as current.\n{err}\n"
+                f"Use --name <new_name> for a fresh root, or delete this one.") from err
+        return
+    leftovers = (list(root.glob("rail3d_*_shard*.pt"))
+                 + ([psi0_path(root)] if psi0_path(root).exists() else []))
+    if leftovers:
+        raise RuntimeError(
+            f"REFUSING to generate into {root}: it holds {len(leftovers)} "
+            f"artifact(s) but no dataset_config.json, so their geometry cannot "
+            f"be verified (they predate provenance recording).\n"
+            f"Use --name <new_name> for a fresh root, or delete the old files:\n"
+            f"  rm -f {root}/rail3d_*_shard*.pt {root}/psi0_ms.pt")
 
 
 def load_meta(class_name: str, root: Path | None = None) -> list[dict]:
@@ -232,6 +298,14 @@ def combine_field(psi: torch.Tensor, mode: str, psi0: torch.Tensor | None = None
     if mode == "tot":
         if psi0 is None:
             psi0 = torch.load(psi0_path(root=root), map_location="cpu", weights_only=False)
+        if tuple(psi0.shape) != tuple(psi.shape[1:3]):
+            # Shape alone cannot catch a wavelength change at the same grid
+            # (60x30 at both λ) — dataset_config.json is the real guard; this
+            # only stops a stale psi0 from a different NX/NY being broadcast.
+            raise RuntimeError(
+                f"psi0 shape {tuple(psi0.shape)} does not match the stored "
+                f"fields {tuple(psi.shape[1:3])} — stale psi0_ms.pt in this "
+                f"root; delete it and regenerate.")
         return psi[..., 0] + psi[..., 1] + psi0.unsqueeze(0)
     raise ValueError(f"Unknown field mode: {mode}")
 

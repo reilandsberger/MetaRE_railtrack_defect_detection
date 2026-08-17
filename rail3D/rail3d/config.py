@@ -57,23 +57,33 @@ DATASET_DIRS = {
 CLASS_NAMES = ("crack", "dent", "wear", "shell")
 
 # ---------------------------------------------------------------------------
-# Physical constants (Face3D "config 55" standard, so the meta-atom library
-# fits transfer unchanged)
+# Physical constants — λ=5 mm (60 GHz) SCALED REPLICA of the validated λ=8
+# Face3D "config 55" scene (2026-08-17). Every rig length that Face3D chose in
+# units of λ scales with λ (distances, horn, detector windows), so Fresnel
+# numbers, speckle statistics and the dark-field geometry are preserved
+# EXACTLY; the rail and its defects keep their physical mm sizes, so the
+# defect/λ ratio grows by 8/5 = 1.6x — which is the point of the migration.
+# LIBRARY_WVL records the band the meta-atom library was fitted at: the fits
+# do NOT transfer across wavelength, so MetaUnitSoft refuses WVL != LIBRARY_WVL
+# (surface="slm" and "none" are wavelength-agnostic and unaffected).
 # ---------------------------------------------------------------------------
-WVL = 8.0                       # wavelength in mm (37.5 GHz)
+WVL = 5.0                       # wavelength in mm (60 GHz)
+LIBRARY_WVL = 8.0               # meta-atom fits (library_*.npy) are 8 mm-band
 K0 = 2 * np.pi / WVL
-DX = WVL / 2                    # 4 mm sampling on the metasurface plane
+DX = WVL / 2                    # plane sampling: 2.5 mm at λ=5
 
 # Rectangular metasurface / observation grid: 60 cells across the railhead
-# (x), 30 cells along the rail (y). Defect features are 1-10 mm, so the
-# smaller aperture keeps the simulation fast while covering the scattered
-# lobes.
+# (x), 30 cells along the rail (y). The aperture (NX·DX x NY·DX) scales with
+# λ, which matches the physics: scattered-lobe widths (θ ≈ λ/d) and the
+# speckle grain (λL/D) shrink by the same factor, so the smaller plane
+# collects the same angular content the 240x120 mm plane did at λ=8.
 NX, NY = 60, 30
-WX = NX * DX                    # 240 mm aperture across the railhead
-WY = NY * DX                    # 120 mm aperture along the rail
+WX = NX * DX                    # 150 mm aperture across the railhead (240 at λ=8)
+WY = NY * DX                    # 75 mm aperture along the rail (120 at λ=8)
 
-# Crown -> metasurface plane distance. Chosen by measurement (scan_geometry.py,
-# 20 samples/class/config), not inherited:
+# Crown -> metasurface plane distance, in wavelengths. 30λ reproduces the
+# measured λ=8 optimum (H=240 mm) exactly in the scaled replica. That optimum
+# came from scan_geometry.py (20 samples/class/config) AT λ=8, absolute mm:
 #     H     energy   intact det-spread  field AUC  det AUC   crack field AUC
 #      80  1.43e-2        0.0203          0.567     0.419        0.595
 #     160  1.06e-3        0.0184          0.867     0.819        0.777
@@ -81,55 +91,62 @@ WY = NY * DX                    # 120 mm aperture along the rail
 #     320  3.17e-4        0.0083          0.890     0.842        0.767
 #     400  2.20e-4        0.0042          0.872     0.856        0.688
 #     480  1.60e-4        0.0022          0.869     0.887        0.688
-# H=80 puts the specular lobe INSIDE the aperture (13x more energy) and performs
-# below chance: this system works because it is dark-field. Beyond 240 the field
-# AUC (physical information at the plane) falls while the det AUC through an
-# UNTRAINED random SLM keeps rising -- the field grows diffuse, which washes out
-# the crack speckle but also desensitizes fixed windows to placement jitter.
-# 240 maximizes the information training can actually exploit; it also keeps 3x
-# more energy than 480, which our RELATIVE noise model does not penalize but real
-# hardware would.
-H_MS = 240.0
-# Lateral offset of the plane centre. The horn illuminates at 55 deg from +x, so
-# the specular lobe off a flat crown lands at x = -H*tan(55 deg): -114 mm at
-# H=80, -228 mm at H=160. With PLANE_X_CENTER=0 the aperture (x in +-WX/2)
-# therefore collects the OFF-SPECULAR tail -- effectively dark-field, which may
-# help defect contrast but was inherited from Face3D rather than chosen.
-# scan_geometry.py measures separability vs (H_MS, PLANE_X_CENTER, grid).
+# H=10λ puts the specular lobe INSIDE the aperture (13x more energy) and
+# performs below chance: this system works because it is dark-field. Beyond
+# 30λ the field AUC (physical information at the plane) falls while the det
+# AUC through an UNTRAINED random SLM keeps rising -- trust the field metric.
+# The rig scales with λ but the DEFECTS do not, so RE-RUN scan_geometry.py on
+# the lab GPU at λ=5 before the full generation to confirm 30λ still wins.
+H_MS = 30 * WVL                 # 150 mm at λ=5 (was 240 at λ=8)
+# Lateral offset of the plane centre. The horn illuminates at 55 deg from +x,
+# so the specular lobe off a flat crown lands at x = -H*tan(55 deg) = -2.14*H
+# -- far outside the +-WX/2 aperture at H=30λ. With PLANE_X_CENTER=0 the
+# aperture collects the OFF-SPECULAR tail: dark-field, measured (see table)
+# to be the reason the system separates classes at all.
 PLANE_X_CENTER = 0.0
-LAYER_DISTANCES = (160.0,)      # MS -> detector plane; extend for 2-layer runs
+LAYER_DISTANCES = (20 * WVL,)   # MS -> detector plane: 100 mm at λ=5 (160 at λ=8)
 
-# Horn antenna (pyramidal), Face3D config-55 verbatim
-SIZE_ANT = (27.4, 21.9, 9.3, 6.2, 27.0)   # A, B aperture; a, b waveguide; horn length
-DIST_ANT = 28 * WVL             # 224 mm from the crown origin
+# Horn antenna (pyramidal): Face3D config-55 scaled by WVL/LIBRARY_WVL. The
+# λ-scaling keeps the feeding waveguide single-mode-identical (a/λ fixed, so
+# the same TE10-only modal content the validated aperture model assumes) and
+# preserves the far-field ratio 2A²/(λ·DIST_ANT) — an unscaled 27.4 mm horn at
+# 60 GHz would put the rail deep in its radiating near field.
+SIZE_ANT = tuple(v * WVL / LIBRARY_WVL
+                 for v in (27.4, 21.9, 9.3, 6.2, 27.0))
+                                # A, B aperture; a, b waveguide; horn length
+DIST_ANT = 28 * WVL             # 140 mm from the crown origin at λ=5
 THETA_INC = 55 * np.pi / 180    # incidence angle in the x-z plane
 RESOL_ANT = 20                  # 20x20 aperture samples
 
 # Rail geometry
 RAIL_HEIGHT = 180.0             # cross-section normalized height (mm)
 Z_CUT = -80.0                   # illuminated region: z > -80 mm (2D's y2d > 100 mm)
-# Swept segment length along y. Measured truncation study (λ/8 mesh, ray-cast
-# shadowing, defect-signal cosine vs a 240 mm reference):
+# Swept segment length along y — PHYSICAL rail, deliberately NOT λ-scaled:
+# the defects it must contain keep their mm sizes (50 mm cracks + y0 = ±10 mm
+# need ±35 of the ±60 available). Measured truncation study at λ=8 (λ/8 mesh,
+# ray-cast shadowing, defect-signal cosine vs a 240 mm reference):
 #     240 mm  120480 faces  6.99 s/sample   reference
 #     160 mm   80320 faces  3.54 s/sample   cosines 0.9987-0.9998
 #     120 mm   60240 faces  2.25 s/sample   cosines 0.9969-0.9990   <- chosen
 #      80 mm   40160 faces  1.22 s/sample   cosines 0.959-0.995     <- too short
 # Truncation shifts the intact field ~5% at 120 mm, but that is common mode
 # (intact and defect samples share the segment), so the defect SIGNATURE is
-# preserved better than the mesh-resolution error we already accept. At 80 mm
-# the cut edge sits inside the illuminated footprint and cracks degrade.
-SEG_LEN = 120.0                 # = the y-aperture; 3.1x faster than 240 mm
+# preserved better than the mesh-resolution error we already accept. At λ=5
+# the illuminated footprint shrinks ∝λ, so 120 mm is SAFER than it was when
+# measured. Note it no longer equals the y-aperture (WY = 75 mm at λ=5); the
+# mesh extending past the plane is fine — oblique scattering still lands on it.
+SEG_LEN = 120.0
 SLICE_DS = WVL / 2              # coarse (lambda/2) sampling: occluder meshes, quick tests
 N_BOUNDARY_VERTICES = 2400      # matches the 2D pipeline's loop resampling
 
-# Generation mesh fidelity (validated in V6/V7):
+# Generation mesh fidelity (validated in V6/V7 at λ=8; V7 re-checks at each λ):
 #   - lambda/2 meshes are NOT converged (defect-signal cosine 0.66 vs lambda/12);
 #   - the rev.2 geometry has ~2 mm-wide hairline cracks, under-resolved by the
-#     old lambda/4 mesh -> generation default is now lambda/8 (1 mm facets);
-#     the V7 convergence gate re-checks crack samples at lambda/8 vs lambda/16;
+#     old lambda/4 mesh -> generation default is lambda/8 (0.625 mm facets at
+#     λ=5); the V7 gate re-checks crack samples at lambda/8 vs lambda/16;
 #   - ray-cast shadowing changes psi1 by up to 27% on deep defects -> required.
 #     Casting against the lambda/2 occluder mesh keeps it cheap.
-MESH_DS = WVL / 8               # 1 mm slice/arc sampling for dataset generation
+MESH_DS = WVL / 8               # slice/arc sampling for dataset generation
 OCCLUDER_DS = WVL / 2           # coarse occluder mesh for the ray-cast shadow test
 SHADOW_MODE = "raycast"
 
@@ -155,8 +172,9 @@ SHADOW_MODE = "raycast"
 DEFECT_CENTER_RANGE = (-10.0, 10.0)
 
 # Wear: gauge-corner wear develops over long stretches (curves, older rail), so
-# the envelope is longer than the 240 mm segment -- the whole modelled rail
-# carries the worn cross-section, with only a slight taper at the ends.
+# the envelope is longer than the modelled segment (SEG_LEN) -- the whole
+# modelled rail carries the worn cross-section, with only a slight taper at
+# the ends.
 DEFECT_LENGTH_RANGE = {"wear": (300.0, 900.0)}
 
 CRACK_LENGTH_RANGE = (10.0, 50.0)     # along the crack line (mm)
@@ -180,25 +198,38 @@ GAUGE_X_MAX = 38.0                    # ... and ends at the gauge corner edge
 ROLL_DEG_STD = 2.0              # roll about the y axis (deg, uniform +/-)
 JITTER_XZ_STD = 4.0             # rigid x/z jitter (mm, Gaussian)
 
-# Detectors. The starting layout is DENSE and gets pruned to N_DET_FINAL, so
-# pruning selects from a rich candidate set rather than a handful of fixed spots:
+# Detectors. The window is the Face3D 8 mm-band receiver aperture scaled by
+# WVL/LIBRARY_WVL — a band-appropriate 60 GHz receiver — which preserves
+# speckle-grains-per-window and therefore the whole detector-design study.
+# The starting layout is DENSE (tiling) and gets pruned to N_DET_FINAL, so
+# pruning selects from a rich candidate set rather than a handful of fixed
+# spots. DET_GRID is DERIVED as the tiling bound floor(aperture/window):
+# window-sized pitch is the densest USEFUL start — closer spacing only makes
+# duplicates, wider spacing leaves dead zones position gradients cannot cross.
 #
-#   layout                 n   pitch (mm)   gap (mm)      coverage
-#   Face3D 6x6            36   48.0 x 48.0  +29.8/+36.8      7.2%   (sparse)
-#   rail3D old 6x3        18   36.0 x 36.0  +17.8/+24.8     12.7%   (sparse)
-#   rail3D 13x10 (now)   130   17.1 x 10.9   -1.1/ -0.3     92.0%   (tiling)
+#   layout                       n   pitch (mm)   gap (mm)       coverage
+#   Face3D 6x6 (λ=8)            36   48.0 x 48.0  +29.8/+36.8       7.2%  (sparse)
+#   rail3D old 6x3 (λ=8)        18   36.0 x 36.0  +17.8/+24.8      12.7%  (sparse)
+#   rail3D 13x10 (λ=5, now)    130   10.7 x  6.8  -0.66/-0.18      92.0%  (tiling)
 #
+# (identical n / coverage to the λ=8 dense start — exact scaled replica.)
 # A dense start only works with prune_criterion="redundancy": overlapping
 # windows have near-identical variance, so the Face3D variance ranking cannot
 # tell a duplicate from a uniquely informative detector (see optics3d).
-DET_SIZE = (18.2, 11.2)         # window size in mm (Face3D waveguide aperture)
-DET_GRID = (13, 10)             # 130 detectors, ~92% nominal plane coverage
+DET_SIZE = (18.2 * WVL / LIBRARY_WVL,
+            11.2 * WVL / LIBRARY_WVL)   # 11.375 x 7.0 mm at λ=5
+DET_GRID = (int(WX // DET_SIZE[0]),
+            int(WY // DET_SIZE[1]))     # tiling bound: (13, 10) = 130 windows
 N_DET_FINAL = 8
 
-# Noise model (Face3D values)
+# Noise model (Face3D values; multiplicative/additive noise is RELATIVE to the
+# RMS-normalized field, so it is λ-invariant by construction)
 SNR_ADD = 1e-5
 SNR_MULTIPLE = 0.005
-DET_JITTER_MM = 3.0             # detector-center jitter during training
+# Detector-center jitter: a physical mounting tolerance, deliberately NOT
+# λ-scaled. Against the smaller λ=5 windows it is now 26%/43% of the window
+# (was 16%/27% at λ=8) — training sees a harder, more honest placement task.
+DET_JITTER_MM = 3.0
 
 SEED = 0
 

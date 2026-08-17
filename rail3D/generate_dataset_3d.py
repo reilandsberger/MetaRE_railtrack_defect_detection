@@ -2,15 +2,17 @@
 
 Examples (run from rail3D/):
     python generate_dataset_3d.py --profile laptop --smoke     # 20/class + 32 intact -> data/generated/smoke/
-    python generate_dataset_3d.py --profile laptop             # full 5000/class + 512 intact
+    python generate_dataset_3d.py --smoke --smoke-n 80 --name geo_H150   # bigger geometry-exploration smoke
+    python generate_dataset_3d.py --profile lab --name L5_v1   # full 5000/class + 512 intact
     python generate_dataset_3d.py --status                     # what exists / what remains
-    python generate_dataset_3d.py --profile lab                # same on the RTX 5090 (auto-picks the strongest GPU)
 
-Physics per sample (validated in V0-V7): lambda/8 swept mesh, ray-cast shadowing
-against a lambda/2 occluder mesh, exact RS-I surface integral, psi1 + psi2 channels;
-the face-independent psi0 is cached once. Shards are written atomically and
-skipped on re-run, and every sample is derived from a deterministic seed, so an
-interrupted run resumes losslessly on any machine.
+Physics per sample (verified by the V-gates at the active wavelength): lambda/8
+swept mesh, ray-cast shadowing against a lambda/2 occluder mesh, exact RS-I
+surface integral, psi1 + psi2 channels; the face-independent psi0 is cached
+once. Shards are written atomically and skipped on re-run, and every sample is
+derived from a deterministic seed, so an interrupted run resumes losslessly on
+any machine. A root already holding artifacts of a DIFFERENT geometry is
+refused (data3d.check_generation_root) — use --name for a fresh root.
 """
 
 from __future__ import annotations
@@ -27,11 +29,6 @@ import torch
 
 from rail3d import config, data3d, field3d, mesh3d, sections
 
-FULL_PER_CLASS = 5000
-FULL_INTACT = 512
-SMOKE_PER_CLASS = 20
-SMOKE_INTACT = 32
-
 
 def log(msg: str, root: Path) -> None:
     line = f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}"
@@ -42,11 +39,13 @@ def log(msg: str, root: Path) -> None:
 
 def plan_counts(args) -> dict[str, int]:
     if args.smoke:
-        counts = {cls: SMOKE_PER_CLASS for cls in config.CLASS_NAMES}
-        counts["intact"] = SMOKE_INTACT
+        counts = {cls: args.smoke_n for cls in config.CLASS_NAMES}
+        counts["intact"] = (args.intact if args.intact is not None
+                           else config.smoke_intact_count(args.smoke_n))
     else:
         counts = {cls: args.limit for cls in config.CLASS_NAMES}
-        counts["intact"] = args.intact
+        counts["intact"] = (args.intact if args.intact is not None
+                           else config.FULL_INTACT)
     if args.classes:
         counts = {k: v for k, v in counts.items() if k in args.classes}
     return counts
@@ -161,8 +160,13 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--profile", default="laptop", choices=list(config.PROFILES))
     parser.add_argument("--smoke", action="store_true", help="tiny set into data/generated/smoke/")
-    parser.add_argument("--limit", type=int, default=FULL_PER_CLASS, help="samples per defect class")
-    parser.add_argument("--intact", type=int, default=FULL_INTACT, help="intact pool size")
+    parser.add_argument("--smoke-n", type=int, default=config.SMOKE_PER_CLASS,
+                        help="smoke samples per class (raise to 60-80 for "
+                             "geometry-exploration smokes on the lab GPU)")
+    parser.add_argument("--limit", type=int, default=config.FULL_PER_CLASS,
+                        help="samples per defect class")
+    parser.add_argument("--intact", type=int, default=None,
+                        help="intact pool size (default: scaled to the set size)")
     parser.add_argument("--classes", nargs="*", default=None,
                         help="subset of {crack,dent,wear,shell,intact}")
     parser.add_argument("--shard-size", type=int, default=data3d.SHARD_SIZE)
@@ -182,7 +186,7 @@ def main() -> int:
     else:
         root = config.GENERATED_DIR
     root.mkdir(parents=True, exist_ok=True)
-    shard_size = min(args.shard_size, SMOKE_PER_CLASS) if args.smoke else args.shard_size
+    shard_size = min(args.shard_size, args.smoke_n) if args.smoke else args.shard_size
     counts = plan_counts(args)
 
     if args.status:
@@ -192,6 +196,10 @@ def main() -> int:
         print(f"shards present: {done}")
         print(f"shards remaining: {len(remaining)} -> {remaining[:20]}{'...' if len(remaining) > 20 else ''}")
         return 0
+
+    # refuse a root that already holds another geometry's artifacts — BEFORE
+    # write_dataset_config, which would otherwise relabel the mixed set
+    data3d.check_generation_root(root)
 
     profile = config.PROFILES[args.profile]
     device = config.get_device(args.profile)
@@ -209,7 +217,9 @@ def main() -> int:
     log(f"start: profile={args.profile} device={device} ({gpu}) pid={os.getpid()} "
         f"counts={counts} shard_size={shard_size}", root)
 
-    # psi0 (face independent) — once
+    # psi0 (face independent) — once. Reuse is safe here: check_generation_root
+    # above already refused any root whose recorded geometry differs, so an
+    # existing psi0 in this root was made with the current geometry.
     psi0_file = data3d.psi0_path(root=root)
     if not psi0_file.exists():
         X, Y = config.plane_grid(device)

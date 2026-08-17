@@ -152,6 +152,16 @@ class MetaUnitSoft(nn.Module):
                  ampfit_path: Path = _LIB_DIR / "library_amp_fit.npy",
                  phasefit_path: Path = _LIB_DIR / "library_phase_fit.npy"):
         super().__init__()
+        if abs(config.WVL - config.LIBRARY_WVL) > 1e-9:
+            raise RuntimeError(
+                f"surface='metaunit' is blocked at WVL={config.WVL} mm: the "
+                f"meta-atom polynomial fits (library_amp_fit.npy / "
+                f"library_phase_fit.npy) were measured at "
+                f"{config.LIBRARY_WVL} mm and do not transfer across "
+                f"wavelength. The pillar widths also stop being physical — up "
+                f"to 3.8 mm against a {config.DX} mm unit cell. Refit the "
+                f"library for {299.792458 / config.WVL:.1f} GHz, or use "
+                f"surface='slm' (idealized phase) or 'none' (no-MS baseline).")
         ampfit = torch.tensor(np.load(ampfit_path), dtype=torch.float32)
         phasefit = torch.tensor(np.load(phasefit_path), dtype=torch.float32)
         ampfit = ampfit.reshape(-1, 80, 80).flip(dims=(0,))[:, _LIB_CROP[0], _LIB_CROP[1]]

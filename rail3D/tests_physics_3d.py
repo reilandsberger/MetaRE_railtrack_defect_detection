@@ -6,6 +6,8 @@ Results are merged into rail3D/data/generated/verification_report.json.
 
 V0  — rev.2 defect-geometry unit checks (orientation, bands, seeds, resolution)
 V0b — redundancy pruning survives the dense-layout failure mode
+V0c — the staleness guards guard: lattice inside the aperture, capture clamp,
+      dataset/generation-root refusal, checkpoint geometry-stamp refusal
 V1  — chunked/batched solver vs the verbatim Face3D farfield_from_antenna_2nd
 V2  — PropagatorRSFFT (FFT) vs the original conv2d formulation
 V3  — angular-spectrum propagator vs RS-FFT on a Gaussian beam
@@ -26,7 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import numpy as np
 import torch
 
-from rail3d import config, field3d, mesh3d, optics3d, sections
+from rail3d import config, data3d, field3d, losses3d, mesh3d, optics3d, sections
 
 # V0-V4 default to CPU ON PURPOSE: they use tiny meshes, run in ~5 s, and this
 # keeps them safe on a 2 GB laptop GPU. That means they show NO NVIDIA activity
@@ -252,6 +254,113 @@ def test_v0b_pruning() -> dict:
     return res
 
 
+def test_v0c_guards() -> dict:
+    """The staleness guards actually guard (CPU, no data, seconds).
+
+    Every one of these closes a hole that silently produced wrong physics:
+    the out-of-aperture detector lattice, the unclamped capture reward, a
+    generator mixing shards of two geometries in one root, and a checkpoint
+    from another wavelength resuming cleanly because its tensor shapes match.
+    """
+    import json as _json
+    import tempfile
+
+    from rail3d import train3d
+
+    res = {}
+
+    # (a) the canonical lattice: full count, fully inside the aperture,
+    #     uniform aperture/(g+1) pitch
+    c = config.dense_detector_centers()
+    gx, gy = config.DET_GRID
+    hw, hh = config.DET_SIZE[0] / 2, config.DET_SIZE[1] / 2
+    inside = (bool((c[:, 0].abs() + hw <= config.WX / 2 + 1e-6).all())
+              and bool((c[:, 1].abs() + hh <= config.WY / 2 + 1e-6).all()))
+    xs = torch.unique(c[:, 0])
+    ys = torch.unique(c[:, 1])
+    pitch_ok = (torch.allclose(xs.diff(), torch.full((gx - 1,), config.WX / (gx + 1)),
+                               atol=1e-4)
+                and torch.allclose(ys.diff(), torch.full((gy - 1,), config.WY / (gy + 1)),
+                                   atol=1e-4))
+    res["lattice_n"] = int(c.shape[0])
+    res["lattice_ok"] = bool(c.shape[0] == gx * gy and inside and pitch_ok)
+
+    # (b) capture clamp: overlapping windows double-count -> raw ratio > 1
+    #     must clamp to exactly 1 (else the loss REWARDS stacking detectors)
+    det_over = torch.full((4, 8), 1.0)
+    cap_over = float(losses3d.capture_fraction(det_over, torch.full((4,), 5.0)))
+    det_norm = torch.full((4, 8), 0.1)
+    cap_norm = float(losses3d.capture_fraction(det_norm, torch.full((4,), 5.0)))
+    res["capture_clamped"] = cap_over == 1.0
+    res["capture_normal"] = 0.0 < cap_norm < 1.0
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+
+        # (c) provenance round-trip: a FRESH matching root must pass (this is
+        #     the regression for the json tuple->list trap: SIZE_ANT and the
+        #     defect ranges are tuples, json stores lists), a doctored one
+        #     must refuse
+        data3d.write_dataset_config(root, note="v0c")
+        res["fresh_root_passes"] = data3d.check_dataset_config(root, strict=False) == []
+        cfgp = data3d.dataset_config_path(root)
+        doc = _json.loads(cfgp.read_text())
+        doc["WVL"] = 999.0
+        cfgp.write_text(_json.dumps(doc))
+        res["doctored_diff_listed"] = any(
+            "WVL" in d for d in data3d.check_dataset_config(root, strict=False))
+        try:
+            data3d.check_dataset_config(root, strict=True)
+            res["doctored_strict_raises"] = False
+        except RuntimeError:
+            res["doctored_strict_raises"] = True
+
+        # (d) generation-root guard: mismatched json refuses, matching passes,
+        #     shards-without-json refuse
+        try:
+            data3d.check_generation_root(root)
+            res["genroot_mismatch_refused"] = False
+        except RuntimeError:
+            res["genroot_mismatch_refused"] = True
+        data3d.write_dataset_config(root, note="v0c")   # restore a matching json
+        try:
+            data3d.check_generation_root(root)
+            res["genroot_match_passes"] = True
+        except RuntimeError:
+            res["genroot_match_passes"] = False
+        cfgp.unlink()
+        data3d.shard_path("crack", 0, root=root).touch()
+        try:
+            data3d.check_generation_root(root)
+            res["genroot_orphan_refused"] = False
+        except RuntimeError:
+            res["genroot_orphan_refused"] = True
+
+    # (e) checkpoint geometry stamp: doctored wavelength refuses, absent stamp
+    #     only warns (legacy checkpoints)
+    tc = train3d.TrainConfig()
+    good = {"geometry": train3d.checkpoint_geometry(tc)}
+    bad = {"geometry": {**train3d.checkpoint_geometry(tc), "WVL": 999.0}}
+    try:
+        train3d.verify_checkpoint_geometry(good, tc)
+        res["ckpt_stamp_match_passes"] = True
+    except RuntimeError:
+        res["ckpt_stamp_match_passes"] = False
+    try:
+        train3d.verify_checkpoint_geometry(bad, tc)
+        res["ckpt_stamp_mismatch_refused"] = False
+    except RuntimeError:
+        res["ckpt_stamp_mismatch_refused"] = True
+    try:
+        train3d.verify_checkpoint_geometry({}, tc)   # no stamp: warn only
+        res["ckpt_stamp_absent_warns"] = True
+    except RuntimeError:
+        res["ckpt_stamp_absent_warns"] = False
+
+    res["pass"] = all(bool(res[k]) for k in res if k != "lattice_n")
+    return res
+
+
 # ---------------------------------------------------------------------------
 # V1 — solver equivalence + chunk/batch invariance
 # ---------------------------------------------------------------------------
@@ -399,6 +508,7 @@ def main() -> int:
     for name, fn in [
         ("V0_geometry", test_v0_geometry),
         ("V0b_pruning", test_v0b_pruning),
+        ("V0c_guards", test_v0c_guards),
         ("V1_solver_equivalence", test_v1_solver_equivalence),
         ("V2_propagator_equivalence", test_v2_propagator_equivalence),
         ("V3_asm_vs_rs", test_v3_asm_vs_rs),

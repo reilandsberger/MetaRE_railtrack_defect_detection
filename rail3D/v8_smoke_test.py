@@ -155,6 +155,25 @@ def main() -> int:
     res["variance_criterion_ok"] = (len(hist_var["val"]) == 10
                                     and model_var.detector.n_det < 130)
 
+    # stale-checkpoint refusal, end to end: doctor a REAL checkpoint's
+    # geometry stamp and the loader must refuse it (V0c covers the helper on a
+    # synthetic payload; this proves the wiring through load_trained)
+    stale_dir = config.CHECKPOINT_DIR / "v8_smoke_stale"
+    if stale_dir.exists():
+        shutil.rmtree(stale_dir)
+    shutil.copytree(config.CHECKPOINT_DIR / cfg_a.run_name, stale_dir)
+    stale_path = stale_dir / "latest.pt"
+    st = torch.load(stale_path, map_location="cpu", weights_only=False)
+    st["geometry"]["WVL"] = 999.0
+    torch.save(st, stale_path)
+    try:
+        train3d.load_trained(replace(cfg_a, run_name="v8_smoke_stale"),
+                             device, "latest")
+        res["stale_ckpt_refused"] = False
+    except RuntimeError:
+        res["stale_ckpt_refused"] = True
+    shutil.rmtree(stale_dir)
+
     # resume equivalence (epochs 15..29)
     mism = 0.0
     for ea, eb in zip(hist_a["val"][15:], hist_b["val"][15:]):
@@ -168,7 +187,8 @@ def main() -> int:
                        and res["detector_centers_moved"] and res["min_sep_ok"]
                        and res["capture_ok"] and res["resume_ok"]
                        and res["full_eval_keys_ok"] and res["legacy_objective_ok"]
-                       and res["variance_criterion_ok"])
+                       and res["variance_criterion_ok"]
+                       and res["stale_ckpt_refused"])
 
     report = json.loads(REPORT_PATH.read_text()) if REPORT_PATH.exists() else {}
     report["V8_end_to_end_smoke"] = res

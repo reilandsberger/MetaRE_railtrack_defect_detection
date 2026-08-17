@@ -242,9 +242,50 @@ def _restore_rng(st: dict) -> None:
         torch.cuda.set_rng_state_all([s.cpu().to(torch.uint8) for s in st["cuda"]])
 
 
+def checkpoint_geometry(cfg: TrainConfig) -> dict:
+    """The geometry stamp stored in every checkpoint (and verified on load)."""
+    return {
+        "WVL": config.WVL, "DX": config.DX, "NX": config.NX, "NY": config.NY,
+        "H_MS": config.H_MS, "DET_SIZE": tuple(config.DET_SIZE),
+        "CLASS_NAMES": list(config.CLASS_NAMES),
+        "LAYER_DISTANCES": tuple(cfg.layer_distances),
+        "DET_GRID": tuple(cfg.det_grid or config.DET_GRID),
+    }
+
+
+def verify_checkpoint_geometry(state: dict, cfg: TrainConfig,
+                               path: Path | None = None) -> None:
+    """Refuse a checkpoint stamped with a different geometry.
+
+    Without this, a λ=8 checkpoint resumes silently into a λ=5 run whenever the
+    grid shape is unchanged (60x30 at both) — the phase map, head and detector
+    u are all shape-compatible while every physical length is wrong. Warn-only
+    when the stamp is absent (pre-2026-08-17 checkpoints).
+    """
+    stored = state.get("geometry")
+    where = f"\n  checkpoint: {path}" if path else ""
+    if stored is None:
+        print("[rail3d] WARNING: checkpoint has no geometry stamp "
+              "(pre-2026-08-17) — cannot verify its wavelength/geometry "
+              "against the current config" + where)
+        return
+    now = checkpoint_geometry(cfg)
+    diffs = [f"  {k}: checkpoint={stored.get(k)!r}  current={v!r}"
+             for k, v in now.items()
+             if not data3d._values_equal(data3d._jsonable(stored.get(k)),
+                                         data3d._jsonable(v))]
+    if diffs:
+        raise RuntimeError(
+            "Checkpoint was trained with a DIFFERENT geometry:\n"
+            + "\n".join(diffs) + where
+            + f"\n  Delete the run directory or use a new run_name:\n"
+              f"    rm -rf {path.parent if path else config.CHECKPOINT_DIR / '<run_name>'}")
+
+
 def save_checkpoint(path: Path, cfg, model, optimizer, epoch, history, extra) -> None:
     data3d.atomic_save({
         "config": asdict(cfg),
+        "geometry": checkpoint_geometry(cfg),
         "epoch": epoch,
         "model": model.state_dict(),
         "n_det": model.detector.n_det,
@@ -256,14 +297,18 @@ def save_checkpoint(path: Path, cfg, model, optimizer, epoch, history, extra) ->
 
 
 def _shape_model_to_checkpoint(model: optics3d.ONN3D, state: dict,
-                               path: Path | None = None) -> None:
+                               path: Path | None = None,
+                               cfg: TrainConfig | None = None) -> None:
     """Match detector/head shapes to a (possibly pruned) checkpoint state.
 
     Detector COUNT differences are expected (pruning) and are adopted. A
-    different number of CLASSES, or a different metasurface grid, means the
-    checkpoint belongs to another experiment entirely — say so plainly instead
-    of letting load_state_dict raise a bare size-mismatch.
+    different number of CLASSES, a different metasurface grid, or a different
+    geometry stamp means the checkpoint belongs to another experiment
+    entirely — say so plainly instead of letting load_state_dict raise a bare
+    size-mismatch (or worse, load cleanly with wrong physics).
     """
+    if cfg is not None:
+        verify_checkpoint_geometry(state, cfg, path)
     sd = state["model"]
     # Checkpoints written before 2026-08-17 persisted the detector's geometry
     # buffers; they are config-derived (persistent=False now), so drop them
@@ -295,6 +340,40 @@ def _shape_model_to_checkpoint(model: optics3d.ONN3D, state: dict,
         model.detector.u = nn.Parameter(torch.zeros(n_det, 2, device=dev))
         old = model.head
         model.head = nn.Linear(n_det, old.out_features).to(dev)
+
+
+def _check_resume_config(cfg: TrainConfig, state: dict, path: Path,
+                         verbose: bool = True) -> None:
+    """Compare the resuming config against the checkpoint's stored one.
+
+    surface / layer_distances / objective silently change the physics or the
+    loss shape (the propagator kernels are non-persistent buffers, so nothing
+    else would notice) -> raise. Everything except the designed-to-change
+    fields (n_epoch extension, run_name, checkpoint_every, verbosity of
+    schedule) -> warn, so a drifted flag is at least visible. Prints only —
+    no RNG is consumed, so resume bit-identity is unaffected.
+    """
+    stored = state.get("config")
+    if not stored:
+        return
+    hard = ("surface", "layer_distances", "objective", "n_layer", "mode")
+    soft_skip = {"n_epoch", "run_name", "checkpoint_every", "data_root"}
+    now = asdict(cfg)
+    norm = lambda v: list(v) if isinstance(v, tuple) else v
+    bad = [k for k in hard if k in stored and norm(stored[k]) != norm(now[k])]
+    if bad:
+        raise RuntimeError(
+            "Resuming with a DIFFERENT config than the checkpoint was trained "
+            "with:\n" + "\n".join(
+                f"  {k}: checkpoint={stored[k]!r}  now={now[k]!r}" for k in bad)
+            + f"\n  checkpoint: {path}\n  These change the physics/objective "
+              f"mid-run. Use a new run_name, or restore the values above.")
+    if verbose:
+        for k, v in now.items():
+            if (k in stored and k not in soft_skip and k not in hard
+                    and norm(stored[k]) != norm(v)):
+                print(f"[resume] note: {k} differs from the checkpoint "
+                      f"({stored[k]!r} -> {v!r})")
 
 
 def train(cfg: TrainConfig, device: torch.device | None = None,
@@ -333,7 +412,8 @@ def train(cfg: TrainConfig, device: torch.device | None = None,
 
     if latest.exists():
         state = torch.load(latest, map_location=device, weights_only=False)
-        _shape_model_to_checkpoint(model, state, latest)
+        _shape_model_to_checkpoint(model, state, latest, cfg=cfg)
+        _check_resume_config(cfg, state, latest, verbose=verbose)
         model.load_state_dict(state["model"])
         optimizer = build_optimizer(cfg, model)
         optimizer.load_state_dict(state["optimizer"])
@@ -502,7 +582,7 @@ def load_trained(cfg: TrainConfig, device: torch.device, which: str = "best"):
               f"surface={eff.surface!r} (caller asked {cfg.surface!r}); "
               f"using the checkpoint's")
     model = build_model(eff, device)
-    _shape_model_to_checkpoint(model, state, path)
+    _shape_model_to_checkpoint(model, state, path, cfg=eff)
     model.load_state_dict(state["model"])
     model.eval()
     return model, state

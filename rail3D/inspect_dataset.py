@@ -82,6 +82,18 @@ def main() -> int:
     root = Path(args.root)
     config.ensure_dirs()
     print(f"inspecting {root}")
+    # label what is being inspected, and WARN (not refuse — looking at old
+    # datasets is legitimate) when its geometry differs from the current
+    # config: the depth-field re-derivation below uses the CURRENT config, so
+    # on a mismatched set the rendered geometry would not match the stored
+    # fields shown beside it.
+    print(data3d.describe_dataset(root))
+    diffs = data3d.check_dataset_config(root, strict=False)
+    if diffs:
+        print("!! GEOMETRY MISMATCH vs the current config — the re-derived "
+              "depth fields below will NOT correspond to the stored fields:")
+        for d in diffs:
+            print(f"   {d}")
 
     psi0 = torch.load(data3d.psi0_path(root=root), map_location="cpu", weights_only=False)
     intact_psi, intact_meta = data3d.load_class_fields("intact", root=root)
@@ -90,8 +102,9 @@ def main() -> int:
     intact_mean_I = (intact_tot.abs() ** 2).mean(dim=0)
 
     section = sections.load_reference_section()
-    geom = mesh3d.arc_geometry(section, mesh3d.default_arc_count(section, 1.0))
-    y_grid = np.arange(-config.SEG_LEN / 2, config.SEG_LEN / 2 + 0.5, 1.0)
+    ds = config.MESH_DS
+    geom = mesh3d.arc_geometry(section, mesh3d.default_arc_count(section, ds))
+    y_grid = np.arange(-config.SEG_LEN / 2, config.SEG_LEN / 2 + ds / 2, ds)
     extent = (-config.WY / 2, config.WY / 2, -config.WX / 2, config.WX / 2)
 
     rows = []

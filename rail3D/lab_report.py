@@ -53,6 +53,8 @@ def main() -> int:
     ap.add_argument("--skip-smoke", action="store_true")
     ap.add_argument("--quick", action="store_true", help="skip V5-V7 (the slow gates)")
     ap.add_argument("--profile", default="lab")
+    ap.add_argument("--smoke-n", type=int, default=config.SMOKE_PER_CLASS,
+                    help="smoke samples per class (see generate_dataset_3d.py)")
     args = ap.parse_args()
 
     L: list[str] = []
@@ -104,9 +106,10 @@ def main() -> int:
     if not args.skip_smoke:
         if root.exists():
             shutil.rmtree(root)
-        out, dt, ok = run([PY, "generate_dataset_3d.py", "--profile", args.profile, "--smoke"])
-        n_gen = (len(config.CLASS_NAMES) * config.SMOKE_PER_CLASS
-                 + config.smoke_intact_count())
+        out, dt, ok = run([PY, "generate_dataset_3d.py", "--profile", args.profile,
+                           "--smoke", "--smoke-n", str(args.smoke_n)])
+        n_gen = (len(config.CLASS_NAMES) * args.smoke_n
+                 + config.smoke_intact_count(args.smoke_n))
         A("## Smoke generation")
         A("```")
         A(f"{n_gen} samples in {dt:.0f}s  ->  {n_gen / max(dt, 1e-9):.2f} samples/s")

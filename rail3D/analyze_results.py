@@ -230,8 +230,9 @@ def main() -> int:
     order = missed[np.argsort(gap_np[missed])][: args.n_fail]
     if len(order):
         section = sections.load_reference_section()
-        geom = mesh3d.arc_geometry(section, mesh3d.default_arc_count(section, 1.0))
-        y_grid = np.arange(-config.SEG_LEN / 2, config.SEG_LEN / 2 + 0.5, 1.0)
+        ds = config.MESH_DS
+        geom = mesh3d.arc_geometry(section, mesh3d.default_arc_count(section, ds))
+        y_grid = np.arange(-config.SEG_LEN / 2, config.SEG_LEN / 2 + ds / 2, ds)
         ncols = min(4, len(order))
         nrows = int(np.ceil(len(order) / ncols))
         fig, axes = plt.subplots(nrows, ncols, figsize=(3.4 * ncols, 3.0 * nrows),

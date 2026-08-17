@@ -225,15 +225,32 @@ def check_checkpoints(r: Report) -> None:
         if not latest.exists():
             continue
         try:
-            sd = torch.load(latest, map_location="cpu", weights_only=False)["model"]
+            state = torch.load(latest, map_location="cpu", weights_only=False)
+            sd = state["model"]
             n_cls = sd["head.bias"].shape[0]
             n_det = sd["detector.u"].shape[0]
             if n_cls != len(config.CLASS_NAMES):
                 r.bad(f"{run.name}: trained with {n_cls} classes, config has "
                       f"{len(config.CLASS_NAMES)} - cannot resume",
                       f"rm -rf {run}")
+                continue
+            geo = state.get("geometry")
+            if geo is None:
+                r.warn(f"{run.name}: no geometry stamp (pre-2026-08-17) - "
+                       f"its wavelength/geometry cannot be verified",
+                       f"rm -rf {run}   # if it predates the current geometry")
+                continue
+            gd = [k for k, v in geo.items()
+                  if not data3d._values_equal(data3d._jsonable(v),
+                                              data3d._jsonable(
+                                                  getattr(config, k, v)))]
+            gd = [k for k in gd if hasattr(config, k)]   # run-owned keys skip
+            if gd:
+                r.bad(f"{run.name}: stale geometry ({', '.join(gd)} differ) - "
+                      f"resume would be refused", f"rm -rf {run}")
             else:
-                r.ok(f"{run.name}: {n_cls} classes, {n_det} detectors - loadable")
+                r.ok(f"{run.name}: {n_cls} classes, {n_det} detectors, "
+                     f"lam={geo.get('WVL')} - loadable")
         except Exception as err:  # noqa: BLE001
             r.warn(f"{run.name}: unreadable ({err!r})", f"rm -rf {run}")
 
