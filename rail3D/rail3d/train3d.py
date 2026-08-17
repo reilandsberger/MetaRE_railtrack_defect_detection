@@ -139,6 +139,7 @@ def surface_map(model: optics3d.ONN3D) -> torch.Tensor | None:
 
 def load_all_data(cfg: TrainConfig, device: torch.device):
     root = Path(cfg.data_root) if cfg.data_root else None
+    data3d.check_dataset_config(root)      # refuse fields built for another geometry
     fields, labels, metas, rms = data3d.load_dataset(cfg.mode, root=root)
     intact, _ = data3d.load_intact(cfg.mode, rms=rms, root=root)
     tr, va, te = data3d.stratified_split(labels, seed=cfg.seed)
@@ -246,9 +247,36 @@ def save_checkpoint(path: Path, cfg, model, optimizer, epoch, history, extra) ->
     }, path)
 
 
-def _shape_model_to_checkpoint(model: optics3d.ONN3D, state: dict) -> None:
-    """Match detector/head shapes to a (possibly pruned) checkpoint state."""
-    n_det = state["model"]["detector.u"].shape[0]
+def _shape_model_to_checkpoint(model: optics3d.ONN3D, state: dict,
+                               path: Path | None = None) -> None:
+    """Match detector/head shapes to a (possibly pruned) checkpoint state.
+
+    Detector COUNT differences are expected (pruning) and are adopted. A
+    different number of CLASSES, or a different metasurface grid, means the
+    checkpoint belongs to another experiment entirely — say so plainly instead
+    of letting load_state_dict raise a bare size-mismatch.
+    """
+    sd = state["model"]
+    n_cls_ckpt = sd["head.bias"].shape[0]
+    n_cls_now = model.head.out_features
+    where = f"\n  checkpoint: {path}" if path else ""
+    if n_cls_ckpt != n_cls_now:
+        raise RuntimeError(
+            f"Checkpoint was trained with {n_cls_ckpt} classes, this run has "
+            f"{n_cls_now} ({list(config.CLASS_NAMES)}).{where}\n"
+            f"  It predates a change to CLASS_NAMES, so it cannot be resumed.\n"
+            f"  Delete the run directory to start fresh, or use a new run_name:\n"
+            f"    rm -rf {path.parent if path else config.CHECKPOINT_DIR / '<run_name>'}")
+    for key in ("layers.0.phase", "layers.0.p"):
+        if key in sd and key in model.state_dict():
+            want = tuple(model.state_dict()[key].shape)
+            got = tuple(sd[key].shape)
+            if want != got:
+                raise RuntimeError(
+                    f"Checkpoint metasurface grid is {got}, this run uses {want}."
+                    f"{where}\n  Delete the run directory or use a new run_name.")
+
+    n_det = sd["detector.u"].shape[0]
     if n_det != model.detector.n_det:
         dev = model.detector.u.device
         model.detector.u = nn.Parameter(torch.zeros(n_det, 2, device=dev))
@@ -276,7 +304,7 @@ def train(cfg: TrainConfig, device: torch.device | None = None,
 
     if latest.exists():
         state = torch.load(latest, map_location=device, weights_only=False)
-        _shape_model_to_checkpoint(model, state)
+        _shape_model_to_checkpoint(model, state, latest)
         model.load_state_dict(state["model"])
         optimizer = build_optimizer(cfg, model)
         optimizer.load_state_dict(state["optimizer"])
@@ -381,7 +409,7 @@ def load_trained(cfg: TrainConfig, device: torch.device, which: str = "best"):
     path = _ckpt_dir(cfg) / f"{which}.pt"
     state = torch.load(path, map_location=device, weights_only=False)
     model = build_model(cfg, device)
-    _shape_model_to_checkpoint(model, state)
+    _shape_model_to_checkpoint(model, state, path)
     model.load_state_dict(state["model"])
     model.eval()
     return model, state

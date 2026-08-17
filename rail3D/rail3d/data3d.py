@@ -67,6 +67,69 @@ def load_class_fields(class_name: str, root: Path | None = None) -> tuple[torch.
     return torch.cat(psis, dim=0), metas
 
 
+# Geometry that the stored fields depend on. If any of these differ between
+# generation and use, the dataset simply does not describe the current setup.
+PROVENANCE_KEYS = ("WVL", "DX", "NX", "NY", "H_MS", "PLANE_X_CENTER", "SEG_LEN",
+                   "MESH_DS", "OCCLUDER_DS", "SHADOW_MODE", "THETA_INC",
+                   "DIST_ANT", "CLASS_NAMES")
+
+
+def dataset_config_path(root: Path | None = None) -> Path:
+    return (root or config.GENERATED_DIR) / "dataset_config.json"
+
+
+def write_dataset_config(root: Path | None = None) -> dict:
+    """Record the geometry a dataset was generated with, beside its shards."""
+    import json
+
+    cfg = {k: getattr(config, k) for k in PROVENANCE_KEYS}
+    cfg["CLASS_NAMES"] = list(cfg["CLASS_NAMES"])
+    path = dataset_config_path(root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+    return cfg
+
+
+def check_dataset_config(root: Path | None = None, strict: bool = True) -> list[str]:
+    """Compare a dataset's recorded geometry against the current config.
+
+    Returns the list of mismatched keys. Raises when strict and any differ —
+    silently training on fields generated for a different plane height, grid or
+    class list produces results that look fine and mean nothing.
+    """
+    import json
+
+    path = dataset_config_path(root)
+    if not path.exists():
+        print(f"[rail3d] WARNING: {path.name} missing — this dataset predates "
+              f"provenance recording, so its geometry cannot be verified against "
+              f"the current config (H_MS={config.H_MS}, grid {config.NX}x{config.NY}, "
+              f"classes {list(config.CLASS_NAMES)}).")
+        return []
+
+    stored = json.loads(path.read_text())
+    diffs = []
+    for k in PROVENANCE_KEYS:
+        now = getattr(config, k)
+        if k == "CLASS_NAMES":
+            now = list(now)
+        was = stored.get(k)
+        if isinstance(now, float) and isinstance(was, (int, float)):
+            same = abs(float(was) - now) < 1e-9
+        else:
+            same = was == now
+        if not same:
+            diffs.append(f"  {k}: dataset={was!r}  current={now!r}")
+    if diffs and strict:
+        raise RuntimeError(
+            "This dataset was generated with a different geometry:\n"
+            + "\n".join(diffs)
+            + f"\nEither restore the config values above, or regenerate:\n"
+              f"  rm -f {(root or config.GENERATED_DIR)}/rail3d_*_shard*.pt\n"
+              f"  python generate_dataset_3d.py --profile lab")
+    return [d.strip() for d in diffs]
+
+
 def load_meta(class_name: str, root: Path | None = None) -> list[dict]:
     """Per-sample metadata for one class WITHOUT loading its fields.
 

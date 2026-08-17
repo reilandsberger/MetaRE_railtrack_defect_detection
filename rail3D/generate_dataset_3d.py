@@ -190,6 +190,12 @@ def main() -> int:
     # CUDA device (so "it's on the Intel GPU" is always a misread).
     gpu = (torch.cuda.get_device_name(device.index or 0) if device.type == "cuda"
            else "CPU")
+    # record the geometry these fields are generated with, so training can
+    # refuse to silently use a dataset built for a different setup
+    prov = data3d.write_dataset_config(root)
+    log(f"geometry: H_MS={prov['H_MS']} grid={prov['NX']}x{prov['NY']} "
+        f"seg={prov['SEG_LEN']} mesh_ds={prov['MESH_DS']} classes={prov['CLASS_NAMES']}",
+        root)
     log(f"start: profile={args.profile} device={device} ({gpu}) pid={os.getpid()} "
         f"counts={counts} shard_size={shard_size}", root)
 
