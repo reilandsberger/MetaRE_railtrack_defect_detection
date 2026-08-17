@@ -12,6 +12,7 @@ unchanged on the lab machine except where marked.
 
 - **Start the defect-CSV copy now** (§4) — it is ~2 GB and every step from §5
   onward needs it. It can transfer while you do §1–§3.
+- **Run `python preflight.py` before anything** — it verifies code, GPU, CSVs, dataset geometry and checkpoints in seconds, and prints the exact fix for anything wrong.
 - **Steps 5–12 are the runbook**, in the order you actually run them. If you
   only want the short version: `lab_report.py` → `generate_dataset_3d.py
   --profile lab` → training notebook → `sweep_detectors.py` →
@@ -153,10 +154,21 @@ this to be slower than 2 GB of bulk data suggests, which is why it goes first.
 Steps 5–12 in the order you actually run them. Steps 5–7 are one-time checks;
 8–12 are the experiment.
 
-## 5. Verify the machine — one command
+## 5. Verify the machine — two commands
+
+**Always run this first.** It is fast (seconds) and catches every mistake that
+has bitten so far: stale code, wrong GPU, missing CSVs, a dataset generated with
+a different geometry, shards mixed from separate runs, checkpoints that cannot
+be loaded. Exit code 0 = safe to proceed.
 
 ```bash
-cd rail3D && python lab_report.py
+cd rail3D && python preflight.py
+```
+
+Then the full physics + training verification (~5 min on the 5090):
+
+```bash
+python lab_report.py
 ```
 
 ~5 min on the 5090. Runs V0–V4, V5–V7, a smoke generation, stored-shard
