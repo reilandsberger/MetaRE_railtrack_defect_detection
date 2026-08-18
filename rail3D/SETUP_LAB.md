@@ -488,10 +488,12 @@ class accuracy, redundancy/throughput, and the surviving layout) plus
 
 The 13×10 is not arbitrary — it is the **tiling bound**
 `floor(aperture / window)` (derived in config): windows at window-sized pitch
-are the densest USEFUL start, since anything closer only creates duplicates
-(the field's speckle grain, λL/D ≈ 3.3 × 6.7 mm, is smaller than a window, so
-the window size is the binding scale — see README finding 18 for why this
-ratio is λ-invariant here). Pruning from the tiling lattice lets training
+are the densest USEFUL start, since anything closer only creates duplicates.
+The field's speckle grain is `λ·H/D ≈ 9.9 × 6.2 mm` (D = the ~76 mm illuminated
+head width), so the 11.4 × 7.0 mm window is ≈1.1 grain — matched, and the
+binding scale for spacing. README finding 19 works this through; the aperture
+holds ≈182 independent speckle cells, so 130 windows sample near the
+information limit. Pruning from the tiling lattice lets training
 select from a rich candidate set instead of a handful of fixed spots. It
 requires the **redundancy** criterion: overlapping windows have near-identical
 variance, so Face3D's variance ranking cannot tell a duplicate from a uniquely

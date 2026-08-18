@@ -306,14 +306,41 @@ first) · or everything at once with `python lab_report.py`.
     30λ, MS→det = 20λ, DIST_ANT = 28λ, the horn SIZE_ANT, DET_SIZE); the rail,
     defect ranges, SEG_LEN, mounting tolerances (DET_JITTER_MM, roll/jitter
     augmentation), raycast `min_t` and the 4 mm shell-roughness lattice are
-    physical and do NOT scale. Consequence: every Fresnel number and the
-    speckle-grains-per-window ratio are preserved exactly (V3's error matches
-    the λ=8 value to 6 significant figures), while defect/λ grows 8/5 = 1.6×.
+    physical and do NOT scale. Consequence: every Fresnel number **of the rig**
+    is preserved exactly — the MS→detector propagation has F = (WX/2)²/(λ·L) =
+    11.250 at both wavelengths, which is why V3's error matches the λ=8 value
+    to 6 significant figures. Quantities that pair the *fixed* rail against the
+    *scaled* rig deliberately do not scale, and that is the gain: defect/λ grows
+    8/5 = 1.6×, and because the speckle grain λL/D shrinks as (5/8)² while the
+    plane keeps its angular extent, the plane now carries **~2.6× more
+    independent speckle cells** (≈182 vs ≈71 across the aperture). Windows,
+    scaling as 5/8, go from ≈0.7 grain to ≈1.1 grain — i.e. from slightly
+    under-filled to matched (see finding 19).
     A same-grid λ change is INVISIBLE to tensor shapes, so provenance carries
     it instead: datasets record 36 geometry keys (`data3d.PROVENANCE_KEYS`),
     checkpoints carry a geometry stamp, the generator refuses mixed roots, and
     `surface="metaunit"` refuses λ ≠ LIBRARY_WVL outright (the 8 mm meta-atom
     fits do not transfer, and 3.8 mm pillars cannot fit a 2.5 mm cell).
+19. **The detector pitch is set by the speckle grain and the window, and the
+    dense start is the tiling bound — not "as dense as possible".** Two scales
+    govern the readout:
+    - *speckle grain* `g ≈ λ·H/D` (D = illuminated rail extent, ~76 mm across
+      the head): **≈ 9.9 × 6.2 mm** at λ=5. This is the finest structure the
+      field actually has — sampling the plane more finely than g returns
+      correlated (duplicate) numbers, no new information.
+    - *window* `DET_SIZE` = 11.375 × 7.0 mm ≈ **1.1 grain**. That is the right
+      regime: a window much smaller than a grain collects less power for
+      readings its neighbours already share, while a window covering N grains
+      averages independent speckles and dilutes defect contrast by ~1/√N.
+    So the useful pitch is `max(window, grain)` = the window, and the densest
+    lattice worth starting from is the **tiling** one,
+    `floor(aperture/window)` = 13×10 = 130 (92% coverage) — which is exactly
+    how `DET_GRID` is now derived. Denser is genuinely overkill (pure
+    duplicates, a longer prune schedule, no extra information); sparser risks
+    dead zones, because a detector moves only by local gradient and cannot
+    cross a dark region to reach a hotspot it never sees. The aperture holds
+    ≈182 independent cells at λ=5, so 130 windows sample near the information
+    limit and pruning to 8 selects the most complementary of them.
 
 ## 6b. Objective & metrics (rev. 2)
 
