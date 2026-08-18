@@ -1,5 +1,8 @@
 # rail3D — 3D diffraction simulation + metasurface training for rail defect detection
 
+*Last updated: 2026-08-17 · λ = 5 mm (60 GHz) era — bump this line in any
+commit that changes behaviour this file describes.*
+
 **Handoff document.** This README is written so that a future session (any
 model, any context) can pick the project up cold. Read this first, then
 `SETUP_LAB.md` for machine setup.
@@ -10,16 +13,22 @@ model, any context) can pick the project up cold. Read this first, then
 
 Upgrade of the repo's 2D rail-defect simulation (`2Dmesh_from_vertex.py` +
 `training_ms_notebook.ipynb`, 2D Kirchhoff/Hankel boundary integrals at
-λ=12 mm) to a **3D physical-optics simulation** at **λ = 8 mm (37.5 GHz)**,
+λ=12 mm) to a **3D physical-optics simulation** at **λ = 5 mm (60 GHz)**,
 reusing the verified physics of the Face3D_clean facial-recognition codebase
 (`C:\Users\Rei\Downloads\Face3D_clean\Face3D_clean` — exact Rayleigh–
-Sommerfeld surface integral, horn antenna source, meta-atom library,
-experimentally validated).
+Sommerfeld surface integral, horn antenna source, experimentally validated at
+λ = 8 mm). The scene is that validated λ=8 setup **scaled by 5/8** wherever
+Face3D chose lengths in wavelengths (distances, horn, detector windows —
+see finding 18), so its design conclusions transfer; the rail and its defects
+keep their physical sizes, growing 1.6× relative to λ.
 
 Task: a trainable metasurface + trainable detector placement so that raw
-detector powers ("barcode") both **detect** rail defects (relative-L2 gap vs
-the intact barcode > 0.40 margin) and **classify** them (crack / dent / wear,
-tiny linear head).
+detector powers ("barcode") both **detect** rail defects and **classify**
+them (crack / dent / wear / shell, tiny linear head). Default objective is
+the rev.2 **rank** loss — a pairwise soft-AUC hinge on normalized barcodes
+with the operating threshold *calibrated* on the validation intact spread
+(finding 10); the legacy fixed-0.40-margin loss survives as
+`objective="margin"`.
 
 ## 2. Pipeline at a glance
 
@@ -28,17 +37,18 @@ tiny linear head).
         │  sections.py  (mm units; loops arc-length-uniform, width-matched)
         ▼
 swept 3D railhead mesh + per-point defect depth field d(s,y)
-        │  mesh3d.py    (λ/8 facets, fixed topology → batchable)
+        │  mesh3d.py    (λ/8 facets = 0.625 mm, fixed topology → batchable)
         ▼
-physical-optics scattering: horn (224 mm @ 55°) → rail → 60×30 plane @ z=160mm
+physical-optics scattering: horn (140 mm @ 55°) → rail → 60×30 plane @ z=150 mm
         │  field3d.py   (exact RS-I kernel, chunked+batched, ray-cast shadow)
         ▼
 dataset shards: psi1, psi2 per sample + cached psi0    [generate_dataset_3d.py]
-        │  data3d.py    (mode "tot" = psi0+psi1+psi2, RMS-normalized)
+        │  data3d.py    (mode "tot" = psi0+psi1+psi2, RMS-normalized;
+        │               dataset_config.json provenance, refused on mismatch)
         ▼
-trainable optics: [SLM2D | MetaUnitSoft → RS-FFT propagator 160mm] → |·|²
-        → SoftDetector2D (18→8 windows, trainable centers) → barcode
-        │  optics3d.py, losses3d.py, train3d.py
+trainable optics: [SLM2D → RS-FFT propagator 100 mm] → |·|²
+        → SoftDetector2D (dense 130 → 8 windows, trainable centers) → barcode
+        │  optics3d.py, losses3d.py, train3d.py   (metaunit blocked at λ≠8)
         ▼
 metrics: AUC / pass@calibrated-threshold / false alarm / confusion / robustness
 ```
@@ -61,7 +71,7 @@ Figs 14/23/24) and Ye et al. 2023 (*IEEE TIM*, Figs 7/9):
 |---|---|---|---|
 | `crack` | line-divot, 10–50 mm long × 2–5 mm wide; longitudinal / transverse / oblique (20–70°); 30% chance of 2–3 parallel lines | 2–10 mm | running band + gauge corner |
 | `dent` | 2D super-Gaussian, 10–30 mm (y) × 10–30 mm (s); 20% chance of a 2–4 pit chain | 1.5–8 mm | running band |
-| `wear` | CSV cross-section shape × y-envelope of 300–900 mm — i.e. **the whole 240 mm segment is worn**, only a slight end taper | 2–8 mm | horn-facing shoulder |
+| `wear` | CSV cross-section shape × y-envelope of 300–900 mm — i.e. **the whole modelled segment is worn**, only a slight end taper | 2–8 mm | horn-facing shoulder |
 | `shell` | **parametric** (no CSVs): Fourier-modulated ellipse 8–20 mm + ragged interior; 30% chance of a second lobe | 1–5 mm | horn-facing shoulder |
 
 All depths are **sampled uniformly** from the ranges above; the CSV supplies the
@@ -94,14 +104,14 @@ stays broadly sampled.
 Parameters are resolution independent, so the fine simulation mesh (λ/8) and
 the coarse ray-cast occluder (λ/2) render the *same* physical defect.
 
-**Crack and dent depth is sampled, not taken from the CSV.** Raw CSV depths
+**All depths are sampled, never taken raw from the CSV.** Raw CSV depths
 (crack median 7.8 mm, p95 10.8; dent median 2.5, p95 3.7) overshoot the
 measured ranges, so clipping them pinned 66% of cracks at exactly 6.9 mm and
 49% of dents at 2.5 mm — destroying depth diversity. The CSV supplies the
-across-defect profile *shape*; depth is drawn uniformly from the paper range.
-**Wear is deliberately left on its raw CSV depth** (up to ~12.5 mm) and is by
-far the strongest signal — mean intensity change ≈ 51% of peak, vs ≈ 15% for
-the other three classes. Expect it to be the easiest class to separate.
+across-defect profile *shape*; depth is drawn uniformly from the operating
+range (`config.py`, one block — wear included, `WEAR_DEPTH_RANGE`; its raw
+CSV depths reached ~12.5 mm, which only made the easiest class easier).
+Wear remains by far the strongest signal; expect it to separate first.
 
 Check any dataset with `python inspect_dataset.py [--root ...]`: it re-derives
 each stored sample's geometry from its seed and shows it next to the stored
@@ -111,36 +121,48 @@ field, plus parameter histograms.
 
 | File | Role |
 |---|---|
-| `rail3d/config.py` | ALL constants, paths, device profiles, per-sample seeds. Start here. |
+| `rail3d/config.py` | ALL constants, paths, device profiles, per-sample seeds, `dense_detector_centers()` (the ONLY detector-lattice source). Start here. |
 | `rail3d/sections.py` | 2D loop loading (adapted from `2Dmesh_from_vertex.py`, converted to mm, no import-time work) |
 | `rail3d/mesh3d.py` | swept mesh builder, per-class defect envelopes, augmentation |
 | `rail3d/field3d.py` | PO solver (port of Face3D `FieldCalculation.py`): `horn_to_plane` (psi0, cached once), `scattered_fields` (psi1/psi2, batched+chunked), `raycast_shadow_mask` |
-| `rail3d/optics3d.py` | `PropagatorRSFFT` (exact prop3d kernel via FFT), `PropagatorASM2D`, `SLM2D`, `MetaUnitSoft`, `SoftDetector2D`, `ONN3D` |
-| `rail3d/losses3d.py` | combined loss (margin + intact-compactness + CE + power floor + top-k + centroid margin + TV) and all metrics |
-| `rail3d/data3d.py` | shard IO (atomic writes), dataset assembly, stratified split (seed 0) |
-| `rail3d/train3d.py` | `TrainConfig`, `train()` (auto-resume, RNG-state checkpoints, pruning), `full_evaluation()` |
+| `rail3d/optics3d.py` | `PropagatorRSFFT` (exact prop3d kernel via FFT), `PropagatorASM2D`, `SLM2D`, `MetaUnitSoft` (blocked at λ≠8), `SoftDetector2D`, `ONN3D` |
+| `rail3d/losses3d.py` | combined loss (rank objective + capture reward; legacy margin path) and all metrics |
+| `rail3d/data3d.py` | shard IO (atomic writes), dataset assembly, stratified split (seed 0), **provenance**: `write/check_dataset_config`, `check_generation_root`, `describe_dataset`, `list_datasets` |
+| `rail3d/train3d.py` | `TrainConfig`, `train()` (auto-resume, RNG-state checkpoints, pruning + keep-index history, geometry-stamped checkpoints), `effective_config`, `full_evaluation()` |
 | `rail3d/viz_setup.py` | every review figure (setup diagram, meshes, fields, library, detectors, barcodes) — output to `data/figures/`, which is **gitignored**: regenerate with `python setup_diagram.py` (+ the validation scripts for V5/V7 plots) |
-| `generate_dataset_3d.py` | CLI generator (`--profile lab`, `--smoke`, `--status`; resumable shards) |
-| `tests_physics_3d.py` | V1–V4 automated gates (CPU-safe) |
+| `preflight.py` | **run before anything**: code freshness, GPU, CSVs, active geometry, every dataset with λ/date/commit, shard consistency, checkpoint stamps |
+| `generate_dataset_3d.py` | CLI generator (`--profile lab`, `--name`, `--smoke [--smoke-n N]`, `--status`; resumable shards; refuses mixed-geometry roots) |
+| `inspect_dataset.py` | review a dataset before/after generation (re-derives geometry from seeds; warns on provenance mismatch) |
+| `tests_physics_3d.py` | V0, V0b, V0c, V1–V4 automated gates (CPU-safe) |
 | `validation_3d.py` | V5–V7 gates + figures (includes the 2D Hankel reference solver) |
-| `v8_smoke_test.py` | V8 end-to-end + kill-and-resume bit-identity test |
+| `v8_smoke_test.py` | V8 end-to-end + kill-and-resume bit-identity + refusal/regression guards |
+| `lab_report.py` | the whole verification chain in one command → paste-able `data/generated/lab_report.md` |
+| `scan_geometry.py` | measure the observation plane (H, offset, aperture) before committing to a generation |
+| `sweep_detectors.py` | final detector count / MS→detector distance sweep (training-time only) |
+| `analyze_results.py` | where it succeeds and fails, per defect parameter; failure montage |
 | `setup_diagram.py` | renders the annotated scene diagram |
-| notebooks | `design_review_`, `validation_3d_`, `training_3d_ms_`, `training_3d_no_ms_` — all thin wrappers over the modules |
-| `rail3d/library_amp_fit.npy`, `library_phase_fit.npy` | Face3D meta-atom fits, copied byte-for-byte |
+| notebooks | `rail3D_pipeline` (the whole pipeline, narrated), `design_review_`, `validation_3d_`, `training_3d_ms_`, `training_3d_no_ms_` — all thin wrappers over the modules |
+| `rail3d/library_amp_fit.npy`, `library_phase_fit.npy` | Face3D meta-atom fits (8 mm band), copied byte-for-byte |
 
 ## 4. Conventions (do not change silently)
 
 - **Units: mm everywhere** (Face3D convention). The old 2D scripts used µm.
 - **Axes**: x across railhead, y along rail, z up; crown at z=0. 2D loop
   point (x2d, y2d) → (x = x2d, z = y2d − 180).
-- **Grid**: 60×30 cell-centered, dx = 4 mm, x ∈ ±120, y ∈ ±60, built with
-  `meshgrid(..., indexing='ij')`. Metasurface plane z = 160 mm; detector
-  plane 160 mm further.
-- Horn: Face3D "config 55" verbatim (27.4×21.9 aperture, 224 mm, 55° in x–z).
+- **Grid**: 60×30 cell-centered, dx = λ/2 = 2.5 mm, x ∈ ±75, y ∈ ±37.5, built
+  with `meshgrid(..., indexing='ij')`. Metasurface plane z = H_MS = 30λ =
+  150 mm; detector plane 20λ = 100 mm further (z = 250 mm). All of these are
+  DERIVED in config.py — quote config, not this line, if they ever disagree.
+- Horn: Face3D "config 55" **scaled ∝λ** (17.1×13.7 mm aperture at 140 mm,
+  55° in x–z) — keeps the feeding waveguide single-mode and the far-field
+  ratio, see finding 18.
 - Splits: stratified 80/10/10, seed 0 (comparable to the 2D notebooks).
 - Label order: crack=0, dent=1, wear=2, **shell=3** (`config.CLASS_NAMES`).
   `shell` is parametric — it has no entry in `config.DATASET_DIRS`; code that
   loads CSVs must branch on `cls in config.DATASET_DIRS`, not on `!= "intact"`.
+- **Detector lattices come from `config.dense_detector_centers()` and nowhere
+  else** (finding 17). A `SoftDetector2D` built for a non-default aperture
+  must be passed explicit centres.
 - **Device**: never a bare `"cuda"`. The `lab` profile is `cuda:auto` →
   `config.best_cuda_device()` ranks visible GPUs by (compute capability,
   VRAM) and takes the strongest, because the 5090's index differs per
@@ -148,16 +170,27 @@ field, plus parameter histograms.
 
 ## 5. Verification status (see `data/generated/verification_report.json`)
 
-**V0** rev.2 geometry: crack orientations, band confinement, seed
-reproducibility, λ/1 vs λ/4 render consistency 0.11 mm · **V1** solver ≡
-verbatim Face3D (1e-7) · **V2** FFT ≡ conv2d (1e-6) · **V3** ASM 0.13% ·
-**V4** sanity · **V5** 3D-vs-2D r=0.984 · **V6** shadow artifact 0.0 ·
-**V7** λ/8-vs-λ/16 defect-signal cosine · **V8** end-to-end + resume
-mismatch 0.0, `full_evaluation` covered, legacy objective guarded.
+Status at λ = 5 mm (the migration wavelength). "laptop" = verified on the
+MX250/CPU on 2026-08-17; "**pending 5090**" = must be (re)run on the lab GPU
+before the numbers are quotable — `lab_report.py` runs them all.
 
-Run all of them: `python tests_physics_3d.py` (V0–V4, CPU),
-`python validation_3d.py` (V5–V7, GPU), `python v8_smoke_test.py` (V8, needs
-`--smoke` generation first).
+| gate | what it proves | status at λ=5 |
+|---|---|---|
+| V0 | rev.2 defect geometry: orientations, bands, seeds, fine↔coarse render consistency (0.045 mm) | PASS (laptop CPU) |
+| V0b | redundancy pruning keeps the unique detector where variance keeps duplicates | PASS (laptop CPU) |
+| V0c | the staleness guards guard: lattice, capture clamp, dataset/root/checkpoint refusals | PASS (laptop CPU) |
+| V1 | chunked/batched solver ≡ verbatim Face3D (≤5e-7) | PASS (laptop CPU) |
+| V2 | FFT propagator ≡ conv2d (1.2e-6) | PASS (laptop CPU) |
+| V3 | ASM vs RS-FFT 0.10% — **identical to 6 s.f. with the λ=8 value**, confirming the scaled replica | PASS (laptop CPU) |
+| V4 | specular centroid on axis, power conservation 0.9998, mesh orientation | PASS (laptop CPU) |
+| V5 | 3D PO vs 2D Hankel reference (was r=0.976 at λ=8) | **pending 5090** |
+| V6 | ray-cast shadowing real-effect vs artifact bounds (2 mm hairlines are now 0.4λ — if `resolved` trips, that is a physics finding, not a bug) | **pending 5090** |
+| V7 | λ/8 vs λ/16 mesh convergence at the barcode level (through the FIXED 130-window probe — pre-fix numbers were measured through 54 collapsed windows) | **pending 5090** |
+| V8 | end-to-end training: separation grows, 130→8 pruning, keep-index-verified detector movement, no collapse, capture ∈ (0,1], bit-identical resume, legacy objective + variance criterion + stale-checkpoint refusal | **pending 5090** |
+
+Run them: `python tests_physics_3d.py` (V0–V4, CPU) · `python validation_3d.py`
+(V5–V7, GPU) · `python v8_smoke_test.py` (V8, needs `--smoke` generation
+first) · or everything at once with `python lab_report.py`.
 
 ## 6. Hard-won findings (READ BEFORE TOUCHING PHYSICS)
 
@@ -166,11 +199,13 @@ Run all of them: `python tests_physics_3d.py` (V0–V4, CPU),
    inverts the dark-foreground mask and silently produces a wrong reference
    (width 94 mm instead of 157.4 mm). Handled in `sections.read_binary_image`.
 2. **λ/2 meshes are NOT converged** for the PO integral (defect-signal cosine
-   0.66 vs fine mesh). Generation uses **λ/4** (`config.MESH_DS`), which
-   preserves the defect-signal *direction* (cosine 0.993 vs λ/12) with a
-   ~15% systematic magnitude bias shared by all samples. Raw complex-field L2
-   does not converge at any practical facet size (glint speckle) — judge
-   fidelity at the **detector-barcode level**, not the field level.
+   0.66 vs fine mesh at λ=8). Generation uses **λ/8** (`config.MESH_DS`;
+   hairline cracks forced the move from the earlier λ/4, whose measured
+   numbers — cosine 0.993 vs λ/12, ~15% shared magnitude bias — are kept here
+   as history). V7 re-checks λ/8 vs λ/16 at the active wavelength. Raw
+   complex-field L2 does not converge at any practical facet size (glint
+   speckle) — judge fidelity at the **detector-barcode level**, not the field
+   level.
 3. **Ray-cast shadowing needs `min_t`** (ignore hits < 3 mm along the ray):
    facet chords sag inside the true convex surface, so horizon-grazing rays
    clip their own neighboring facets. Without it, ~4% of faces (terminator
@@ -216,40 +251,69 @@ Run all of them: `python tests_physics_3d.py` (V0–V4, CPU),
 13. **Variance-based detector pruning is only valid for SPARSE layouts.** Face3D's
     6×6 grid covered 7.2% of its aperture with 30–37 mm gaps, so windows were
     near-independent and "lowest variance" really did mean "least informative".
-    A dense start (13×10 = 92% coverage, windows overlapping by ~1 mm) breaks
-    that: neighbours see almost the same light and therefore have almost the
-    same variance, so the ranking cannot separate "duplicate of my neighbour"
-    from "uniquely informative". Demonstrated failure: with three bright
-    duplicates and one quiet unique detector, pruning to 3 keeps *two duplicates
-    and discards the unique signal*. Default is now
-    `prune_criterion="redundancy"` — greedy backward elimination valuing each
-    detector by `std × (1 − max|corr| to survivors)` — which keeps the unique
-    one and drops the duplicates, and empirically ends with detectors ~2×
-    further apart (12.6 mm vs 6.6 mm min separation). `"variance"` is retained
-    for comparison and guarded by V8.
-14. **Never anneal the detector τ below the pixel pitch.** Windows are
-    18.2 × 11.2 mm = 4.5 × 2.8 px at dx = 4 mm (13 of 1800 pixels). The old
-    `tau_end = w/16 = 1.14 mm` is far under one pixel, so the soft mask could no
-    longer represent sub-pixel motion and position gradients died partway
-    through the anneal. Now `w/8 = 2.3 mm` (~0.6 px), already at the useful
-    limit — detector placement cannot be learned more finely than the field is
-    sampled.
+    A dense start (13×10 = 92% coverage, windows overlapping by well under a
+    mm) breaks that: neighbours see almost the same light and therefore have
+    almost the same variance, so the ranking cannot separate "duplicate of my
+    neighbour" from "uniquely informative". Demonstrated failure (the **V0b**
+    gate): with three bright duplicates and one quiet unique detector, pruning
+    to 3 by variance keeps *two duplicates and discards the unique signal*.
+    Default is `prune_criterion="redundancy"` — greedy backward elimination
+    valuing each detector by `std × (1 − max|corr| to survivors)` — which
+    keeps the unique one and drops the duplicates, and empirically ends with
+    detectors ~2× further apart. `"variance"` is retained for comparison and
+    exercised by a real V8 training run.
+14. **Never anneal the detector τ below the pixel pitch** — detector placement
+    cannot be learned more finely than the field is sampled. The old
+    `tau_end = w/16` froze position gradients mid-anneal, and even `w/8` is
+    sub-pixel on the SHORT window axis (w_y/8 < dx on both wavelengths' grids),
+    which the original fix missed by reasoning only about x. `_axis_soft` now
+    floors τ at **0.5·dx per axis**; `tau_end = w/8` remains the schedule for
+    the long axis.
 15. **The power term is a floor plus a concentration reward.**
     `power_floor_loss` is a hinge that goes flat once satisfied, so nothing used
     to push the metasurface to route light *onto* the surviving detectors —
-    which is what receiver SNR depends on. `W_CAPTURE` adds a reward on the
-    captured-power fraction. It is near-inactive at the dense start (130 tiling
-    windows already catch ~98% of the plane) and becomes operative after pruning
-    to a handful. Set `W_CAPTURE = 0.0` to reproduce the earlier objective;
-    results are **not comparable across this change**.
+    which is what receiver SNR depends on. `TrainConfig.w_capture` (default
+    0.2) rewards the captured-power fraction — near-inactive at the dense
+    start (the tiling windows already catch nearly everything), operative after
+    pruning to a handful. The fraction is **clamped to ≤1 per sample**:
+    overlapping windows double-count shared pixels, and unclamped the term
+    went negative and *rewarded* stacking detectors on one spot. Set
+    `w_capture=0.0` to reproduce the earlier objective; results are **not
+    comparable across this change**. The floor itself is **recomputed after
+    every prune** — frozen at the dense-start value it saturated permanently
+    and double-counted the capture term.
 16. **Ray-cast shadowing became active once the defect ranges widened.** With
     the earlier 1.5–3 mm hairline cracks the λ/2 (4 mm) occluder mesh had no
     crack in it at all and V6's `worst_rel_l2` was exactly 0.0 — occluder
     resolution, not physics. With the current ranges (cracks 2–5 mm wide ×
-    2–10 mm deep, dents to 8 mm) the occluder resolves them and V6 measures a
-    real **4.3%** effect. Both figures are recorded per run; if the geometry is
-    ever made finer again, re-check `crack_shadow_with_resolved_occluder`
-    (the λ/8-occluder control) before concluding shadowing is negligible.
+    2–10 mm deep, dents to 8 mm) the occluder resolves them and V6 measured a
+    real **4.3%** effect at λ=8. At λ=5 the occluder is finer (2.5 mm) and the
+    defects are relatively larger (a hairline is 0.4–1λ), so expect the effect
+    to GROW — re-check `crack_shadow_with_resolved_occluder` (the λ/8-occluder
+    control) whenever V6's numbers move.
+17. **Detector lattices must come from `config.dense_detector_centers()` and
+    nowhere else.** Its predecessor (`detector_grid_centers`, a fixed 36 mm
+    pitch) silently emitted centres OUTSIDE the aperture once the dense
+    DET_GRID landed; `SoftDetector2D`'s clamp then collapsed 130 windows onto
+    54 unique spots (min separation 0.0) in every default-constructed model —
+    the V7 probe, the setup diagram, the detector/barcode figures and
+    lab_report's separability block, while training itself was unaffected.
+    Three independent copies of the lattice formula had grown; there is now
+    one, and V0c asserts its windows sit inside the aperture at the exact
+    aperture/(g+1) pitch.
+18. **The λ migration is a scaled replica, and the guards enforce it.**
+    Everything Face3D chose in wavelengths scales with λ (DX, aperture, H_MS =
+    30λ, MS→det = 20λ, DIST_ANT = 28λ, the horn SIZE_ANT, DET_SIZE); the rail,
+    defect ranges, SEG_LEN, mounting tolerances (DET_JITTER_MM, roll/jitter
+    augmentation), raycast `min_t` and the 4 mm shell-roughness lattice are
+    physical and do NOT scale. Consequence: every Fresnel number and the
+    speckle-grains-per-window ratio are preserved exactly (V3's error matches
+    the λ=8 value to 6 significant figures), while defect/λ grows 8/5 = 1.6×.
+    A same-grid λ change is INVISIBLE to tensor shapes, so provenance carries
+    it instead: datasets record 36 geometry keys (`data3d.PROVENANCE_KEYS`),
+    checkpoints carry a geometry stamp, the generator refuses mixed roots, and
+    `surface="metaunit"` refuses λ ≠ LIBRARY_WVL outright (the 8 mm meta-atom
+    fits do not transfer, and 3.8 mm pillars cannot fit a 2.5 mm cell).
 
 ## 6b. Objective & metrics (rev. 2)
 
@@ -262,7 +326,8 @@ Loss terms (`losses3d.combined_loss`):
 | `hardest` | same hinge on the worst 10% of pairs |
 | `intact` | mean intact cos-gap → keeps the intact cluster tight |
 | `class` | cross-entropy on normalized barcodes (4 classes) |
-| `power` | detected-power floor (ported from the 2D notebook) |
+| `power` | detected-power floor — a hinge, flat once satisfied (recomputed after each prune) |
+| `capture` | `w_capture · (1 − captured fraction)` — routes light ONTO the surviving windows (receiver SNR); clamped, see finding 15 |
 | `centroid` | class-centroid separation on unit barcodes |
 | `tv` | total variation on the phase / pillar-width map (fabricability) |
 
@@ -273,25 +338,100 @@ ROC / noise / alignment curves in `full_evaluation`.
 
 ## 7. Current state / what remains
 
-Done: all modules, all verification, smoke dataset
-(`data/generated/smoke/`), design/validation/training notebooks, SETUP_LAB.md.
-Everything committed on branch **`3D_railhead_upgrade`**.
+Done and committed on **`3D_railhead_upgrade`** (2026-08-17): all modules;
+the detector-lattice bug fix + training-hazard fixes; the λ=5 scaled-replica
+migration with its provenance/checkpoint/generator/metaunit guards; V0, V0b,
+V0c, V1–V4 green at λ=5 on the laptop. All λ=8 datasets and checkpoints on
+disk are *refused, not deleted* — they remain the record.
 
-**Remaining (on the lab 5090, in order — full detail in `SETUP_LAB.md`):**
-0. Copy the three `data_defect_*2` CSV folders (~2 GB) to the workstation and
-   point `RAILDEFECT_DATA_DIR` at their parent — needed by V5–V8 and all
-   generation, not just generation. `git pull` before running anything.
-1. `SETUP_LAB.md` §1–4: venv (cu128 torch, never `pip -U`), then
-   `tests_physics_3d.py` (V1–V4, CSV-free) → `validation_3d.py` (V5–V7) →
-   `--smoke` generation → `v8_smoke_test.py`.
-2. `python generate_dataset_3d.py --profile lab` (full 5000/class + 512
-   intact, ≲1 h, resumable).
-3. Run `training_3d_ms_notebook.ipynb` (SLM run, then MetaUnit run).
-4. Run `training_3d_no_ms_notebook.ipynb` (baseline + comparison table).
-5. Optional: λ/8 regeneration (`config.MESH_DS = WVL/8`), 2-layer experiment
-   (`n_layer=2, layer_distances=(d12, 160)`).
+**Remaining (on the lab 5090, in order — the exact commands are SETUP_LAB.md
+§B "λ=5 bring-up runbook"):**
+1. `git pull` → `python preflight.py` — expect the λ=8 datasets to be flagged
+   stale (that is the guard working) and exit 1 until a λ=5 set exists.
+2. One guard demo: `generate_dataset_3d.py --smoke` against the old smoke root
+   must REFUSE; then delete that root.
+3. `python lab_report.py` — V0–V8 including the **pending** V5–V7 at λ=5 plus
+   a fresh smoke set with measured samples/s (~10–15 min).
+4. `python scan_geometry.py` — the H table in config.py was measured at λ=8;
+   the rig scaled but the defects did not, so confirm 30λ still wins.
+5. Send back `lab_report.md`, `verification_report.json`,
+   `geometry_scan.json`, the refusal logs and `setup_diagram.png` for review
+   **before** committing to the full generation.
+6. After sign-off: `generate_dataset_3d.py --profile lab --name L5_H150_v1`
+   (~1.5–2 h estimated at 2.56× the λ=8 face count; resumable) →
+   `inspect_dataset.py` → train (SLM + no-MS; metaunit is blocked until a
+   60 GHz library exists) → `analyze_results.py` → `sweep_detectors.py`.
+   Geometry exploration: `--smoke --smoke-n 60-80 --name <tag>` per candidate.
 
-Known accepted limitations: single-frequency (no dispersion); shadowing is
-source-side only (rail→MS occlusion not ray-cast — matches the shallow-defect
-regime); λ/4 mesh magnitude bias (see 6.2); detector count/positions restart
-Adam moments on prune.
+## 8. Simplifications & limitations (what this simulation is NOT)
+
+Consolidated 2026-08-17. Each is deliberate; the point is that nobody should
+discover them by surprise. Grouped by where they live:
+
+**Electromagnetics / material**
+- **Scalar fields** — no polarization, no cross-pol, no vector diffraction.
+- **PEC reflection** (r = −1 hard-coded in field3d): no conductivity, loss,
+  rust or contamination layer, no Fresnel angle dependence.
+- **≤ 2 bounces** (psi1 + psi2): no higher-order multiple scattering, no
+  cavity resonance inside a crack.
+- **Single tone** — no bandwidth, dispersion or FMCW modelling. (60 GHz sits
+  on the O₂ absorption line, ~15 dB/km — negligible at 0.4 m, noted for
+  completeness.)
+- **Idealized horn**: single-mode cosine aperture field with quadratic phase;
+  no edge diffraction, no measured pattern. The λ-scaled SIZE_ANT keeps the
+  waveguide's modal content identical to the validated λ=8 model.
+- **Binary face visibility, no receive-cosine** (finding 4) — faithful to the
+  validated Face3D formulation, discontinuous at the terminator.
+
+**Surface & defect geometry**
+- One 2D cross-section **swept uniformly** along y: no joints, welds,
+  corrugation, curvature, second rail, sleepers or ballast.
+- The intact section is smoothed (31-point moving average) and every defect
+  loop is width-matched to it — **no surface roughness model at all**; every
+  facet is a specular mirror. Defects are the ONLY texture.
+- Depth fields are **normal displacements with d ≥ 0**: no undercut, no
+  re-entrant crack walls, no subsurface/internal defects, no material
+  build-up (lipping).
+- Fixed mesh topology (batching requirement) — no adaptive refinement around
+  a defect. Region bands are heuristics (`mesh3d.region_band`); the CSV
+  baseline correction assumes ≥20% of the arc is undamaged.
+- Single defect per sample; classes are mutually exclusive by construction.
+
+**Shadowing**
+- **Source-side only** (rail→horn ray-cast); rail→plane occlusion is not
+  tested — matches the shallow-defect regime.
+- Occluder mesh is λ/2; `min_t = 3 mm` is a physical grazing guard that does
+  NOT scale with λ (finding 3).
+
+**Sensing & noise**
+- Detectors are **ideal rectangular power integrators**: unity quantum
+  efficiency, no angular acceptance pattern, no crosstalk or mutual coupling,
+  perfectly coplanar. Nothing in the loss forbids overlap (the capture clamp
+  removes the *reward* for it; `min_separation` reports collapse).
+- The noise model is **relative** (multiplicative 0.5% + additive 1e-5 on the
+  RMS-normalized field): absolute received power is discarded by the global
+  RMS normalization, so configurations that collect less light are not
+  penalized the way real hardware would penalize them (why the capture term
+  exists, and why scan_geometry reports absolute energy separately).
+- No environmental clutter and **no "unusual intact" negatives** (grease,
+  ballast dust, joints) — false-alarm numbers are against clean intact rail
+  only.
+- The same source CSV cross-section can appear in train and test with
+  different sampled depths (split is by sample, not by CSV).
+
+**Training**
+- Adam moments restart at every prune (detector/head tensors are rebuilt).
+- Loss weights other than `w_capture` are module constants in losses3d, not
+  recorded per run.
+- `torch.load(weights_only=False)` on local shard/checkpoint files — fine for
+  trusted local data, not hardened against a malicious file.
+
+**Meta-atoms**
+- The library is an 8 mm-band fit at normal incidence, per-pixel polynomials,
+  no inter-pillar coupling — and is **hard-blocked** at λ≠8 until a 60 GHz
+  library is fitted. SLM2D is the idealized (lossless, unquantized) upper
+  bound; "none" is the no-MS baseline.
+
+Physical tolerances kept in mm (DET_JITTER_MM = 3, ±4 mm placement jitter,
+±2° roll) are relatively LARGER at λ=5 — the augmentation is harsher, which
+is honest hardware realism, not an oversight.
