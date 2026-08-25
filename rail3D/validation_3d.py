@@ -175,7 +175,7 @@ def v5_2d_3d_consistency(device: torch.device) -> dict:
 # ---------------------------------------------------------------------------
 def _solve_sample(section, class_name, sample_idx, device, args,
                   ds=None, shadow=True, roll=0.0, jit=(0.0, 0.0),
-                  params=None):
+                  params=None, min_t=None, occ_ds=None):
     """Solve one sample's psi1 with the rev.2 depth-field geometry.
 
     ``params=None`` draws the defect from the sample seed (CSV classes load
@@ -196,19 +196,20 @@ def _solve_sample(section, class_name, sample_idx, device, args,
                                   slice_ds=ds, arc_ds=ds, roll_deg=roll, jitter_xz=jit)
     kw = {}
     if shadow:
+        occ = occ_ds or config.OCCLUDER_DS
         v_occ, f_occ = mesh3d.sweep_rail_mesh(section, defect_params=params,
-                                              slice_ds=config.OCCLUDER_DS,
-                                              arc_ds=config.OCCLUDER_DS,
+                                              slice_ds=occ, arc_ds=occ,
                                               roll_deg=roll, jitter_xz=jit)
         kw = {"shadow": "raycast",
-              "shadow_occluders": (v_occ.to(device), f_occ.to(device))}
+              "shadow_occluders": (v_occ.to(device), f_occ.to(device)),
+              "shadow_min_t": config.SHADOW_MIN_T if min_t is None else min_t}
     psi, _ = field3d.scattered_fields(v.to(device), f.to(device), *args,
                                       chunk_faces=2048, compute_psi2=False, **kw)
     return psi, params
 
 
 def v6_shadowing(device: torch.device, n_per_class: int = 2) -> dict:
-    """Shadowing at the generation config (λ/8 mesh, λ/2 occluders, min_t=3).
+    """Shadowing at the generation config (λ/8 mesh, λ/2 occluders, config.SHADOW_MIN_T).
 
     * effect size: raycast-vs-none rel L2 on deep samples of all four classes
       (informational — crack craters give a real few-% effect);
@@ -255,17 +256,120 @@ def v6_shadowing(device: torch.device, n_per_class: int = 2) -> dict:
                                         chunk_faces=2048, compute_psi2=False)
     with_sh, _ = field3d.scattered_fields(
         v_f.to(device), f_f.to(device), *args, chunk_faces=2048, compute_psi2=False,
-        shadow="raycast", shadow_occluders=(v_f.to(device), f_f.to(device)))
+        shadow="raycast", shadow_occluders=(v_f.to(device), f_f.to(device)),
+        shadow_min_t=config.SHADOW_MIN_T)
     resolved = float((with_sh - no_sh).norm() / no_sh.norm())
 
     return {"worst_rel_l2": worst, "samples": per_sample,
             "intact_augmented_artifact": artifact_worst,
             "crack_shadow_with_resolved_occluder": resolved,
             "generation_shadow_mode": config.SHADOW_MODE,
+            "shadow_min_t": config.SHADOW_MIN_T,
             "note": ("lambda/2 occluders cannot resolve hairline cracks, so the "
                      "production shadow test is inert for them; the resolved-occluder "
                      "figure is the magnitude being omitted (accepted if < 0.02)"),
             "pass": artifact_worst < 0.03 and resolved < 0.02}
+
+
+# ---------------------------------------------------------------------------
+# V6b — min_t sweep (decides config.SHADOW_MIN_T; not a gate)
+# ---------------------------------------------------------------------------
+def v6b_min_t_sweep(device: torch.device, values, n_intact: int = 3) -> dict:
+    """Field-level cost/benefit of the ray-cast self-hit guard.
+
+    ``min_t`` exists to kill a discretization artifact (facet chords sag
+    inside the true convex surface, so grazing rays clip their own
+    neighbours). Set it too high and it also discards REAL crater-wall
+    shadowing. A geometric probe of hit distances puts the artifact at
+    t <= 0.04 mm and real occluders at t >= 0.3 mm, but the decision has to be
+    made on the FIELD, which is what this sweep measures:
+
+      artifact  : |psi(shadow) - psi(no shadow)| / |psi| on AUGMENTED INTACT
+                  meshes. A convex rail cannot shadow itself, so every bit of
+                  this is error. It must stay under V6's 3% bound; the best
+                  min_t is the SMALLEST value that keeps it flat.
+      crack_eff : the same ratio on a deep crack at the production (lambda/2)
+                  occluder -- real physics we want to KEEP.
+      resolved  : the same crack against a generation-resolution occluder --
+                  the magnitude the production occluder is omitting.
+
+    Reported, never asserted: lowering min_t changes the physics, so it is a
+    provenance key and a deliberate decision, not something a gate should
+    flip automatically.
+    """
+    section = sections.load_reference_section()
+    X, Y = config.plane_grid(device)
+    args = (X, Y, config.H_MS, config.WVL, config.THETA_INC,
+            config.SIZE_ANT, config.DIST_ANT, config.RESOL_ANT)
+
+    intact_params = {"class": "intact"}
+    augs = [(2.0, (4.0, -4.0)), (-2.0, (-4.0, 4.0)), (1.0, (0.0, 0.0))][:n_intact]
+
+    # unshadowed baselines, computed once
+    base_intact = [_solve_sample(section, "intact", 0, device, args, shadow=False,
+                                 roll=r, jit=j, params=intact_params)[0]
+                   for r, j in augs]
+    crack_deep, crack_params = _solve_sample(section, "crack", 0, device, args,
+                                             shadow=False)
+
+    rows = []
+    for mt in values:
+        art = 0.0
+        for (r, j), b in zip(augs, base_intact):
+            a, _ = _solve_sample(section, "intact", 0, device, args, shadow=True,
+                                 roll=r, jit=j, params=intact_params, min_t=mt)
+            art = max(art, float((a - b).norm() / b.norm()))
+        c_prod, _ = _solve_sample(section, "crack", 0, device, args, shadow=True,
+                                  params=crack_params, min_t=mt)
+        c_res, _ = _solve_sample(section, "crack", 0, device, args, shadow=True,
+                                 params=crack_params, min_t=mt,
+                                 occ_ds=config.MESH_DS)
+        rows.append({
+            "min_t_mm": float(mt),
+            "min_t_over_facet": float(mt / config.OCCLUDER_DS),
+            "intact_artifact": art,
+            "crack_effect_production_occluder": float((c_prod - crack_deep).norm()
+                                                      / crack_deep.norm()),
+            "crack_effect_resolved_occluder": float((c_res - crack_deep).norm()
+                                                    / crack_deep.norm()),
+            "artifact_ok": art < 0.03,
+        })
+        print(f"    min_t {mt:7.3f} mm ({rows[-1]['min_t_over_facet']:5.2f} facet) | "
+              f"intact artifact {art:.4f} {'OK ' if art < 0.03 else 'BAD'} | "
+              f"crack effect {rows[-1]['crack_effect_production_occluder']:.4f} "
+              f"(resolved {rows[-1]['crack_effect_resolved_occluder']:.4f})")
+
+    safe = [r for r in rows if r["artifact_ok"]]
+    rec = min(safe, key=lambda r: r["min_t_mm"]) if safe else None
+
+    fig, ax = plt.subplots(figsize=(7.6, 4.2))
+    mts = [r["min_t_mm"] for r in rows]
+    ax.semilogx(mts, [r["intact_artifact"] for r in rows], "o-", color="tab:red",
+                label="intact artifact (must stay < 0.03)")
+    ax.semilogx(mts, [r["crack_effect_production_occluder"] for r in rows], "s-",
+                color="tab:blue", label="crack shadow, production occluder")
+    ax.semilogx(mts, [r["crack_effect_resolved_occluder"] for r in rows], "^--",
+                color="tab:green", label="crack shadow, resolved occluder")
+    ax.axhline(0.03, color="tab:red", ls=":", lw=1)
+    ax.axvline(config.SHADOW_MIN_T, color="k", ls="--", lw=1,
+               label=f"current SHADOW_MIN_T = {config.SHADOW_MIN_T} mm")
+    if rec:
+        ax.axvline(rec["min_t_mm"], color="tab:orange", ls="-.", lw=1.2,
+                   label=f"smallest artifact-safe = {rec['min_t_mm']} mm")
+    ax.set(xlabel="min_t (mm along the ray)", ylabel="relative L2 field change",
+           title="V6b: ray-cast guard — artifact suppressed vs real shadowing kept")
+    ax.legend(fontsize=8)
+    ax.grid(alpha=0.3, which="both")
+    fig.tight_layout()
+    fig.savefig(config.FIGURE_DIR / "v6b_min_t_sweep.png", dpi=200)
+
+    return {"rows": rows, "current": config.SHADOW_MIN_T,
+            "recommended_smallest_safe": rec["min_t_mm"] if rec else None,
+            "occluder_ds": config.OCCLUDER_DS,
+            "note": ("informational: pick the SMALLEST min_t whose intact artifact "
+                     "is still flat/under 0.03, then set config.SHADOW_MIN_T and "
+                     "regenerate into a NEW --name root (it is a provenance key)"),
+            "pass": True}
 
 
 # ---------------------------------------------------------------------------
@@ -331,6 +435,11 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--device", default=None,
                         help="e.g. cuda:0; default = RAIL3D_DEVICE, else strongest CUDA card")
+    parser.add_argument("--min-t", type=float, nargs="*", default=None,
+                        metavar="MM",
+                        help="run the V6b ray-cast guard sweep over these min_t "
+                             "values (mm) INSTEAD of the V5-V7 gates, e.g. "
+                             "--min-t 3.0 1.0 0.3 0.125 0.05")
     args = parser.parse_args()
     device = torch.device(args.device) if args.device else config.get_device("lab")
     print(f"[rail3d] V5-V7 running on {device}"
@@ -341,6 +450,20 @@ def main() -> int:
     report = {}
     if REPORT_PATH.exists():
         report = json.loads(REPORT_PATH.read_text())
+
+    if args.min_t:
+        print(f"  V6b min_t sweep (occluder facet {config.OCCLUDER_DS} mm, "
+              f"current SHADOW_MIN_T {config.SHADOW_MIN_T} mm)")
+        t0 = time.time()
+        res = v6b_min_t_sweep(device, sorted(args.min_t, reverse=True))
+        res["seconds"] = round(time.time() - t0, 2)
+        report["V6b_min_t_sweep"] = res
+        REPORT_PATH.write_text(json.dumps(report, indent=2))
+        print(f"\n  smallest artifact-safe min_t: {res['recommended_smallest_safe']} mm "
+              f"(current {config.SHADOW_MIN_T} mm)")
+        print(f"  figure -> {config.FIGURE_DIR / 'v6b_min_t_sweep.png'}")
+        print(f"report -> {REPORT_PATH}")
+        return 0
 
     ok = True
     for name, fn in [("V5_2d_3d_consistency", v5_2d_3d_consistency),

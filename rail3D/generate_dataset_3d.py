@@ -133,6 +133,7 @@ def generate_class(
                 chunk_faces=profile.chunk_faces,
                 shadow=config.SHADOW_MODE,
                 shadow_occluders=(v_occ_b, faces_coarse.to(device)),
+                shadow_min_t=config.SHADOW_MIN_T,
             )
             psis.append(torch.stack([psi1, psi2], dim=-1).cpu())
             metas.extend(batch_meta)

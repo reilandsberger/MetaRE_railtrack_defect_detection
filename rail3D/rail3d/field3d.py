@@ -148,9 +148,15 @@ def raycast_shadow_mask(
     ``min_t`` (mm) ignores intersections closer than this along the ray:
     facet chords sag inside the true convex surface, so horizon-grazing rays
     otherwise clip their own neighboring facets (verified against the 2D
-    line-of-sight test, which shows those rays are NOT blocked). Real
-    occluders — crater walls, the crown seen from the far side — sit farther
-    than a few facet lengths from the ray origin.
+    line-of-sight test, which shows those rays are NOT blocked).
+
+    The artifact lives at the chord-sagitta scale, d^2/(8R) — MEASURED at
+    t <= 0.021 mm (lam=5) / 0.037 mm (lam=8) on the production geometry, about
+    1/100 of a facet — while real crater walls sit at t >= 0.3 mm. Anything
+    much above ~0.3 mm therefore discards real physics as well as the
+    artifact. This module stays config-free (every physical quantity arrives
+    as an argument); callers pass ``config.SHADOW_MIN_T``, and the V0c gate
+    asserts this default still equals it so the two cannot drift.
     """
     device = v_occ.device
     tri = v_occ[f_occ]                             # (Nt, 3, 3)
@@ -210,6 +216,7 @@ def scattered_fields(
     chunk_faces: int = 1024,
     shadow: str = "none",
     shadow_occluders: tuple[torch.Tensor, torch.Tensor] | None = None,
+    shadow_min_t: float | None = None,
     compute_psi2: bool = True,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """psi1 (single bounce) and psi2 (double bounce) on the observation plane.
@@ -218,6 +225,9 @@ def scattered_fields(
     ``chunk_faces`` is the total number of face-slots processed per chunk
     *across the batch* (the per-chunk face count is chunk_faces // B), so
     memory stays bounded regardless of batch size.
+    ``shadow_min_t`` overrides the ray-cast self-hit guard (mm along the ray);
+    None keeps ``raycast_shadow_mask``'s default. Callers that follow the
+    project config pass ``config.SHADOW_MIN_T``.
     Returns psi1, psi2 with shape (B, r1, r2) complex64 (psi2 zeros when
     compute_psi2=False).
     """
@@ -252,8 +262,9 @@ def scattered_fields(
                 v_occ_b = v_occ[b] if v_occ.dim() == 3 else v_occ
             else:
                 v_occ_b, f_occ = v[b], f
+            kw_mt = {} if shadow_min_t is None else {"min_t": shadow_min_t}
             los = raycast_shadow_mask(v_occ_b, f_occ, center[b], src_point,
-                                      ray_mask=left[b])
+                                      ray_mask=left[b], **kw_mt)
             vis1[b] = vis1[b] * los
             vis_ant[b] = vis_ant[b] * los
     elif shadow != "none":

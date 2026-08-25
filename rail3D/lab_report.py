@@ -171,6 +171,25 @@ def main() -> int:
     A("```")
     A("")
 
+    # ---- wavefront version comparison ------------------------------------
+    A("## Wavefront comparison across simulation versions")
+    A("(one crack sample solved every way; full numbers in "
+      "data/generated/wavefront_comparison.json, figures in data/figures/)")
+    A("```")
+    out, dt, ok = run([PY, "compare_wavefronts.py", "--profile", args.profile])
+    started = False
+    for ln in out.splitlines():
+        if ln.strip().startswith("version"):
+            started = True
+        if started and ln.strip():
+            A(ln.rstrip())
+    if not ok:
+        A("comparison FAILED:")
+        A(out[-800:])
+    A(f"({dt:.0f}s)")
+    A("```")
+    A("")
+
     # ---- V8 --------------------------------------------------------------
     A("## V8 end-to-end (rank objective, 30 epochs on the smoke set)")
     A("```")

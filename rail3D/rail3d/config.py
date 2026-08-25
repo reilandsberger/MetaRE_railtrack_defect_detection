@@ -150,6 +150,26 @@ MESH_DS = WVL / 8               # slice/arc sampling for dataset generation
 OCCLUDER_DS = WVL / 2           # coarse occluder mesh for the ray-cast shadow test
 SHADOW_MODE = "raycast"
 
+# Ray-cast self-shadow guard: intersections closer than this (mm, measured
+# ALONG the ray from the face centroid) are ignored. It exists because facet
+# chords sag inside the true convex surface, so horizon-grazing rays clip their
+# own neighbours -- without any guard ~4% of terminator faces are falsely
+# blocked and the field moves 30-60% (README finding 3).
+#
+# MEASURED (2026-08-17, probe over the production geometry, min_t disabled):
+#   artifact population (intact rail, every hit is a lie)  t <= 0.021 mm (lam=5)
+#                                                          t <= 0.037 mm (lam=8)
+#   real crater-wall occlusion (cracks/dents/shells)       t >= 0.3 mm, up to 9 mm
+# The two populations are cleanly separated, and the artifact scale is the
+# chord sagitta d^2/(8R) -- ~1/100 of a facet, NOT "a few facet lengths".
+# 3.0 mm therefore also discards most REAL self-shadowing (for some samples all
+# of it). A value in (0.05, 0.3) mm removes every artifact and keeps every real
+# occluder. The default is held at the historical 3.0 until the V6 sweep
+# (`python validation_3d.py --min-t ...`) confirms the field-level artifact
+# metric stays flat -- changing it changes the physics, so any dataset
+# generated across the change is incomparable (it is a PROVENANCE key).
+SHADOW_MIN_T = 3.0
+
 # --- Defect geometry parameters (rev. 2: per-point depth fields d(s, y)) ---
 # Baseline ranges came from laser-scan measurements -- Ye et al. 2018 Table 1
 # (cracks 27-31 mm long x ~2 mm wide x 3-4.3 mm deep at 45 deg; squats 16-20 mm

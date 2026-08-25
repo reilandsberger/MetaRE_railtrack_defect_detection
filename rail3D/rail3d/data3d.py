@@ -76,7 +76,7 @@ def load_class_fields(class_name: str, root: Path | None = None) -> tuple[torch.
 # Datasets written before the expansion fail the check (missing keys), which
 # is correct: they are λ=8 sets and cannot be used at λ=5 anyway.
 PROVENANCE_KEYS = ("WVL", "DX", "NX", "NY", "H_MS", "PLANE_X_CENTER", "SEG_LEN",
-                   "MESH_DS", "OCCLUDER_DS", "SHADOW_MODE", "THETA_INC",
+                   "MESH_DS", "OCCLUDER_DS", "SHADOW_MODE", "SHADOW_MIN_T", "THETA_INC",
                    "DIST_ANT", "CLASS_NAMES",
                    "SIZE_ANT", "RESOL_ANT", "Z_CUT", "RAIL_HEIGHT",
                    "N_BOUNDARY_VERTICES", "ROLL_DEG_STD", "JITTER_XZ_STD",

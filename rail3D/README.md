@@ -137,6 +137,7 @@ field, plus parameter histograms.
 | `validation_3d.py` | V5–V7 gates + figures (includes the 2D Hankel reference solver) |
 | `v8_smoke_test.py` | V8 end-to-end + kill-and-resume bit-identity + refusal/regression guards |
 | `lab_report.py` | the whole verification chain in one command → paste-able `data/generated/lab_report.md` |
+| `compare_wavefronts.py` | one sample solved every way — λ=8 vs λ=5, physics terms, shadow guard, mesh — as amplitude/phase figures + metrics; exports an FDTD-ready case and accepts external solver fields back |
 | `scan_geometry.py` | measure the observation plane (H, offset, aperture) before committing to a generation |
 | `sweep_detectors.py` | final detector count / MS→detector distance sweep (training-time only) |
 | `analyze_results.py` | where it succeeds and fails, per defect parameter; failure montage |
@@ -185,6 +186,7 @@ before the numbers are quotable — `lab_report.py` runs them all.
 | V4 | specular centroid on axis, power conservation 0.9998, mesh orientation | PASS (laptop CPU) |
 | V5 | 3D PO vs 2D Hankel reference (was r=0.976 at λ=8) | **pending 5090** |
 | V6 | ray-cast shadowing real-effect vs artifact bounds (2 mm hairlines are now 0.4λ — if `resolved` trips, that is a physics finding, not a bug) | **pending 5090** |
+| V6b | *(sweep, not a gate)* the ray-cast guard's cost/benefit vs `min_t`: artifact suppressed on intact meshes against real crack shadowing kept | run on demand (`--min-t`) |
 | V7 | λ/8 vs λ/16 mesh convergence at the barcode level (through the FIXED 130-window probe — pre-fix numbers were measured through 54 collapsed windows) | **pending 5090** |
 | V8 | end-to-end training: separation grows, 130→8 pruning, keep-index-verified detector movement, no collapse, capture ∈ (0,1], bit-identical resume, legacy objective + variance criterion + stale-checkpoint refusal | **pending 5090** |
 
@@ -206,13 +208,32 @@ first) · or everything at once with `python lab_report.py`.
    complex-field L2 does not converge at any practical facet size (glint
    speckle) — judge fidelity at the **detector-barcode level**, not the field
    level.
-3. **Ray-cast shadowing needs `min_t`** (ignore hits < 3 mm along the ray):
-   facet chords sag inside the true convex surface, so horizon-grazing rays
-   clip their own neighboring facets. Without it, ~4% of faces (terminator
-   band) get falsely blocked and the field changes by ~30–60% — the 2D
+3. **Ray-cast shadowing needs a `min_t` guard — but a SMALL one.** Facet
+   chords sag inside the true convex surface, so horizon-grazing rays clip
+   their own neighbouring facets. Without any guard ~4% of faces (terminator
+   band) are falsely blocked and the field changes ~30–60%, while the 2D
    line-of-sight ground truth says the real intact-rail shadow effect is ~1%.
-   Real crack-crater shadowing (~2–14% on the deepest cracks) is retained.
-   Occluders are the **λ/2 coarse mesh** (16× cheaper, verified equivalent).
+   **The two populations were measured directly** (2026-08-17, hit distances
+   with the guard disabled):
+
+   | population | where it lives |
+   |---|---|
+   | artifact (intact rail — a convex rail cannot shadow itself) | `t ≤ 0.021 mm` (λ=5), `≤ 0.037 mm` (λ=8) — the chord sagitta `d²/(8R)`, ~1/100 of a facet |
+   | real crater-wall occlusion (crack / dent / shell) | `t ≥ 0.3 mm`, out to ~9 mm |
+
+   They are cleanly separated, so the guard belongs in the gap — but the
+   historical `min_t = 3.0 mm` sits far above it and therefore discards real
+   self-shadowing too: at λ=5 a deep crack's ray-cast field is **bit-identical
+   to no shadowing at all**, while `min_t = 0.125 mm` moves it ~6%. The scale
+   is the FACET, not the wavelength, so a finer occluder makes 3.0 mm *worse*
+   (better resolution → shorter blocking distances → more of them cut). This
+   was already true at λ=8; the migration only sharpened it.
+   `config.SHADOW_MIN_T` is now the single source, it is a **provenance key**
+   (datasets are incomparable across a change), and
+   `python validation_3d.py --min-t ...` (V6b) sweeps it at the field level.
+   The default is held at 3.0 until that sweep on the lab GPU justifies moving
+   it. Occluders are the **λ/2 coarse mesh** (16× cheaper, verified
+   equivalent).
 4. **PO terminator discontinuity**: the Face3D formulation applies no receive-
    cosine at the face, so faces at grazing incidence carry O(1) amplitude and
    binary visibility toggles them discontinuously. This is faithful to the
@@ -427,8 +448,10 @@ discover them by surprise. Grouped by where they live:
 **Shadowing**
 - **Source-side only** (rail→horn ray-cast); rail→plane occlusion is not
   tested — matches the shallow-defect regime.
-- Occluder mesh is λ/2; `min_t = 3 mm` is a physical grazing guard that does
-  NOT scale with λ (finding 3).
+- Occluder mesh is λ/2. `config.SHADOW_MIN_T` is a discretization guard whose
+  natural scale is the FACET, not λ; at its historical 3.0 mm it suppresses
+  most real self-shadowing as well as the artifact (finding 3) — pending the
+  V6b sweep, self-shadowing of narrow craters is effectively absent.
 
 **Sensing & noise**
 - Detectors are **ideal rectangular power integrators**: unity quantum

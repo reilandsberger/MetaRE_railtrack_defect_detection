@@ -145,7 +145,26 @@ python scan_geometry.py 2>&1 | tee ../scan_geometry_console.txt
 python setup_diagram.py
 ```
 
+Then the two studies that produce the comparison figures (both are
+informational, neither gates):
+
+```bash
+python compare_wavefronts.py --profile lab --export-case data/generated/fdtd_case
+```
+```bash
+python validation_3d.py --min-t 3.0 1.0 0.3 0.125 0.05 2>&1 | tee ../min_t_sweep.txt
+```
+
+The first solves one sample every way (λ=8 vs λ=5, physics terms, shadow guard,
+mesh resolution) and writes `wavefront_cuts.png` / `_maps.png` / `_metrics.png`
+plus `wavefront_fields.npz`, and exports an FDTD-ready case bundle. The second
+decides `config.SHADOW_MIN_T`: pick the SMALLEST min_t whose intact artifact is
+still flat and under 0.03. **Do not change SHADOW_MIN_T without regenerating
+into a new `--name` root** — it is a provenance key.
+
 **Send back (attach):** `data/generated/lab_report.md`,
+`data/generated/wavefront_comparison.json`, `data/figures/wavefront_cuts.png`,
+`data/figures/v6b_min_t_sweep.png`, `../min_t_sweep.txt`,
 `data/generated/verification_report.json`, `data/generated/geometry_scan.json`,
 `../preflight_l5.txt`, `../guard_demo.txt`,
 `data/generated/smoke/dataset_config.json` + `generation.log`,
