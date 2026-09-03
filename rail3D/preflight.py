@@ -167,10 +167,24 @@ def check_dataset(r: Report, root: Path) -> None:
         return
 
     cfgp = data3d.dataset_config_path(root)
+    n_shards = len(list(root.glob("rail3d_*_shard*.pt")))
+    if not cfgp.exists() and n_shards == 0:
+        # empty root (e.g. just after archiving a legacy set) is not a fault —
+        # there is simply nothing here to be stale
+        r.warn(f"no dataset in {root.name or 'data/generated'} yet",
+               "python generate_dataset_3d.py --profile lab --name <name>")
+        return
+
     if not cfgp.exists():
+        # ARCHIVE, don't delete: an unverifiable dataset is still a real
+        # dataset (and often hours of GPU time). Moving it into a named root
+        # clears the default root without destroying the record, and matches
+        # what the geometry-mismatch branch below advises.
         r.bad("dataset_config.json missing: these shards predate provenance "
               "recording, so their geometry CANNOT be verified",
-              f"rm -f {root}/rail3d_*_shard*.pt   # then regenerate")
+              f"mkdir -p {root}/legacy_unverified && "
+              f"mv {root}/rail3d_*_shard*.pt {root}/psi0_ms.pt {root}/legacy_unverified/"
+              f"   # archive {n_shards} shards, then generate with --name")
     else:
         # strict=False returns the mismatch list instead of raising, so every
         # differing key is reported (the old except-path re-parsed the raised
