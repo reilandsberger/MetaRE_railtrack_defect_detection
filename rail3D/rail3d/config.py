@@ -193,6 +193,23 @@ SHADOW_MODE = "raycast"
 # is incomparable (it is a PROVENANCE key).
 SHADOW_MIN_T = 3.0
 
+# Ray-origin lift along the face NORMAL (mm) before casting -- the geometric
+# cure for the same artifact, added 2026-09-04 after the V6b sweep showed that
+# min_t alone CANNOT work: on augmented intact meshes the artifact saturates
+# for any min_t <= 1 facet (0.0451) while crack self-shadowing only appears
+# below ~1.5 mm, so the two populations overlap in ray distance and no
+# threshold separates them.
+#
+# The root cause is that field3d only nudged the origin 1 um ALONG THE RAY,
+# whose perpendicular component vanishes at grazing incidence -- precisely
+# where self-hits happen. Lifting along the normal instead clears the
+# neighbouring chord directly. Scale: the chord sagitta d^2/(8R) is
+# 0.003 mm on the crown (R~300) to 0.06 mm at the gauge corner (R~13), so
+# 0.15 mm is ~2.5x the worst sagitta and ~10x below the nearest real occluder
+# (crater walls at >= 1.5 mm). PROVENANCE key: changing it changes the physics.
+# Sweep it with `python validation_3d.py --normal-offset 0 0.05 0.1 0.15 0.3 0.6`.
+SHADOW_NORMAL_OFFSET = 0.15
+
 # --- Defect geometry parameters (rev. 2: per-point depth fields d(s, y)) ---
 # Baseline ranges came from laser-scan measurements -- Ye et al. 2018 Table 1
 # (cracks 27-31 mm long x ~2 mm wide x 3-4.3 mm deep at 45 deg; squats 16-20 mm

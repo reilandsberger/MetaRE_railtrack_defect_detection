@@ -135,6 +135,8 @@ def raycast_shadow_mask(
     budget: int = 2**24,
     eps: float = 1e-6,
     min_t: float = 3.0,
+    normals: torch.Tensor | None = None,
+    normal_offset: float = 0.15,
 ) -> torch.Tensor:
     """1.0 where the face centroid sees ``src_point``, 0.0 where occluded.
 
@@ -150,13 +152,27 @@ def raycast_shadow_mask(
     otherwise clip their own neighboring facets (verified against the 2D
     line-of-sight test, which shows those rays are NOT blocked).
 
-    The artifact lives at the chord-sagitta scale, d^2/(8R) — MEASURED at
-    t <= 0.021 mm (lam=5) / 0.037 mm (lam=8) on the production geometry, about
-    1/100 of a facet — while real crater walls sit at t >= 0.3 mm. Anything
-    much above ~0.3 mm therefore discards real physics as well as the
-    artifact. This module stays config-free (every physical quantity arrives
-    as an argument); callers pass ``config.SHADOW_MIN_T``, and the V0c gate
-    asserts this default still equals it so the two cannot drift.
+    ``normal_offset`` (mm) lifts each ray origin along its face NORMAL before
+    casting, and it — not min_t — is the geometric cure for the artifact. The
+    origin is also nudged 1 um along the ray, but at grazing incidence, which
+    is exactly where self-hits occur, that nudge has almost no perpendicular
+    component and so does not clear the sagging chord of the neighbouring
+    facet. An offset of a few times the sagitta (d^2/(8R) = 0.003-0.06 mm over
+    this rail's curvature range) clears the neighbour outright while staying
+    ~10x below the nearest real occluder (crater walls at >= 1.5 mm), which
+    lets min_t drop to a token value. normal_offset=0.0 (or normals=None)
+    reproduces the pre-2026-09-04 behaviour.
+
+    Why that matters: the V6b field-level sweep showed the two populations
+    OVERLAP in ray distance — on augmented intact meshes the artifact
+    saturates for any min_t <= 1 facet, while crack self-shadowing only
+    appears below ~1.5 mm — so NO threshold on t alone separates them. The
+    normal offset separates them geometrically instead.
+
+    This module stays config-free (every physical quantity arrives as an
+    argument); callers pass ``config.SHADOW_MIN_T`` and
+    ``config.SHADOW_NORMAL_OFFSET``, and the V0c gate asserts these defaults
+    still equal them so the two cannot drift.
     """
     device = v_occ.device
     tri = v_occ[f_occ]                             # (Nt, 3, 3)
@@ -170,6 +186,10 @@ def raycast_shadow_mask(
     if idx.numel() == 0:
         return visible
     origins = center[idx]
+    if normals is not None and normal_offset:
+        # lift PERPENDICULAR to the surface: the along-ray nudge below is
+        # useless at grazing incidence, which is where self-hits happen
+        origins = origins + normals[idx] * normal_offset
     dir_full = src_point.reshape(1, 3) - origins
     dist_full = dir_full.norm(dim=1, keepdim=True)
     dir_unit = dir_full / dist_full
@@ -217,6 +237,7 @@ def scattered_fields(
     shadow: str = "none",
     shadow_occluders: tuple[torch.Tensor, torch.Tensor] | None = None,
     shadow_min_t: float | None = None,
+    shadow_normal_offset: float | None = None,
     compute_psi2: bool = True,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """psi1 (single bounce) and psi2 (double bounce) on the observation plane.
@@ -225,9 +246,11 @@ def scattered_fields(
     ``chunk_faces`` is the total number of face-slots processed per chunk
     *across the batch* (the per-chunk face count is chunk_faces // B), so
     memory stays bounded regardless of batch size.
-    ``shadow_min_t`` overrides the ray-cast self-hit guard (mm along the ray);
-    None keeps ``raycast_shadow_mask``'s default. Callers that follow the
-    project config pass ``config.SHADOW_MIN_T``.
+    ``shadow_min_t`` overrides the ray-cast self-hit guard (mm along the ray)
+    and ``shadow_normal_offset`` the ray-origin lift along the face normal
+    (mm); None keeps ``raycast_shadow_mask``'s defaults. Callers that follow
+    the project config pass ``config.SHADOW_MIN_T`` /
+    ``config.SHADOW_NORMAL_OFFSET``.
     Returns psi1, psi2 with shape (B, r1, r2) complex64 (psi2 zeros when
     compute_psi2=False).
     """
@@ -263,8 +286,10 @@ def scattered_fields(
             else:
                 v_occ_b, f_occ = v[b], f
             kw_mt = {} if shadow_min_t is None else {"min_t": shadow_min_t}
+            if shadow_normal_offset is not None:
+                kw_mt["normal_offset"] = shadow_normal_offset
             los = raycast_shadow_mask(v_occ_b, f_occ, center[b], src_point,
-                                      ray_mask=left[b], **kw_mt)
+                                      ray_mask=left[b], normals=normal[b], **kw_mt)
             vis1[b] = vis1[b] * los
             vis_ant[b] = vis_ant[b] * los
     elif shadow != "none":

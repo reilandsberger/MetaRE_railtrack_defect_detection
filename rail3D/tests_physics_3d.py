@@ -289,9 +289,13 @@ def test_v0c_guards() -> dict:
     #      default; assert it still equals config.SHADOW_MIN_T or the two drift
     #      apart silently and callers disagree about the shadow physics
     import inspect as _inspect
-    _mt = _inspect.signature(field3d.raycast_shadow_mask).parameters["min_t"].default
-    res["shadow_min_t_default"] = float(_mt)
-    res["shadow_min_t_in_sync"] = abs(float(_mt) - config.SHADOW_MIN_T) < 1e-12
+    _sig = _inspect.signature(field3d.raycast_shadow_mask).parameters
+    _mt = float(_sig["min_t"].default)
+    _no = float(_sig["normal_offset"].default)
+    res["shadow_min_t_default"] = _mt
+    res["shadow_normal_offset_default"] = _no
+    res["shadow_min_t_in_sync"] = abs(_mt - config.SHADOW_MIN_T) < 1e-12
+    res["shadow_normal_offset_in_sync"] = abs(_no - config.SHADOW_NORMAL_OFFSET) < 1e-12
 
     # (b) capture clamp: overlapping windows double-count -> raw ratio > 1
     #     must clamp to exactly 1 (else the loss REWARDS stacking detectors)
@@ -366,7 +370,8 @@ def test_v0c_guards() -> dict:
         res["ckpt_stamp_absent_warns"] = False
 
     res["pass"] = all(bool(res[k]) for k in res
-                      if k not in ("lattice_n", "shadow_min_t_default"))
+                      if k not in ("lattice_n", "shadow_min_t_default",
+                                   "shadow_normal_offset_default"))
     return res
 
 

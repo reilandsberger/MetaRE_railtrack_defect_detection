@@ -175,7 +175,7 @@ def v5_2d_3d_consistency(device: torch.device) -> dict:
 # ---------------------------------------------------------------------------
 def _solve_sample(section, class_name, sample_idx, device, args,
                   ds=None, shadow=True, roll=0.0, jit=(0.0, 0.0),
-                  params=None, min_t=None, occ_ds=None):
+                  params=None, min_t=None, occ_ds=None, normal_offset=None):
     """Solve one sample's psi1 with the rev.2 depth-field geometry.
 
     ``params=None`` draws the defect from the sample seed (CSV classes load
@@ -202,7 +202,9 @@ def _solve_sample(section, class_name, sample_idx, device, args,
                                               roll_deg=roll, jitter_xz=jit)
         kw = {"shadow": "raycast",
               "shadow_occluders": (v_occ.to(device), f_occ.to(device)),
-              "shadow_min_t": config.SHADOW_MIN_T if min_t is None else min_t}
+              "shadow_min_t": config.SHADOW_MIN_T if min_t is None else min_t,
+              "shadow_normal_offset": (config.SHADOW_NORMAL_OFFSET
+                                       if normal_offset is None else normal_offset)}
     psi, _ = field3d.scattered_fields(v.to(device), f.to(device), *args,
                                       chunk_faces=2048, compute_psi2=False, **kw)
     return psi, params
@@ -274,101 +276,159 @@ def v6_shadowing(device: torch.device, n_per_class: int = 2) -> dict:
 # ---------------------------------------------------------------------------
 # V6b — min_t sweep (decides config.SHADOW_MIN_T; not a gate)
 # ---------------------------------------------------------------------------
-def v6b_min_t_sweep(device: torch.device, values, n_intact: int = 3) -> dict:
-    """Field-level cost/benefit of the ray-cast self-hit guard.
+def _barcode(psi, device):
+    """Detector powers — the level README finding 2 says to judge fidelity at."""
+    from rail3d import optics3d
+    det = optics3d.SoftDetector2D().to(device)
+    return det.hard_powers((psi.abs() ** 2).unsqueeze(0))[0]
 
-    ``min_t`` exists to kill a discretization artifact (facet chords sag
-    inside the true convex surface, so grazing rays clip their own
-    neighbours). Set it too high and it also discards REAL crater-wall
-    shadowing. A geometric probe of hit distances puts the artifact at
-    t <= 0.04 mm and real occluders at t >= 0.3 mm, but the decision has to be
-    made on the FIELD, which is what this sweep measures:
 
-      artifact  : |psi(shadow) - psi(no shadow)| / |psi| on AUGMENTED INTACT
-                  meshes. A convex rail cannot shadow itself, so every bit of
-                  this is error. It must stay under V6's 3% bound; the best
-                  min_t is the SMALLEST value that keeps it flat.
-      crack_eff : the same ratio on a deep crack at the production (lambda/2)
-                  occluder -- real physics we want to KEEP.
-      resolved  : the same crack against a generation-resolution occluder --
-                  the magnitude the production occluder is omitting.
+def _cos(a, b):
+    return float((a @ b) / (a.norm() * b.norm()).clamp_min(1e-12))
 
-    Reported, never asserted: lowering min_t changes the physics, so it is a
-    provenance key and a deliberate decision, not something a gate should
-    flip automatically.
+
+def v6b_guard_sweep(device: torch.device, min_ts, offsets, n_intact: int = 5,
+                    crack_idxs=(0, 1)) -> dict:
+    """Cost/benefit of the ray-cast self-hit guard, over min_t AND normal offset.
+
+    The guard exists to kill a discretization artifact: facet chords sag inside
+    the true convex surface, so grazing rays clip their own neighbours. Two
+    knobs control it —
+
+      min_t          ignore hits closer than this ALONG THE RAY
+      normal_offset  lift the ray origin along the face NORMAL before casting
+
+    The 2026-09-04 sweep showed min_t alone CANNOT work: on augmented intact
+    meshes the artifact saturates for any min_t <= 1 facet while crack
+    self-shadowing only appears below ~1.5 mm, so the two populations overlap
+    in ray distance and no threshold separates them. The normal offset attacks
+    the cause instead (the 1 um along-ray nudge has no perpendicular component
+    at grazing incidence), so it should suppress the artifact while LEAVING
+    distant real occluders untouched. This sweep tests exactly that.
+
+    Reported per configuration:
+      artifact_mean / artifact_max  on AUGMENTED INTACT meshes, where a convex
+                                    rail cannot shadow itself so every bit of
+                                    change is error. Mean over n_intact
+                                    augmentations (max-of-3 was a noisy
+                                    statistic dominated by one unlucky roll).
+      artifact_barcode              the same error THROUGH THE DETECTORS —
+                                    finding 2 says field L2 never converges, so
+                                    this is the number that reflects impact.
+      crack_effect_*                real crater-wall shadowing we want to KEEP,
+                                    per crack sample, at the production
+                                    (lambda/2) and a generation-resolution
+                                    occluder.
+
+    Informational, never asserted: these knobs change the physics, so they are
+    provenance keys and a deliberate decision.
     """
     section = sections.load_reference_section()
     X, Y = config.plane_grid(device)
     args = (X, Y, config.H_MS, config.WVL, config.THETA_INC,
             config.SIZE_ANT, config.DIST_ANT, config.RESOL_ANT)
 
-    intact_params = {"class": "intact"}
-    augs = [(2.0, (4.0, -4.0)), (-2.0, (-4.0, 4.0)), (1.0, (0.0, 0.0))][:n_intact]
+    rng = np.random.default_rng(0)
+    augs = [(0.0, (0.0, 0.0))] + [
+        (float(rng.uniform(-config.ROLL_DEG_STD, config.ROLL_DEG_STD)),
+         (float(rng.normal(0, config.JITTER_XZ_STD)),
+          float(rng.normal(0, config.JITTER_XZ_STD))))
+        for _ in range(n_intact - 1)]
 
-    # unshadowed baselines, computed once
+    intact_params = {"class": "intact"}
     base_intact = [_solve_sample(section, "intact", 0, device, args, shadow=False,
                                  roll=r, jit=j, params=intact_params)[0]
                    for r, j in augs]
-    crack_deep, crack_params = _solve_sample(section, "crack", 0, device, args,
-                                             shadow=False)
+    base_bar = [_barcode(b, device) for b in base_intact]
+
+    cracks = {}
+    for ci in crack_idxs:
+        psi, params = _solve_sample(section, "crack", ci, device, args, shadow=False)
+        cracks[ci] = {"base": psi, "params": params,
+                      "depth_mm": float(params.get("depth", 0.0))}
 
     rows = []
-    for mt in values:
-        art = 0.0
-        for (r, j), b in zip(augs, base_intact):
+    for mt, off in [(m, o) for o in offsets for m in min_ts]:
+        arts, art_bars = [], []
+        for (r, j), b, bb in zip(augs, base_intact, base_bar):
             a, _ = _solve_sample(section, "intact", 0, device, args, shadow=True,
-                                 roll=r, jit=j, params=intact_params, min_t=mt)
-            art = max(art, float((a - b).norm() / b.norm()))
-        c_prod, _ = _solve_sample(section, "crack", 0, device, args, shadow=True,
-                                  params=crack_params, min_t=mt)
-        c_res, _ = _solve_sample(section, "crack", 0, device, args, shadow=True,
-                                 params=crack_params, min_t=mt,
-                                 occ_ds=config.MESH_DS)
-        rows.append({
-            "min_t_mm": float(mt),
-            "min_t_over_facet": float(mt / config.OCCLUDER_DS),
-            "intact_artifact": art,
-            "crack_effect_production_occluder": float((c_prod - crack_deep).norm()
-                                                      / crack_deep.norm()),
-            "crack_effect_resolved_occluder": float((c_res - crack_deep).norm()
-                                                    / crack_deep.norm()),
-            "artifact_ok": art < 0.03,
-        })
-        print(f"    min_t {mt:7.3f} mm ({rows[-1]['min_t_over_facet']:5.2f} facet) | "
-              f"intact artifact {art:.4f} {'OK ' if art < 0.03 else 'BAD'} | "
-              f"crack effect {rows[-1]['crack_effect_production_occluder']:.4f} "
-              f"(resolved {rows[-1]['crack_effect_resolved_occluder']:.4f})")
+                                 roll=r, jit=j, params=intact_params,
+                                 min_t=mt, normal_offset=off)
+            arts.append(float((a - b).norm() / b.norm()))
+            art_bars.append(1.0 - _cos(_barcode(a, device), bb))
+        row = {"min_t_mm": float(mt), "normal_offset_mm": float(off),
+               "min_t_over_occluder_facet": float(mt / config.OCCLUDER_DS),
+               "artifact_mean": float(np.mean(arts)),
+               "artifact_max": float(np.max(arts)),
+               "artifact_barcode_mean": float(np.mean(art_bars))}
+        for ci, c in cracks.items():
+            e, _ = _solve_sample(section, "crack", ci, device, args, shadow=True,
+                                 params=c["params"], min_t=mt, normal_offset=off)
+            row[f"crack{ci}_effect"] = float((e - c["base"]).norm() / c["base"].norm())
+        # the resolved-occluder control, on the deepest crack only (it is the
+        # expensive solve: occluder facets go from lambda/2 to lambda/8)
+        deep = max(cracks, key=lambda k: cracks[k]["depth_mm"])
+        rr, _ = _solve_sample(section, "crack", deep, device, args, shadow=True,
+                              params=cracks[deep]["params"], min_t=mt,
+                              normal_offset=off, occ_ds=config.MESH_DS)
+        row["resolved_effect"] = float((rr - cracks[deep]["base"]).norm()
+                                       / cracks[deep]["base"].norm())
+        # NOTE the resolved column uses a lambda/8 occluder, so min_t is a
+        # DIFFERENT multiple of ITS facet — reported explicitly, since comparing
+        # the two columns at one "x facet" number was misleading
+        row["min_t_over_resolved_facet"] = float(mt / config.MESH_DS)
+        row["artifact_ok"] = row["artifact_mean"] < 0.03
+        rows.append(row)
+        ce = " ".join(f"c{ci} {row[f'crack{ci}_effect']:.4f}" for ci in cracks)
+        print(f"    min_t {mt:6.3f} off {off:5.3f} | artifact mean {row['artifact_mean']:.4f} "
+              f"max {row['artifact_max']:.4f} barcode {row['artifact_barcode_mean']:.5f} "
+              f"{'OK ' if row['artifact_ok'] else 'BAD'} | {ce} resolved {row['resolved_effect']:.4f}")
+
+    # the honest recommendation: the configuration that keeps the MOST real
+    # shadowing while staying under the artifact bound. "smallest safe min_t"
+    # was the wrong objective -- it is meaningless when every benefit is zero.
+    def benefit(r):
+        return max([r[k] for k in r if k.startswith("crack") and k.endswith("_effect")] or [0.0])
 
     safe = [r for r in rows if r["artifact_ok"]]
-    rec = min(safe, key=lambda r: r["min_t_mm"]) if safe else None
+    useful = [r for r in safe if benefit(r) > 1e-6]
+    rec = max(useful, key=benefit) if useful else None
 
-    fig, ax = plt.subplots(figsize=(7.6, 4.2))
-    mts = [r["min_t_mm"] for r in rows]
-    ax.semilogx(mts, [r["intact_artifact"] for r in rows], "o-", color="tab:red",
-                label="intact artifact (must stay < 0.03)")
-    ax.semilogx(mts, [r["crack_effect_production_occluder"] for r in rows], "s-",
-                color="tab:blue", label="crack shadow, production occluder")
-    ax.semilogx(mts, [r["crack_effect_resolved_occluder"] for r in rows], "^--",
-                color="tab:green", label="crack shadow, resolved occluder")
-    ax.axhline(0.03, color="tab:red", ls=":", lw=1)
-    ax.axvline(config.SHADOW_MIN_T, color="k", ls="--", lw=1,
-               label=f"current SHADOW_MIN_T = {config.SHADOW_MIN_T} mm")
-    if rec:
-        ax.axvline(rec["min_t_mm"], color="tab:orange", ls="-.", lw=1.2,
-                   label=f"smallest artifact-safe = {rec['min_t_mm']} mm")
-    ax.set(xlabel="min_t (mm along the ray)", ylabel="relative L2 field change",
-           title="V6b: ray-cast guard — artifact suppressed vs real shadowing kept")
-    ax.legend(fontsize=8)
-    ax.grid(alpha=0.3, which="both")
+    fig, ax = plt.subplots(1, 2, figsize=(13, 4.4))
+    for a, xkey, xlab, fixed in [
+        (ax[0], "min_t_mm", "min_t (mm along the ray)", "normal_offset_mm"),
+        (ax[1], "normal_offset_mm", "normal offset (mm along the face normal)", "min_t_mm"),
+    ]:
+        for val in sorted({r[fixed] for r in rows}):
+            sel = sorted([r for r in rows if r[fixed] == val], key=lambda r: r[xkey])
+            if len(sel) < 2:
+                continue
+            xs = [r[xkey] for r in sel]
+            a.plot(xs, [r["artifact_mean"] for r in sel], "o-",
+                   label=f"artifact ({fixed.split('_')[0]}={val:g})")
+            a.plot(xs, [benefit(r) for r in sel], "s--",
+                   label=f"crack shadow ({fixed.split('_')[0]}={val:g})")
+        a.axhline(0.03, color="tab:red", ls=":", lw=1, label="artifact bound 0.03")
+        a.set(xlabel=xlab, ylabel="relative L2 field change")
+        a.grid(alpha=0.3)
+        a.legend(fontsize=7)
+    fig.suptitle("V6b: ray-cast guard — artifact suppressed vs real shadowing kept")
     fig.tight_layout()
     fig.savefig(config.FIGURE_DIR / "v6b_min_t_sweep.png", dpi=200)
 
-    return {"rows": rows, "current": config.SHADOW_MIN_T,
-            "recommended_smallest_safe": rec["min_t_mm"] if rec else None,
+    return {"rows": rows,
+            "current_min_t": config.SHADOW_MIN_T,
+            "current_normal_offset": config.SHADOW_NORMAL_OFFSET,
             "occluder_ds": config.OCCLUDER_DS,
-            "note": ("informational: pick the SMALLEST min_t whose intact artifact "
-                     "is still flat/under 0.03, then set config.SHADOW_MIN_T and "
-                     "regenerate into a NEW --name root (it is a provenance key)"),
+            "n_intact_augmentations": n_intact,
+            "crack_depths_mm": {str(k): v["depth_mm"] for k, v in cracks.items()},
+            "recommended": ({"min_t_mm": rec["min_t_mm"],
+                             "normal_offset_mm": rec["normal_offset_mm"],
+                             "artifact_mean": rec["artifact_mean"],
+                             "crack_effect": benefit(rec)} if rec else None),
+            "note": ("recommended = most real crack shadowing kept while the mean "
+                     "intact artifact stays under 0.03. None means NO tested "
+                     "configuration achieves both, which is itself the result."),
             "pass": True}
 
 
@@ -440,6 +500,11 @@ def main() -> int:
                         help="run the V6b ray-cast guard sweep over these min_t "
                              "values (mm) INSTEAD of the V5-V7 gates, e.g. "
                              "--min-t 3.0 1.0 0.3 0.125 0.05")
+    parser.add_argument("--normal-offset", type=float, nargs="*", default=None,
+                        metavar="MM",
+                        help="sweep the ray-origin lift along the face normal "
+                             "(mm), e.g. --normal-offset 0 0.05 0.1 0.15 0.3 0.6. "
+                             "Combine with a single --min-t to isolate it.")
     args = parser.parse_args()
     device = torch.device(args.device) if args.device else config.get_device("lab")
     print(f"[rail3d] V5-V7 running on {device}"
@@ -451,16 +516,25 @@ def main() -> int:
     if REPORT_PATH.exists():
         report = json.loads(REPORT_PATH.read_text())
 
-    if args.min_t:
-        print(f"  V6b min_t sweep (occluder facet {config.OCCLUDER_DS} mm, "
-              f"current SHADOW_MIN_T {config.SHADOW_MIN_T} mm)")
+    if args.min_t or args.normal_offset:
+        min_ts = sorted(args.min_t, reverse=True) if args.min_t else [config.SHADOW_MIN_T]
+        offs = (sorted(args.normal_offset) if args.normal_offset
+                else [config.SHADOW_NORMAL_OFFSET])
+        print(f"  V6b guard sweep (occluder facet {config.OCCLUDER_DS} mm; current "
+              f"min_t {config.SHADOW_MIN_T} mm, normal offset "
+              f"{config.SHADOW_NORMAL_OFFSET} mm)")
         t0 = time.time()
-        res = v6b_min_t_sweep(device, sorted(args.min_t, reverse=True))
+        res = v6b_guard_sweep(device, min_ts, offs)
         res["seconds"] = round(time.time() - t0, 2)
-        report["V6b_min_t_sweep"] = res
+        report["V6b_guard_sweep"] = res
         REPORT_PATH.write_text(json.dumps(report, indent=2))
-        print(f"\n  smallest artifact-safe min_t: {res['recommended_smallest_safe']} mm "
-              f"(current {config.SHADOW_MIN_T} mm)")
+        rec = res["recommended"]
+        print("\n  " + (f"best configuration: min_t {rec['min_t_mm']} mm, normal offset "
+                        f"{rec['normal_offset_mm']} mm -> artifact "
+                        f"{rec['artifact_mean']:.4f}, crack shadow {rec['crack_effect']:.4f}"
+                        if rec else
+                        "NO tested configuration keeps the artifact under 0.03 AND any "
+                        "real crack shadowing -- that is the result, not a failure"))
         print(f"  figure -> {config.FIGURE_DIR / 'v6b_min_t_sweep.png'}")
         print(f"report -> {REPORT_PATH}")
         return 0

@@ -134,6 +134,7 @@ def generate_class(
                 shadow=config.SHADOW_MODE,
                 shadow_occluders=(v_occ_b, faces_coarse.to(device)),
                 shadow_min_t=config.SHADOW_MIN_T,
+                shadow_normal_offset=config.SHADOW_NORMAL_OFFSET,
             )
             psis.append(torch.stack([psi1, psi2], dim=-1).cpu())
             metas.extend(batch_meta)
