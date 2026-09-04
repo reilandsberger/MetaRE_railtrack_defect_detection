@@ -51,6 +51,11 @@ Trainable metasurface + detector "barcode" system for rail defect detection.
 
 ## Current state (2026-09-04 — λ=5 migration VERIFIED end to end on the 5090)
 
+> **Picking this up cold? Read `rail3D/NEXT_SESSION.md` first.** It is the
+> short handoff: the two unpushed commits, the ONE open technical question
+> (the shadow normal-offset anomaly) with the exact command to resolve it, and
+> the pending FDTD-solver decision. Delete it once both are closed.
+
 ### Lab results (2026-09-04) — read this first
 
 All eleven gates PASS at λ=5 on the RTX 5090. What the numbers say:
