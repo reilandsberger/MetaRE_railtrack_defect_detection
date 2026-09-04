@@ -1,6 +1,6 @@
 # rail3D — 3D diffraction simulation + metasurface training for rail defect detection
 
-*Last updated: 2026-08-17 · λ = 5 mm (60 GHz) era — bump this line in any
+*Last updated: 2026-09-04 · λ = 5 mm (60 GHz), V0–V8 measured on the 5090 — bump this line in any
 commit that changes behaviour this file describes.*
 
 **Handoff document.** This README is written so that a future session (any
@@ -171,9 +171,9 @@ field, plus parameter histograms.
 
 ## 5. Verification status (see `data/generated/verification_report.json`)
 
-Status at λ = 5 mm (the migration wavelength). "laptop" = verified on the
-MX250/CPU on 2026-08-17; "**pending 5090**" = must be (re)run on the lab GPU
-before the numbers are quotable — `lab_report.py` runs them all.
+Status at λ = 5 mm (the migration wavelength). **All gates now measured**:
+V0–V4 on the laptop CPU (2026-08-17) and re-confirmed on the 5090, V5–V8 on the
+lab 5090 (2026-09-04). `lab_report.py` runs them all in one command.
 
 | gate | what it proves | status at λ=5 |
 |---|---|---|
@@ -184,11 +184,11 @@ before the numbers are quotable — `lab_report.py` runs them all.
 | V2 | FFT propagator ≡ conv2d (1.2e-6) | PASS (laptop CPU) |
 | V3 | ASM vs RS-FFT 0.10% — **identical to 6 s.f. with the λ=8 value**, confirming the scaled replica | PASS (laptop CPU) |
 | V4 | specular centroid on axis, power conservation 0.9998, mesh orientation | PASS (laptop CPU) |
-| V5 | 3D PO vs 2D Hankel reference (was r=0.976 at λ=8) | **pending 5090** |
-| V6 | ray-cast shadowing real-effect vs artifact bounds (2 mm hairlines are now 0.4λ — if `resolved` trips, that is a physics finding, not a bug) | **pending 5090** |
-| V6b | *(sweep, not a gate)* the ray-cast guard's cost/benefit vs `min_t`: artifact suppressed on intact meshes against real crack shadowing kept | run on demand (`--min-t`) |
-| V7 | λ/8 vs λ/16 mesh convergence at the barcode level (through the FIXED 130-window probe — pre-fix numbers were measured through 54 collapsed windows) | **pending 5090** |
-| V8 | end-to-end training: separation grows, 130→8 pruning, keep-index-verified detector movement, no collapse, capture ∈ (0,1], bit-identical resume, legacy objective + variance criterion + stale-checkpoint refusal | **pending 5090** |
+| V5 | 3D PO vs 2D Hankel reference | PASS, **r = 0.958** (5090) — was 0.976 at λ=8; the figure shows envelope agreement with slight fringe offset, i.e. finite-segment vs infinite-extrusion registration, not solver disagreement |
+| V6 | ray-cast shadowing real-effect vs artifact bounds | PASS, artifact 0.0020 — but `crack_shadow_with_resolved_occluder = 0.0` and 7 of 8 samples are exactly 0.0: at `SHADOW_MIN_T = 3.0` the shadow test is **inert**, see finding 3 |
+| V6b | *(sweep, not a gate)* the guard's cost/benefit vs `min_t` | run 2026-09-04; **3.0 mm is the only artifact-safe value tested**, the 1.0–3.0 mm gap is unexplored (finding 3) |
+| V7 | λ/8 vs λ/16 mesh convergence at the barcode level | PASS, min cosine **0.9948**, mean 0.9982 across all six cases (5090) |
+| V8 | end-to-end training: separation grows, 130→8 pruning, keep-index-verified detector movement, no collapse, capture ∈ (0,1], bit-identical resume, legacy objective + variance criterion + stale-checkpoint refusal | PASS — separation 0.0290→0.0562, min separation 6.13 mm, resume mismatch exactly 0.0 (5090) |
 
 Run them: `python tests_physics_3d.py` (V0–V4, CPU) · `python validation_3d.py`
 (V5–V7, GPU) · `python v8_smoke_test.py` (V8, needs `--smoke` generation
@@ -221,19 +221,36 @@ first) · or everything at once with `python lab_report.py`.
    | artifact (intact rail — a convex rail cannot shadow itself) | `t ≤ 0.021 mm` (λ=5), `≤ 0.037 mm` (λ=8) — the chord sagitta `d²/(8R)`, ~1/100 of a facet |
    | real crater-wall occlusion (crack / dent / shell) | `t ≥ 0.3 mm`, out to ~9 mm |
 
-   They are cleanly separated, so the guard belongs in the gap — but the
-   historical `min_t = 3.0 mm` sits far above it and therefore discards real
-   self-shadowing too: at λ=5 a deep crack's ray-cast field is **bit-identical
-   to no shadowing at all**, while `min_t = 0.125 mm` moves it ~6%. The scale
-   is the FACET, not the wavelength, so a finer occluder makes 3.0 mm *worse*
-   (better resolution → shorter blocking distances → more of them cut). This
-   was already true at λ=8; the migration only sharpened it.
-   `config.SHADOW_MIN_T` is now the single source, it is a **provenance key**
-   (datasets are incomparable across a change), and
-   `python validation_3d.py --min-t ...` (V6b) sweeps it at the field level.
-   The default is held at 3.0 until that sweep on the lab GPU justifies moving
-   it. Occluders are the **λ/2 coarse mesh** (16× cheaper, verified
-   equivalent).
+   **That probe was run on an UN-AUGMENTED rail, and it was misleading.**
+   The V6b field-level sweep (2026-09-04, lab 5090, augmented intact meshes —
+   roll ±2°, jitter ±4 mm, which is what generation actually uses) says:
+
+   | `min_t` | ×facet | intact artifact | crack effect | resolved-occluder |
+   |---|---|---|---|---|
+   | 3.0 mm | 1.20 | **0.0020 OK** | 0.0000 | 0.0000 |
+   | 1.0 mm | 0.40 | 0.0451 **BAD** | 0.0288 | 0.0597 |
+   | 0.3 mm | 0.12 | 0.0451 **BAD** | 0.0500 | 0.0808 |
+   | 0.125 mm | 0.05 | 0.0451 **BAD** | 0.0536 | 0.0995 |
+   | 0.05 mm | 0.02 | 0.0451 **BAD** | 0.0562 | 0.0995 |
+
+   Under augmentation the artifact jumps to **4.5%** — over V6's 3% bound —
+   and is *pinned at exactly 0.0451* for every value ≤1 mm, i.e. the whole
+   artifact population lives below 1 mm and any smaller cutoff admits all of
+   it. Rolling the rail moves the terminator, and near-tangential rays there
+   skim far enough to clip facets a whole facet-length away: the original
+   "a few facet lengths" reasoning was right for the case that matters, even
+   though the un-augmented hit distances are 100× smaller.
+
+   **So `min_t = 3.0 mm` stands — it is the only tested value that keeps the
+   artifact under the bound.** The cost is real and must be stated: it also
+   discards ~5–6% of genuine crack self-shadowing (~10% against a
+   generation-resolution occluder), which is why V6's
+   `crack_shadow_with_resolved_occluder` reads 0.0. **The 1.0–3.0 mm gap is
+   untested** and is where a better value would live; sweep 1.25/1.5/2.0/2.5
+   before assuming 3.0 is optimal rather than merely safe.
+   `config.SHADOW_MIN_T` is the single source and a **provenance key**
+   (datasets are incomparable across a change). Occluders are the **λ/2
+   coarse mesh** (16× cheaper, verified equivalent).
 4. **PO terminator discontinuity**: the Face3D formulation applies no receive-
    cosine at the face, so faces at grazing incidence carry O(1) amplitude and
    binary visibility toggles them discontinuously. This is faithful to the
@@ -331,12 +348,27 @@ first) · or everything at once with `python lab_report.py`.
     is preserved exactly — the MS→detector propagation has F = (WX/2)²/(λ·L) =
     11.250 at both wavelengths, which is why V3's error matches the λ=8 value
     to 6 significant figures. Quantities that pair the *fixed* rail against the
-    *scaled* rig deliberately do not scale, and that is the gain: defect/λ grows
-    8/5 = 1.6×, and because the speckle grain λL/D shrinks as (5/8)² while the
-    plane keeps its angular extent, the plane now carries **~2.6× more
-    independent speckle cells** (≈182 vs ≈71 across the aperture). Windows,
-    scaling as 5/8, go from ≈0.7 grain to ≈1.1 grain — i.e. from slightly
-    under-filled to matched (see finding 19).
+    *scaled* rig deliberately do not scale, and that is the gain: **defect/λ
+    grows 8/5 = 1.6×** — a fixed-depth defect imposes 1.6× more phase, which is
+    the whole point of the migration.
+    **The speckle statistics, however, are PRESERVED, not improved.** Measured
+    on the lab fields (2026-09-04, envelope removed, `wavefront_fields.npz`):
+
+    | | grain along x | window | window/grain |
+    |---|---|---|---|
+    | λ=8 | 8.0 mm | 18.2 mm | **2.27** |
+    | λ=5 | 5.0 mm | 11.375 mm | **2.27** |
+
+    The grain ratio is 5/8 exactly — it scales as λ¹, so grains-per-window and
+    the independent-cell count across the aperture (~30) are unchanged. An
+    earlier revision of this finding claimed the grain scales as λ² and that
+    λ=5 buys ~2.6× more independent cells; **that was wrong**, because it
+    treated the illuminated extent D as fixed. It is not: `SIZE_ANT` and
+    `DIST_ANT` both scale with λ, so the horn footprint scales too and
+    `g = λH/D ∝ λ`. Consistent with this, the λ=5 geometry scan measures
+    essentially the same untrained separability as λ=8 (mean field AUC 0.878
+    vs 0.899, within the n=20 noise) — the gain to look for is in TRAINED
+    performance and in defect/λ, not in raw plane information.
     A same-grid λ change is INVISIBLE to tensor shapes, so provenance carries
     it instead: datasets record 36 geometry keys (`data3d.PROVENANCE_KEYS`),
     checkpoints carry a geometry stamp, the generator refuses mixed roots, and
@@ -345,14 +377,18 @@ first) · or everything at once with `python lab_report.py`.
 19. **The detector pitch is set by the speckle grain and the window, and the
     dense start is the tiling bound — not "as dense as possible".** Two scales
     govern the readout:
-    - *speckle grain* `g ≈ λ·H/D` (D = illuminated rail extent, ~76 mm across
-      the head): **≈ 9.9 × 6.2 mm** at λ=5. This is the finest structure the
-      field actually has — sampling the plane more finely than g returns
-      correlated (duplicate) numbers, no new information.
-    - *window* `DET_SIZE` = 11.375 × 7.0 mm ≈ **1.1 grain**. That is the right
-      regime: a window much smaller than a grain collects less power for
-      readings its neighbours already share, while a window covering N grains
-      averages independent speckles and dilutes defect contrast by ~1/√N.
+    - *speckle grain*, **measured at 5.0 mm along x at λ=5** (8.0 mm at λ=8;
+      `wavefront_fields.npz`, envelope removed). This is the finest structure
+      the field actually has — sampling the plane more finely than g returns
+      correlated (duplicate) numbers, no new information. Note the naive
+      `g = λH/D` with a FIXED D over-predicts the λ-scaling; the horn footprint
+      scales with λ too, so g ∝ λ (finding 18).
+    - *window* `DET_SIZE` = 11.375 mm ≈ **2.3 grain** (the same ratio as at
+      λ=8 — see finding 18). That is a sane regime: a window much smaller than
+      a grain collects less power for readings its neighbours already share,
+      while a window covering many grains averages independent speckles and
+      dilutes defect contrast by ~1/√N. At ~2 grains it is mildly on the
+      averaging side, identical to the validated λ=8 design.
     So the useful pitch is `max(window, grain)` = the window, and the densest
     lattice worth starting from is the **tiling** one,
     `floor(aperture/window)` = 13×10 = 130 (92% coverage) — which is exactly
@@ -360,8 +396,9 @@ first) · or everything at once with `python lab_report.py`.
     duplicates, a longer prune schedule, no extra information); sparser risks
     dead zones, because a detector moves only by local gradient and cannot
     cross a dark region to reach a hotspot it never sees. The aperture holds
-    ≈182 independent cells at λ=5, so 130 windows sample near the information
-    limit and pruning to 8 selects the most complementary of them.
+    ~30 independent speckle cells across x at either wavelength, so 130
+    overlapping windows oversample deliberately — the point of the dense start
+    is candidate coverage for pruning, not extra information.
 
 ## 6b. Objective & metrics (rev. 2)
 
@@ -448,10 +485,12 @@ discover them by surprise. Grouped by where they live:
 **Shadowing**
 - **Source-side only** (rail→horn ray-cast); rail→plane occlusion is not
   tested — matches the shallow-defect regime.
-- Occluder mesh is λ/2. `config.SHADOW_MIN_T` is a discretization guard whose
-  natural scale is the FACET, not λ; at its historical 3.0 mm it suppresses
-  most real self-shadowing as well as the artifact (finding 3) — pending the
-  V6b sweep, self-shadowing of narrow craters is effectively absent.
+- Occluder mesh is λ/2. `config.SHADOW_MIN_T = 3.0 mm` is the only value the
+  V6b sweep found artifact-safe, and it costs ~5–6% of genuine crack
+  self-shadowing (~10% against a finer occluder): **self-shadowing of narrow
+  craters is effectively absent from the current datasets** (finding 3). This
+  is a known, measured omission, not an oversight — the 1.0–3.0 mm gap is
+  where a better trade may exist.
 
 **Sensing & noise**
 - Detectors are **ideal rectangular power integrators**: unity quantum

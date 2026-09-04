@@ -1,6 +1,6 @@
 # CLAUDE.md — MetaRE railtrack defect detection
 
-*Last updated: 2026-08-17 · λ = 5 mm (60 GHz) era.*
+*Last updated: 2026-09-04 · λ = 5 mm (60 GHz) · V0–V8 measured on the lab 5090.*
 
 Guidance for Claude Code sessions in this repo. Written for cold-start sessions on
 smaller models: read this, then `rail3D/README.md` (the full handoff doc), before
@@ -49,7 +49,53 @@ Trainable metasurface + detector "barcode" system for rail defect detection.
   doc describes must update the doc AND bump its date line in the same commit —
   doc drift is a recurring failure mode here.
 
-## Current state (2026-08-17 — λ=5 scaled-replica migration + hazard fixes)
+## Current state (2026-09-04 — λ=5 migration VERIFIED end to end on the 5090)
+
+### Lab results (2026-09-04) — read this first
+
+All eleven gates PASS at λ=5 on the RTX 5090. What the numbers say:
+
+- **V3 = 0.0010273 at λ=8 AND λ=5, on two machines** — agreement to ~5
+  significant figures. The scaled replica is confirmed numerically.
+- **`scan_geometry.py` re-run at λ=5: H = 30λ CONFIRMED** (field AUC 0.878 vs
+  0.840 at 20λ, 0.874 at 40λ) and the dark-field structure reproduces — 10λ
+  collapses to 0.523 (near chance) with 20× the energy. An 80×80 aperture
+  scores best overall (0.889/0.893) at 3.6× generation cost; not taken.
+- **Ray-cast shadowing is INERT.** V6 passes, but
+  `crack_shadow_with_resolved_occluder = 0.0` and 7 of 8 samples are exactly
+  0.0. The V6b sweep says `SHADOW_MIN_T = 3.0` is the ONLY artifact-safe value
+  tested: below 1 mm the augmented-intact artifact pins at 0.0451, over V6's
+  0.03 bound. Cost: ~5–6% of real crack self-shadowing discarded. **The
+  1.0–3.0 mm gap is untested** — that is the open question. (An earlier
+  un-augmented ray-distance probe suggested 0.05–0.3 mm was safe; it was
+  misleading, see README finding 3.)
+- **Speckle statistics are PRESERVED, not improved** — measured grain 8.0 mm
+  (λ=8) → 5.0 mm (λ=5), ratio exactly 5/8, window/grain 2.27 at both. A
+  previous claim that λ=5 buys ~2.6× more independent cells was WRONG and is
+  corrected in README finding 18. λ=5's gain is defect/λ = 1.6× and trained
+  performance, not raw plane information (λ=5 mean field AUC 0.878 vs λ=8's
+  0.899 — a wash within n=20 noise).
+- **Generation costs 4.62 h, not the 1.5–2 h estimated** (1.30 samples/s). The
+  extra factor is the ray-cast: O(rays × triangles) with BOTH scaling ×2.56 =
+  6.6×. A large share of that time buys shadowing that is currently inert.
+- V5 dropped 0.976 → 0.958 (still passing): the figure shows envelope
+  agreement with a fringe offset, i.e. finite-segment vs infinite-extrusion
+  registration, not solver disagreement.
+- Crack is the limiting class, and for a specific reason: it has a LARGER mean
+  signal than shell (10.4% vs 8.3% of peak) but LOWER untrained AUC (0.736 vs
+  0.817), because its signature direction varies with orientation (θ spans
+  −69°…90°) while shells are consistent blobs. Crack is hard because it is
+  VARIABLE, not weak.
+
+### Open decisions before the full generation
+
+1. Refine the V6b sweep in the untested 1.0–3.0 mm gap
+   (`--min-t 2.5 2.0 1.75 1.5 1.25`) — a value there may keep the artifact
+   under 0.03 while restoring some crack shadowing.
+2. If shadowing stays inert, consider `SHADOW_MODE="none"` for generation:
+   it would produce a **bit-identical** dataset in roughly half the time.
+
+## Previous state (2026-08-17 — λ=5 scaled-replica migration + hazard fixes)
 
 Everything below is committed on `3D_railhead_upgrade` and verified on the laptop.
 Read the section top to bottom before changing physics, geometry or the objective.
@@ -174,7 +220,7 @@ Read the section top to bottom before changing physics, geometry or the objectiv
   while the centroid stays exactly on axis), on its own plane height
   (`DIST_ANT/2`) and a λ-proportional plate — λ-invariant by construction.
 
-### Verification status (laptop, 2026-08-17, at λ=5)
+### Verification status (superseded by the lab results above)
 
 - **V0, V0b, V0c, V1–V4 pass at λ=5** (`data/generated/verification_report.json`).
   V3's ASM-vs-RS error is identical to the λ=8 value to 6 significant figures —

@@ -95,8 +95,21 @@ WY = NY * DX                    # 75 mm aperture along the rail (120 at λ=8)
 # performs below chance: this system works because it is dark-field. Beyond
 # 30λ the field AUC (physical information at the plane) falls while the det
 # AUC through an UNTRAINED random SLM keeps rising -- trust the field metric.
-# The rig scales with λ but the DEFECTS do not, so RE-RUN scan_geometry.py on
-# the lab GPU at λ=5 before the full generation to confirm 30λ still wins.
+# RE-MEASURED AT λ=5 on the lab 5090 (2026-09-04, 20 samples/class/config) --
+# 30λ is CONFIRMED, and the dark-field structure reproduces:
+#      H        energy   field AUC  det AUC   (60x30, x_center=0)
+#     50 (10λ)  1.53e-2    0.523     0.531   <- lobe inside: near CHANCE, 20x energy
+#    100 (20λ)  1.57e-3    0.840     0.835
+#    150 (30λ)  7.65e-4    0.878     0.854   <- chosen (best on-axis field AUC)
+#    200 (40λ)  4.57e-4    0.874     0.874   <- det AUC higher, field AUC lower
+# Off-axis and wider apertures at H=150: x=-214 (specular-centred) field 0.884 but
+# det 0.666 (information present, fixed windows cannot reach it); 80x80 aperture
+# scores best overall (field 0.889 / det 0.893) at 3.6x the plane points and so
+# 3.6x the generation cost -- not taken for +0.011 AUC.
+# Note the λ=5 mean field AUC (0.878) is NOT better than λ=8's (0.899): the
+# scaled replica preserves the speckle statistics (README finding 18), so the
+# gain from 60 GHz is in defect/λ and in TRAINED performance, not in raw
+# plane-level separability.
 H_MS = 30 * WVL                 # 150 mm at λ=5 (was 240 at λ=8)
 # Lateral offset of the plane centre. The horn illuminates at 55 deg from +x,
 # so the specular lobe off a flat crown lands at x = -H*tan(55 deg) = -2.14*H
@@ -156,18 +169,28 @@ SHADOW_MODE = "raycast"
 # own neighbours -- without any guard ~4% of terminator faces are falsely
 # blocked and the field moves 30-60% (README finding 3).
 #
-# MEASURED (2026-08-17, probe over the production geometry, min_t disabled):
-#   artifact population (intact rail, every hit is a lie)  t <= 0.021 mm (lam=5)
-#                                                          t <= 0.037 mm (lam=8)
-#   real crater-wall occlusion (cracks/dents/shells)       t >= 0.3 mm, up to 9 mm
-# The two populations are cleanly separated, and the artifact scale is the
-# chord sagitta d^2/(8R) -- ~1/100 of a facet, NOT "a few facet lengths".
-# 3.0 mm therefore also discards most REAL self-shadowing (for some samples all
-# of it). A value in (0.05, 0.3) mm removes every artifact and keeps every real
-# occluder. The default is held at the historical 3.0 until the V6 sweep
-# (`python validation_3d.py --min-t ...`) confirms the field-level artifact
-# metric stays flat -- changing it changes the physics, so any dataset
-# generated across the change is incomparable (it is a PROVENANCE key).
+# MEASURED at the FIELD level, V6b sweep on the lab 5090 (2026-09-04), on
+# AUGMENTED intact meshes (roll +-2 deg, jitter +-4 mm -- what generation uses):
+#   min_t   x facet | intact artifact | crack effect | resolved-occluder
+#    3.0 mm  1.20   |  0.0020  OK     |   0.0000     |   0.0000
+#    1.0 mm  0.40   |  0.0451  BAD    |   0.0288     |   0.0597
+#    0.3 mm  0.12   |  0.0451  BAD    |   0.0500     |   0.0808
+#    0.125mm 0.05   |  0.0451  BAD    |   0.0536     |   0.0995
+#    0.05 mm 0.02   |  0.0451  BAD    |   0.0562     |   0.0995
+# The artifact is PINNED at 0.0451 for every value <= 1 mm (the whole artifact
+# population lives below 1 mm, so any smaller cutoff admits all of it) and
+# exceeds V6's 0.03 bound. An earlier un-augmented ray-distance probe put the
+# artifact at t <= 0.02 mm and suggested 0.05-0.3 mm was safe; that probe was
+# MISLEADING because it did not augment -- rolling the rail moves the
+# terminator, and near-tangential rays there skim a full facet before clearing.
+# So 3.0 mm stands as the only tested artifact-safe value. Its real cost:
+# ~5-6% of genuine crack self-shadowing is discarded (~10% against a
+# generation-resolution occluder), which is why V6's
+# crack_shadow_with_resolved_occluder reads 0.0. THE 1.0-3.0 mm GAP IS
+# UNTESTED and is where a better value would live -- sweep 1.25/1.5/2.0/2.5
+# before assuming 3.0 is optimal rather than merely safe.
+# Changing it changes the physics, so any dataset generated across the change
+# is incomparable (it is a PROVENANCE key).
 SHADOW_MIN_T = 3.0
 
 # --- Defect geometry parameters (rev. 2: per-point depth fields d(s, y)) ---

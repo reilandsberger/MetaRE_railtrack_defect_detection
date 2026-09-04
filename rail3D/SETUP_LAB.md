@@ -1,9 +1,8 @@
 # rail3D — Lab Workstation Setup (RTX 5090)
 
-*Last updated: 2026-08-17 · λ = 5 mm (60 GHz) era — bump this line in any
-commit that changes behaviour this file describes. Timings quoted below were
-measured at λ=8 and are ESTIMATES at λ=5 until re-measured (§B calibrates
-them).*
+*Last updated: 2026-09-04 · λ = 5 mm (60 GHz), V0–V8 measured on the 5090 — bump this line in any
+commit that changes behaviour this file describes. Timings are now MEASURED
+at λ=5 on the lab 5090 (2026-09-04), not extrapolated.*
 
 Step-by-step replication of the 3D rail-defect pipeline on the lab computer
 (VS Code + local filesystem, GPU = **RTX 5090**; its device index varies by
@@ -382,20 +381,24 @@ Writes to `data/figures/`:
 For the physics and module-design figures, run `design_review_notebook.ipynb`
 and `validation_3d_notebook.ipynb`.
 
-## 7. Measurement-plane geometry — RE-SCAN REQUIRED at λ=5
+## 7. Measurement-plane geometry — RE-SCANNED at λ=5, 30λ confirmed
 
 ```bash
 python scan_geometry.py 2>&1 | tee ../scan_geometry_console.txt
 ```
 
-The current `H_MS = 30λ = 150 mm` reproduces the λ=8 optimum (240 mm) in the
-scaled replica, and the dark-field argument (specular lobe far outside the
-aperture; H = 10λ pulls it inside → 13× energy, below-chance separability)
-carries over exactly. **But the defects did not scale with the rig**, so the
-information-vs-height trade can shift — re-run the scan at λ=5 before the full
-generation and only then trust 30λ. Historical λ=8 table and reasoning are in
-`rail3d/config.py` above `H_MS`. The default candidate list is derived from
-the active config (heights as λ-multiples).
+**Re-scanned on the 5090, 2026-09-04: `H_MS = 30λ = 150 mm` is confirmed**
+(best on-axis field AUC 0.878, vs 0.840 at 20λ and 0.874 at 40λ), and the
+dark-field structure reproduces exactly — H = 10λ puts the specular lobe inside
+the aperture and collapses to **0.523 field AUC, near chance, with 20× the
+energy**. Keep `x_center = 0`: specular-centred scores higher on *field* AUC
+(0.884) but far lower through a fixed readout (det AUC 0.666). The full λ=5
+table is in `rail3d/config.py` above `H_MS`.
+
+One result worth knowing: an **80×80 aperture scores best of all** (field 0.889
+/ det 0.893) but costs 3.6× the plane points and therefore 3.6× the generation
+time — not taken for +0.011 AUC, but it is the first thing to revisit if crack
+recall proves limiting.
 
 ### Exploring geometries with bigger smoke sets
 
@@ -508,11 +511,13 @@ class accuracy, redundancy/throughput, and the surviving layout) plus
 The 13×10 is not arbitrary — it is the **tiling bound**
 `floor(aperture / window)` (derived in config): windows at window-sized pitch
 are the densest USEFUL start, since anything closer only creates duplicates.
-The field's speckle grain is `λ·H/D ≈ 9.9 × 6.2 mm` (D = the ~76 mm illuminated
-head width), so the 11.4 × 7.0 mm window is ≈1.1 grain — matched, and the
-binding scale for spacing. README finding 19 works this through; the aperture
-holds ≈182 independent speckle cells, so 130 windows sample near the
-information limit. Pruning from the tiling lattice lets training
+The field's speckle grain is **5.0 mm along x, measured** (8.0 mm at λ=8), so
+the 11.4 mm window spans ≈2.3 grains — the same ratio as the validated λ=8
+design, and the binding scale for spacing. README findings 18–19 work this
+through; the aperture holds ~30 independent speckle cells across x, so the 130
+overlapping windows oversample on purpose: the dense start exists to give
+pruning a rich candidate set, not to add information.
+Pruning from the tiling lattice lets training
 select from a rich candidate set instead of a handful of fixed spots. It
 requires the **redundancy** criterion: overlapping windows have near-identical
 variance, so Face3D's variance ranking cannot tell a duplicate from a uniquely
@@ -592,14 +597,21 @@ Verified at **λ=5** on the laptop (2026-08-17):
   beats variance on the dense-layout failure case (V0b); every staleness guard
   refuses what it must and passes what it must (V0c).
 
-Measured at **λ=8**, PENDING re-measurement at λ=5 (§B runs them):
-- 3D solver vs the established 2D Hankel pipeline on a uniform rail: r = 0.976
-  at the 120 mm segment (V5).
-- Ray-cast shadowing vs the 2D line-of-sight ground truth; a real 4.3% effect
-  at λ=8 — expected to GROW at λ=5 (hairlines are now 0.4λ) (V6).
-- Generation mesh (λ/8): defect-signal cosine mean 0.9975, min 0.9944 vs λ/16
-  at λ=8; the λ=5 numbers also flow through the FIXED 130-window probe (V7).
-- End-to-end training: separation grows, 130→8 pruning, keep-index-verified
-  detector movement, no collapse, capture bounded, kill-and-resume
-  bit-identical, legacy objective + variance criterion + stale-checkpoint
-  refusal guarded (V8).
+Measured at **λ=5 on the lab 5090** (2026-09-04):
+- 3D solver vs the established 2D Hankel pipeline on a uniform rail:
+  **r = 0.958** (V5), down from 0.976 at λ=8 — the figure shows envelope
+  agreement with a slight fringe offset (finite 120 mm segment vs infinite
+  extrusion), not a solver disagreement.
+- Generation mesh (λ/8): defect-signal cosine **min 0.9948, mean 0.9982** vs
+  λ/16, all six cases (V7). Mesh converged.
+- End-to-end training: separation 0.0290 → 0.0562, 130→8 pruning,
+  keep-index-verified detector movement, min separation 6.13 mm, capture
+  bounded, kill-and-resume bit-identical (mismatch exactly 0.0), legacy
+  objective + variance criterion + stale-checkpoint refusal all guarded (V8).
+
+**What you can NOT yet trust:**
+- Ray-cast shadowing is **inert** at `SHADOW_MIN_T = 3.0` — V6 passes but
+  `crack_shadow_with_resolved_occluder = 0.0` and 7 of 8 samples are exactly
+  0.0. Narrow-crater self-shadowing is absent from the data (README finding 3).
+- Anything about TRAINED performance at λ=5: only the 30-epoch smoke run
+  exists, whose validation split is 8 defect / 3 intact and therefore noise.
