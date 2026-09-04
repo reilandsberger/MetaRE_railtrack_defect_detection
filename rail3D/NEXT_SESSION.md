@@ -100,31 +100,101 @@ Fallback if it stays inert: `SHADOW_MODE = "none"` gives a **bit-identical**
 dataset (V6 proves the fields match at min_t=3.0) in roughly a third of the
 time — ~1.6 h instead of 4.62 h.
 
-## Pending decision — FDTD comparison
+## Full-wave comparison — solver chosen, exporter BUILT (2026-09-04)
 
-User wants to validate wavefronts against a full-wave solver, for a
-presentation comparing simulation versions. **I asked which solver they have
-and did not get an answer — ask before building the exporter.**
+The user asked: is Ansys **Zemax OpticStudio** enough for a reflected-wavefront
+comparison, or does it need **Lumerical FDTD**? Answer: **neither** — it is a
+MoM problem. Numbers below are measured, not estimated.
 
-- **Zemax OpticStudio is the wrong tool** (optical ray-tracing/design, no
-  full-wave solver). Told them so.
-- **Best fit is MoM**, not FDTD: PEC, open-region, electrically large surface
-  scattering, and we already have the surface mesh. ~85k triangles ≈ 127k RWG
-  unknowns at λ/10 — easy for MLFMM. **Ansys HFSS-IE** (needs the IE solver
-  licensed, not just FEM) or **Altair FEKO**.
-- Lumerical FDTD would need ~5×10⁸ cells at 60 GHz. Impractical.
+- **Zemax is not a valid reference.** Its Physical Optics Propagation is a
+  scalar Fresnel/Kirchhoff beam propagator — the *same approximation family* as
+  `field3d.py`. It would agree with us by construction and prove nothing. Its
+  non-sequential mode scatters incoherently (no phase), so it cannot return a
+  complex field on the plane at all.
+- **Lumerical FDTD is valid physics but the wrong shape.** Boxing the whole
+  scene out to the plane at z=150 is **387 Mcells at λ/20 ≈ 39 GB** — over a
+  32 GB GPU, and most of it is empty air we already trust (V3 checks that
+  propagation against ASM to 0.13%). Only sensible **scoped**: box the rail
+  alone (23 Mcells / 2.3 GB for a 30 mm segment, 85 Mcells / 8.5 GB for 120 mm),
+  near-field monitor, project analytically to the plane.
+- **MoM/MLFMM is the fit**: PEC surface, open region, mesh is 2-D only.
+  Measured on the exported **closed** body at the production 120 mm segment
+  (405 cm²): **562k RWG unknowns at λ/10**, 233k at the exported λ/8 density.
+  Dense matrix would be 5.05 TB, so MLFMM is mandatory, but 562k is routine for
+  it. → **Ansys HFSS-IE** (needs the *Integral Equation* solver licensed — an
+  HFSS FEM seat alone will not run it) or **Altair FEKO**.
+- **HFSS SBR+** is shooting-bounce-ray PO with PTD edge corrections: an upgrade
+  on our model, not an independent check. A useful third point, not the
+  validator.
 
-Planned but NOT implemented in `compare_wavefronts.py`:
-- **STL export** (OBJ isn't reliably importable into HFSS/FEKO)
-- optional **closed mesh** — MoM treats an open shell as an infinitely-thin
-  sheet (currents both sides), which is different physics from our opaque body
-- **plane-wave source mode** — removes the horn as a confound
-- scale/conjugate-invariant metrics: ours uses `exp(+ikR)`, HFSS/FEKO use
-  `e^{jωt}` → `e^{−jkR}`, so external fields arrive **conjugated**
-- fit a complex scale α = ⟨a,b⟩/⟨b,b⟩ before differencing
+**STILL UNANSWERED: which solver the user actually has licensed.** Ask. The
+exporter is solver-agnostic, so this blocks the run, not the code.
 
-Validation ladder (one unknown at a time): flat PEC plate → intact rail →
-cracked rail, all plane-wave; real horn last.
+### What is now implemented (all four planned items, self-tested)
+
+`compare_wavefronts.py --export-case DIR [--source plane] [--export-closed]`
+
+- **STL export** (binary, alongside the OBJ) — the format HFSS/FEKO actually
+  import. Units are not carried by STL: import as **mm**.
+- **`--export-closed`** caps the swept shell into a watertight body
+  (verified: 0 boundary edges, Euler characteristic 2, outward normals, closed
+  volume 121,499 mm³ for a 30 mm segment). MoM puts current on **both** faces of
+  an open sheet, which is not what an opaque rail does.
+- **`--source plane`** (`field3d.scattered_fields(source="plane")`) illuminates
+  with a unit plane wave along the same −d direction, removing the horn aperture
+  model as a confound. It forces `compute_psi2=False` — psi2 is re-radiation off
+  the horn, and a plane wave has no horn. Measured complex corr(plane, horn) =
+  0.902 on an intact 20 mm segment: same scatterer, different illumination taper.
+  **The horn path is byte-identical** — V1 psi1 error still 1.1621e-07.
+- **`align_external()`** fits the two bookkeeping mismatches before any metric
+  or figure, and *reports* them rather than silently applying them:
+  (a) rail3D uses `exp(−iωt)` → `exp(+ik₀R)`; HFSS/FEKO/Lumerical use
+  `exp(+jωt)` → `exp(−jk₀R)`, so **external fields arrive conjugated**;
+  (b) one complex gain α = ⟨cand,ref⟩/⟨cand,cand⟩ absorbs source normalisation
+  and units. Round-trip verified to <5e-7 for conjugation + 137× gain + 55°
+  phase, and uncorrelated noise is flagged `ambiguous` rather than flattered.
+
+`case.json` now also carries mesh stats, MoM unknown counts, the cell-centred
+grid formula, and an explicit `conventions` block (time convention, amplitude,
+and the warning that rail3D is **scalar** — export one component, E_y/TE is the
+cleanest match).
+
+### Segment length is NOT free — measured, and it changed the plan
+
+**Use the production `SEG_LEN` = 120 mm — do NOT shorten the rail to save
+unknowns.** Measured on the exported mesh (`case.json` → `truncation`), the
+illuminated power per unit rail length within 1λ of the cut end, relative to
+mid-span, is **0.80x at 30 mm** and only **0.08x at 120 mm**. Our PO solver has
+**no edge diffraction at all**; a MoM or FDTD reference has plenty. A brightly
+lit cut end makes the reference diffract off a truncation the real rail does not
+have, and that disagreement gets misread as "PO fails on the defect". The
+120 mm truncation study that justified `SEG_LEN` measured the *defect signal*
+(a difference, where the common edge contribution cancels) — it does not license
+a short segment for an absolute-field comparison.
+
+**So compare the difference field.** Export `intact` and the defect at the same
+segment length, and compare `E_defect − E_intact` between solvers as the primary
+metric, with absolute fields secondary. That is also the quantity the detector
+barcodes actually respond to.
+
+The exporter measures this itself (`cut_end_illumination`, folded into
+`case.json` → `truncation` and printed on export), so it stays honest if the
+geometry or wavelength changes.
+
+Validation ladder (one unknown at a time), also written into the exported
+README: **flat PEC plate → intact rail → cracked rail, all plane-wave; real horn
+last.** Do not start at the bottom — if the flat plate disagrees, the setup is
+wrong, not the physics.
+
+Bundles already exported and ready to hand to a solver:
+`data/generated/mom_case_intact/` and `mom_case_crack/` (120 mm, closed,
+watertight, plane wave, STL + OBJ + case.json + README).
+
+Why this is worth doing at λ=5: PO assumes radii of curvature ≫ λ, and crack
+widths are 2–5 mm = **0.4–1λ** at 60 GHz. That is exactly where the tangent-plane
+approximation is expected to break, and it is the one thing the V-gates cannot
+test — V1–V3 verify we solve *our* integral correctly, and V5 compares against
+the 2D code, which shares the assumption.
 
 ## Landmines for a new session
 

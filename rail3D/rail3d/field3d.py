@@ -50,6 +50,15 @@ def incident_direction(theta_inc: float, phi_inc: float = 0.0) -> torch.Tensor:
     )
 
 
+def plane_wave_incident(X, Y, H, wvl, theta_inc) -> torch.Tensor:
+    """Unit plane wave on the observation plane -- the psi0 analogue for
+    ``scattered_fields(source="plane")``. Travels along -incident_direction."""
+    k0 = 2 * np.pi / wvl
+    d = incident_direction(theta_inc).to(X.device)
+    phase = -(X * d[0] + Y * d[1] + H * d[2])
+    return torch.exp(1j * k0 * phase).to(torch.complex64)
+
+
 def aperture_field(size_ant, dist_ant, resol_ant, theta_inc, wvl, k0):
     """Horn / open-aperture source field (verbatim Face3D ``_aperture_field``)."""
     if len(size_ant) > 3:
@@ -239,6 +248,7 @@ def scattered_fields(
     shadow_min_t: float | None = None,
     shadow_normal_offset: float | None = None,
     compute_psi2: bool = True,
+    source: str = "horn",
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """psi1 (single bounce) and psi2 (double bounce) on the observation plane.
 
@@ -251,9 +261,21 @@ def scattered_fields(
     (mm); None keeps ``raycast_shadow_mask``'s defaults. Callers that follow
     the project config pass ``config.SHADOW_MIN_T`` /
     ``config.SHADOW_NORMAL_OFFSET``.
+    ``source`` selects the illumination: "horn" (default, the physical
+    pyramidal horn — every dataset and V-gate uses this) or "plane", a
+    unit-amplitude plane wave arriving along the same -d direction. The
+    plane-wave mode exists for full-wave cross-validation: it removes the horn
+    aperture model as a confound, so a disagreement with HFSS-IE / FEKO /
+    Lumerical is attributable to the surface physics rather than to the source.
+    It forces ``compute_psi2=False``, because psi2 is re-radiation off the horn
+    structure and a plane wave has no horn.
     Returns psi1, psi2 with shape (B, r1, r2) complex64 (psi2 zeros when
     compute_psi2=False).
     """
+    if source not in ("horn", "plane"):
+        raise ValueError(f"source must be 'horn' or 'plane', got {source!r}")
+    if source == "plane":
+        compute_psi2 = False
     single = v.dim() == 2
     if single:
         v = v.unsqueeze(0)
@@ -323,12 +345,18 @@ def scattered_fields(
         Yo = c[:, :, 1].reshape(B, -1, 1, 1)
         Zo = c[:, :, 2].reshape(B, -1, 1, 1)
 
-        # --- antenna -> face (illumination of every face in the chunk)
-        R_ao = torch.sqrt((Xo - Xa) ** 2 + (Yo - Ya) ** 2 + (Zo - Za) ** 2)
-        obj2ant = -(Xo - Xa) * np.sin(theta_inc) - (Zo - Za) * np.cos(theta_inc)
-        kernel = rs_kernel(R_ao, obj2ant, wvl, k0)
-        psi0_face = (psi0_ant.reshape(1, 1, r, r) * dS_ant * kernel).sum(dim=(2, 3))  # (B, C)
-        del R_ao, obj2ant, kernel
+        # --- source -> face (illumination of every face in the chunk)
+        if source == "plane":
+            # d points from the rail TOWARDS the horn, so the wave travels
+            # along -d. This matches the horn's far-field phase:
+            # exp(i k0 |c - a|) ~ exp(i k0 dist_ant) * exp(-i k0 d.c)
+            psi0_face = torch.exp(-1j * k0 * (c @ d))                       # (B, C)
+        else:
+            R_ao = torch.sqrt((Xo - Xa) ** 2 + (Yo - Ya) ** 2 + (Zo - Za) ** 2)
+            obj2ant = -(Xo - Xa) * np.sin(theta_inc) - (Zo - Za) * np.cos(theta_inc)
+            kernel = rs_kernel(R_ao, obj2ant, wvl, k0)
+            psi0_face = (psi0_ant.reshape(1, 1, r, r) * dS_ant * kernel).sum(dim=(2, 3))
+            del R_ao, obj2ant, kernel
 
         # --- face -> plane (psi1); "-" is the 180° phase flip on reflection
         R = torch.sqrt((Xp - Xo) ** 2 + (Yp - Yo) ** 2 + (H - Zo) ** 2)

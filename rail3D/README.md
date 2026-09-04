@@ -137,7 +137,7 @@ field, plus parameter histograms.
 | `validation_3d.py` | V5–V7 gates + figures (includes the 2D Hankel reference solver) |
 | `v8_smoke_test.py` | V8 end-to-end + kill-and-resume bit-identity + refusal/regression guards |
 | `lab_report.py` | the whole verification chain in one command → paste-able `data/generated/lab_report.md` |
-| `compare_wavefronts.py` | one sample solved every way — λ=8 vs λ=5, physics terms, shadow guard, mesh — as amplitude/phase figures + metrics; exports an FDTD-ready case and accepts external solver fields back |
+| `compare_wavefronts.py` | one sample solved every way — λ=8 vs λ=5, physics terms, shadow guard, mesh, horn vs plane wave — as amplitude/phase figures + metrics; exports a full-wave case (STL+OBJ, optional closed body, `--source plane`) and accepts external solver fields back, auto-detecting their time convention and amplitude. See finding 20 |
 | `scan_geometry.py` | measure the observation plane (H, offset, aperture) before committing to a generation |
 | `sweep_detectors.py` | final detector count / MS→detector distance sweep (training-time only) |
 | `analyze_results.py` | where it succeeds and fails, per defect parameter; failure montage |
@@ -399,6 +399,63 @@ first) · or everything at once with `python lab_report.py`.
     ~30 independent speckle cells across x at either wavelength, so 130
     overlapping windows oversample deliberately — the point of the dense start
     is candidate coverage for pruning, not extra information.
+
+20. **The full-wave cross-check must be MoM, not Zemax and not full-scene
+    FDTD — and two convention mismatches will masquerade as physics.**
+    PO assumes surface radii of curvature ≫ λ. At λ=5 the crack widths are
+    2–5 mm = **0.4–1λ**, exactly where the tangent-plane approximation is
+    expected to break, and no existing gate can see it: V1–V3 verify we solve
+    *our own* integral correctly, and V5 compares against the 2D code, which
+    shares the assumption.
+    - **Zemax OpticStudio is not a valid reference.** Its Physical Optics
+      Propagation is a scalar Fresnel/Kirchhoff propagator — the same
+      approximation family as `field3d.py` — so it would agree with us by
+      construction. Its non-sequential mode scatters incoherently (no phase)
+      and cannot return a complex field at all. Likewise **HFSS SBR+** (ray PO
+      + PTD edges) is an upgrade on our model, not an independent check.
+    - **FDTD is valid but volumetric.** Boxing the whole scene out to the plane
+      at z=150 is **387 Mcells at λ/20 ≈ 39 GB** — over a 32 GB GPU, and mostly
+      empty air whose propagation V3 already validates to 0.13%. Viable only
+      boxed around the rail (23 Mcells / 2.3 GB for a 30 mm segment) with a
+      near-field projection to the plane.
+    - **MoM/MLFMM fits**: PEC surface, open region, the mesh is 2-D only.
+      Measured on the exported **closed** body at the production 120 mm segment
+      (405 cm²): **562k RWG unknowns at λ/10** (233k at the exported λ/8
+      density). Closing the body roughly doubles the unknowns — the unlit caps
+      and underside get meshed too, which is the price of an opaque rail rather
+      than an infinitely thin sheet. Dense MoM would be 5.05 TB, so MLFMM is
+      mandatory. Ansys **HFSS-IE** (needs the Integral Equation licence, not
+      just FEM) or **Altair FEKO**.
+    - **Do not shorten the rail to save unknowns.** Illuminated power per unit
+      length within 1λ of the cut end, relative to mid-span, is **0.80x at a
+      30 mm segment** and **0.08x at 120 mm** (`case.json` → `truncation`,
+      measured by `cut_end_illumination`). PO has *no* edge diffraction; a
+      full-wave reference has plenty, so a lit cut end makes the reference
+      diffract off a truncation the real rail does not have — read as "PO fails
+      on the defect". The truncation study that justified `SEG_LEN` = 120
+      measured the *defect signal*, a difference in which the common edge
+      contribution cancels; it does not license a short segment for an
+      absolute-field comparison. **Compare `E_defect − E_intact` between
+      solvers as the primary metric** — export both at the same segment
+      length.
+    Two traps, both handled by `compare_wavefronts.align_external()`, which
+    *reports* what it fitted rather than silently applying it:
+    (a) rail3D uses `exp(−iωt)` → outgoing `exp(+ik₀R)` (`field3d.rs_kernel`),
+    while HFSS/FEKO/Lumerical use `exp(+jωt)` → `exp(−jk₀R)`, so **external
+    fields arrive conjugated** — conjugating the wrong one turns a perfect
+    match into an apparent total failure; (b) absolute amplitude is arbitrary,
+    so one complex gain α = ⟨cand,ref⟩/⟨cand,cand⟩ is fitted over the plane
+    before differencing (the residual is then `sqrt(1 − complex_corr²)` by
+    construction, so **quote `complex_corr`**). A third trap the code cannot
+    fix: rail3D is **scalar**, so export one component from the vector solver
+    (E_y / TE is the cleanest match) and set the incident polarisation to match.
+    Export with `--export-closed` — MoM puts current on **both** faces of an
+    open sheet, which is not what an opaque rail does — and `--source plane`,
+    which removes the horn aperture model as a confound (it forces
+    `compute_psi2=False`: psi2 is re-radiation off the horn, and a plane wave
+    has no horn). Ladder, one unknown at a time: **flat PEC plate → intact rail
+    → cracked rail, all plane-wave; real horn last.** SETUP_LAB §13 is the
+    runbook.
 
 ## 6b. Objective & metrics (rev. 2)
 

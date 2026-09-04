@@ -99,6 +99,14 @@ All eleven gates PASS at λ=5 on the RTX 5090. What the numbers say:
    under 0.03 while restoring some crack shadowing.
 2. If shadowing stays inert, consider `SHADOW_MODE="none"` for generation:
    it would produce a **bit-identical** dataset in roughly half the time.
+3. **Which full-wave solver is licensed** (blocks the cross-check run, not the
+   code). The answer to "Zemax or Lumerical?" is **neither** — it is a MoM
+   problem: **Ansys HFSS-IE** (needs the Integral Equation licence, not just
+   FEM) or **Altair FEKO**. Zemax's POP shares this code's scalar-Kirchhoff
+   assumptions and would only confirm itself; full-scene FDTD is 387 Mcells /
+   ~39 GB. Exporter is built and self-tested (`compare_wavefronts.py
+   --export-case DIR --source plane --export-closed`); README finding 20 and
+   SETUP_LAB §13 carry the reasoning, sizing and the sign/polarisation traps.
 
 ## Previous state (2026-08-17 — λ=5 scaled-replica migration + hazard fixes)
 

@@ -150,6 +150,17 @@ informational, neither gates):
 ```bash
 python compare_wavefronts.py --profile lab --export-case data/generated/fdtd_case
 ```
+
+For a **full-wave reference run**, export the plane-wave, closed-body variant
+instead — that is the form a MoM solver wants (see §13):
+
+```bash
+python compare_wavefronts.py --sample intact --source plane --export-closed --export-only --export-case data/generated/mom_case_intact
+python compare_wavefronts.py --sample crack  --source plane --export-closed --export-only --export-case data/generated/mom_case_crack
+```
+
+`--export-only` skips the variant solves (exporting is instant; solving is
+minutes). Export **both** — the primary comparison is the difference field.
 ```bash
 python validation_3d.py --min-t 3.0 1.0 0.3 0.125 0.05 2>&1 | tee ../min_t_sweep.txt
 ```
@@ -615,3 +626,100 @@ Measured at **λ=5 on the lab 5090** (2026-09-04):
   0.0. Narrow-crater self-shadowing is absent from the data (README finding 3).
 - Anything about TRAINED performance at λ=5: only the 30-epoch smoke run
   exists, whose validation split is 8 defect / 3 intact and therefore noise.
+
+---
+
+## 13. Full-wave (MoM) cross-check — which solver, and how to feed it
+
+**The question this answers:** our solver is physical optics — scalar, PEC
+tangent-plane currents, single + double bounce. At λ=5 mm the crack widths are
+2–5 mm = **0.4–1λ**, which is precisely where that approximation is expected to
+break. V1–V3 only prove we solve *our own* integral correctly; V5 compares
+against the 2D code, which shares the assumption. A full-wave run is the only
+way to measure what PO misses.
+
+**Use MoM/MLFMM, not Zemax and not full-scene FDTD.**
+
+| tool | verdict |
+|---|---|
+| **Ansys HFSS-IE** (Integral Equation solver) | **recommended.** Needs the IE licence — an HFSS FEM seat alone will not run it |
+| **Altair FEKO** (MLFMM) | equally good; use if HFSS-IE is not licensed |
+| Ansys HFSS (FEM) | volumetric; would mesh 150 mm of empty air to the plane |
+| Ansys HFSS SBR+ | ray PO + PTD edges — an upgrade on our model, not an independent check |
+| Ansys Lumerical FDTD | valid physics, wrong shape: **387 Mcells / ~39 GB** for the full scene. Only viable boxed around the rail (23 Mcells for a 30 mm segment) with a near-field projection to the plane |
+| Ansys Zemax OpticStudio | **not valid.** Its POP is scalar Fresnel/Kirchhoff — the same approximation family as our code — so agreement proves nothing |
+
+**Problem size and why the segment length is not free:**
+
+| geometry (closed body, mesh λ/8 as exported) | triangles | RWG unknowns at λ/10 | cut-end illumination |
+|---|---|---|---|
+| 30 mm segment | 39.5k | 226k | **0.80x mid-span** — truncation-confounded |
+| 60 mm segment | 78k | 302k | 0.35x — still hot |
+| 80 mm segment | 104k | 379k | 0.16x |
+| **120 mm segment (production `SEG_LEN`)** | **156k** | **562k** | **0.08x** |
+
+Closing the body roughly **doubles** the unknowns (the unlit end caps and
+underside get meshed too) — that is the price of modelling an opaque rail
+instead of an infinitely thin sheet. The dense MoM matrix at 562k unknowns is
+**5.05 TB**, so MLFMM is not optional. The exported λ/8 mesh is 233k unknowns
+and can be run as-is if λ/10 is too heavy.
+
+**Use the production `SEG_LEN` = 120 mm — do NOT shorten the rail to save
+unknowns.** Measured on the exported mesh (`case.json` → `truncation`), the
+illuminated power per unit rail length within 1λ of the cut end, relative to
+mid-span, is **0.80x at 30 mm** and only **0.08x at 120 mm**. Our PO solver has
+**no edge diffraction at all**; a MoM or FDTD reference has plenty. A brightly
+lit cut end makes the reference diffract off a truncation the real rail does not
+have, and that disagreement gets misread as "PO fails on the defect". The
+120 mm truncation study that justified `SEG_LEN` measured the *defect signal*
+(a difference, where the common edge contribution cancels) — it does not license
+a short segment for an absolute-field comparison.
+
+**So compare the difference field.** Export `intact` and the defect at the same
+segment length, and compare `E_defect − E_intact` between solvers as the primary
+metric, with absolute fields secondary. That is also the quantity the detector
+barcodes actually respond to.
+
+**Ladder — one unknown at a time. Do not start at the bottom.**
+
+1. **Flat PEC plate**, plane wave, 55° incidence. If this disagrees, the setup
+   is wrong, not the physics.
+2. **Intact rail**, plane wave — tests PO currents on a curved surface.
+3. **Cracked rail**, plane wave — the real question.
+4. **Real horn**, only after 1–3 agree.
+
+**Setting it up.** `--export-closed` writes a watertight body (MoM puts current
+on *both* faces of an open sheet, which is not what an opaque rail does), and
+`--source plane` removes the horn aperture model as a confound. Import
+`rail_surface.stl` as **millimetres** — STL carries no units. `case.json` has
+the source, the cell-centred plane grid (`x_i = -Wx/2 + (i+0.5)*dx` — sample
+exactly these points, not a node-centred grid), and a `conventions` block.
+
+**Two traps that look like physics disagreements and are not:**
+
+- **Time convention.** rail3D uses `exp(-iωt)`, so outgoing waves carry
+  `exp(+ik₀R)`. HFSS, FEKO and Lumerical use `exp(+jωt)` → `exp(-jk₀R)`, so
+  their fields arrive **conjugated**. `--external` detects this and *tells you*
+  which convention matched; it does not silently fix it.
+- **Polarisation.** rail3D is **scalar**. Export ONE component from the vector
+  solver — `E_y` (E along the rail axis, TE) is the cleanest match — and set the
+  incident polarisation to match it.
+
+Absolute amplitude does not matter: one complex gain α is fitted over the whole
+plane before differencing, so `complex_corr` is the number to quote.
+
+**Returning the result:**
+
+```python
+import numpy as np
+np.savez("mom_result.npz", field=E.astype(np.complex64), label="HFSS-IE")
+```
+
+```bash
+python compare_wavefronts.py --profile lab --source plane --external mom_result.npz
+```
+
+It joins every figure and metric, with the alignment printed. Expect PO and
+full-wave to differ at sub-wavelength features, grazing faces, the cut-end
+edges, beyond the second bounce, and anywhere polarisation matters — those are
+the interesting comparisons, not failures to hide.
