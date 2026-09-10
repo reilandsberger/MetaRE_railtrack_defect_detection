@@ -103,6 +103,36 @@ def plane_grid(g: dict, device):
     return X.reshape(1, g["nx"], g["ny"]), Y.reshape(1, g["nx"], g["ny"])
 
 
+def plate_mesh(half: float, ds: float):
+    """Flat PEC plate in the z=0 plane, triangulated at spacing ``ds``.
+
+    Rung 1 of the full-wave ladder: the simplest object both solvers can model
+    exactly, so a disagreement here is a SETUP error (units, angle, phase
+    reference, polarisation), not physics. Same construction V4 uses for its
+    specular-lobe check, so V4 doubles as a gate on this geometry.
+    """
+    n = int(round(2 * half / ds)) + 1
+    gx = torch.linspace(-half, half, n)
+    G1, G2 = torch.meshgrid(gx, gx, indexing="ij")
+    v = torch.stack([G1.reshape(-1), G2.reshape(-1), torch.zeros(n * n)], dim=1)
+    i = torch.arange(n - 1)
+    J, I = torch.meshgrid(i, i, indexing="ij")
+    a, b = I * n + J, (I + 1) * n + J
+    c, d = I * n + J + 1, (I + 1) * n + J + 1
+    f = torch.cat([torch.stack([a, b, c], -1).reshape(-1, 3),
+                   torch.stack([b, d, c], -1).reshape(-1, 3)])
+    return v, f
+
+
+def build_mesh(section, params, ds, n_arc, seg):
+    """The scatterer for this sample -- rail sweep, or the flat plate."""
+    if params is not None and params.get("class") == "plate":
+        return plate_mesh(params.get("half", 7.5 * config.WVL), ds)
+    kw = {} if seg is None else {"seg_len": seg}
+    return mesh3d.sweep_rail_mesh(section, defect_params=params, slice_ds=ds,
+                                  arc_ds=ds, n_arc=n_arc, **kw)
+
+
 def solve(section, params, g, device, chunk, *, mesh_ds=None, shadow=None,
           min_t=None, terms="psi1", seg=None, source="horn"):
     """One wavefront on the measurement plane of geometry ``g``.
@@ -123,10 +153,10 @@ def solve(section, params, g, device, chunk, *, mesh_ds=None, shadow=None,
                 if source == "plane" else field3d.horn_to_plane(*args))
 
     n_arc = mesh3d.default_arc_count(section, ds)
-    kw_mesh = {} if seg is None else {"seg_len": seg}
-    v, f = mesh3d.sweep_rail_mesh(section, defect_params=params, slice_ds=ds,
-                                  arc_ds=ds, n_arc=n_arc, **kw_mesh)
+    v, f = build_mesh(section, params, ds, n_arc, seg)
     kw = {}
+    if params is not None and params.get("class") == "plate":
+        shadow = None                      # a flat plate cannot shadow itself
     if shadow == "raycast":
         n_occ = mesh3d.default_arc_count(section, g["occ_ds"])
         v_o, f_o = mesh3d.sweep_rail_mesh(section, defect_params=params,
@@ -179,6 +209,114 @@ def barcode(psi, g, device):
 
 def cos_sim(a, b):
     return float((a @ b) / (a.norm() * b.norm()).clamp_min(1e-12))
+
+
+FIELD_KEYS = ("field", "Ey", "Ez", "Ex", "E", "Hy", "Hx", "Hz", "H")
+X_KEYS = ("x", "X", "x_mm")
+Y_KEYS = ("y", "Y", "y_mm")
+
+
+def _pick(raw, keys):
+    for k in keys:
+        if k in raw:
+            return np.asarray(raw[k]).reshape(-1).astype(float), k
+    return None, None
+
+
+def load_external(path: str, g: dict):
+    """Read a full-wave result and put it on OUR cell-centred plane grid.
+
+    An FDTD monitor samples on the FDTD mesh, in metres, over whatever extent
+    the box had -- never our 60x30 grid at dx=2.5 mm. So accept coordinate
+    vectors alongside the field and interpolate onto our grid. Without them the
+    array must already match our grid exactly.
+
+    Accepts .npz (numpy) or .mat (what Lumerical's ``matlabsave`` writes).
+    Lumerical field arrays keep singleton dimensions (nx,ny,nz,nf,ncomp), so
+    they are squeezed; a surviving 3-component axis is an error rather than a
+    guess, because rail3D is scalar and the choice of component is physics.
+    """
+    p = Path(path)
+    if p.suffix.lower() == ".mat":
+        from scipy.io import loadmat
+        raw = {k: v for k, v in loadmat(str(p)).items() if not k.startswith("__")}
+    else:
+        raw = dict(np.load(p, allow_pickle=True))
+
+    key = next((k for k in FIELD_KEYS if k in raw), None)
+    if key is None:
+        cand = [k for k, v in raw.items()
+                if getattr(v, "ndim", 0) >= 2 and np.iscomplexobj(np.asarray(v))]
+        if len(cand) != 1:
+            raise SystemExit(
+                f"{p.name}: cannot tell which array is the field (keys: "
+                f"{sorted(raw)}). Save it under one of {FIELD_KEYS}.")
+        key = cand[0]
+    fld = np.squeeze(np.asarray(raw[key]))
+
+    if fld.ndim == 3 and 3 in fld.shape[-1:]:
+        raise SystemExit(
+            f"{p.name}: '{key}' still carries a 3-component axis {fld.shape}. "
+            "rail3D is SCALAR -- export ONE component (E_y for the recommended "
+            "s-polarised setup), not the vector.")
+    if fld.ndim != 2:
+        raise SystemExit(f"{p.name}: '{key}' squeezed to {fld.shape}; need 2-D.")
+    if not np.iscomplexobj(fld):
+        print(f"  ! {p.name}: '{key}' is REAL. A frequency-domain monitor gives a "
+              "complex field; a real array means magnitude was exported and every "
+              "phase comparison below is meaningless.")
+    fld = fld.astype(np.complex128)
+
+    lab = str(raw["label"]) if "label" in raw else p.stem
+    xv, xk = _pick(raw, X_KEYS)
+    yv, _ = _pick(raw, Y_KEYS)
+
+    if xv is None or yv is None:
+        if fld.shape != (g["nx"], g["ny"]):
+            raise SystemExit(
+                f"{p.name}: field is {fld.shape} but our grid is "
+                f"({g['nx']},{g['ny']}), and no x/y vectors were supplied to "
+                "interpolate with. Save the monitor's coordinate vectors too.")
+        return fld, lab, {"resampled": False}
+
+    # Lumerical works in SI. Our grid spans +/-75 mm, so a coordinate vector
+    # whose extent is under 1 is metres, not millimetres.
+    scale = 1000.0 if max(np.abs(xv).max(), np.abs(yv).max()) < 1.0 else 1.0
+    xv, yv = xv * scale, yv * scale
+
+    if fld.shape == (len(yv), len(xv)) and fld.shape[0] != fld.shape[1]:
+        fld = fld.T                        # solver wrote (y, x)
+    if fld.shape != (len(xv), len(yv)):
+        raise SystemExit(
+            f"{p.name}: field {fld.shape} matches neither ({len(xv)},{len(yv)}) "
+            f"nor its transpose. Check which axis is which.")
+
+    from scipy.interpolate import RegularGridInterpolator
+    Xq, Yq = plane_grid(g, torch.device("cpu"))
+    Xq, Yq = Xq[0].numpy(), Yq[0].numpy()
+    inside = ((Xq >= xv.min()) & (Xq <= xv.max())
+              & (Yq >= yv.min()) & (Yq <= yv.max()))
+    cover = float(inside.mean())
+    if cover < 1.0:
+        print(f"  ! {p.name}: the monitor covers only {100*cover:.1f}% of our "
+              f"plane (monitor x [{xv.min():.1f},{xv.max():.1f}] y "
+              f"[{yv.min():.1f},{yv.max():.1f}] mm; we need x "
+              f"[{Xq.min():.1f},{Xq.max():.1f}] y [{Yq.min():.1f},{Yq.max():.1f}]). "
+              "Outside points are set to 0 and will read as disagreement -- "
+              "enlarge the monitor.")
+    pts = np.stack([Xq.ravel(), Yq.ravel()], axis=-1)
+    out = np.zeros(Xq.shape, dtype=np.complex128)
+    for part in ("real", "imag"):
+        gi = RegularGridInterpolator((xv, yv), getattr(fld, part),
+                                     bounds_error=False, fill_value=0.0)
+        vals = gi(pts).reshape(Xq.shape)
+        out = out + (vals if part == "real" else 1j * vals)
+    info = {"resampled": True, "source_shape": list(fld.shape),
+            "units_detected": "m" if scale == 1000.0 else "mm",
+            "plane_coverage": round(cover, 4)}
+    print(f"  {p.name}: resampled {fld.shape} ({info['units_detected']}) -> "
+          f"({g['nx']},{g['ny']}), coverage {100*cover:.1f}%")
+    return out, lab, info
 
 
 def align_external(psi, ref):
@@ -455,6 +593,154 @@ def close_swept_shell(v: np.ndarray, f: np.ndarray, n_arc: int):
     return v2, f2, watertight, abs(vol)
 
 
+def fdtd_phase_error_deg(points_per_wvl: float, path_wvl: float,
+                         courant: float = 0.99 / np.sqrt(3)) -> float:
+    """Numerical phase error of an FDTD grid, in degrees, over ``path_wvl``.
+
+    This is the single number that decides where the FDTD monitor goes. Solving
+    the discrete 1-D dispersion relation
+        sin(w dt/2) = S sin(k~ dx/2),   S = c dt/dx
+    gives a numerical wavenumber k~ slightly larger than k, so the grid wave
+    runs slow and the error ACCUMULATES with distance. Axis-aligned propagation
+    is the worst case (diagonal is better), so this is a conservative bound.
+
+    At lambda/10 over the 30 lambda from the rail to H_MS it is ~126 deg --
+    which is why an FDTD run must NOT propagate to the detector plane. Record
+    the near field a few lambda up and propagate analytically instead (V3
+    validates that propagator to 0.13%).
+    """
+    N, S = points_per_wvl, courant
+    k_num = 2.0 * np.arcsin(np.sin(np.pi * S / N) / S) / (2 * np.pi / N)
+    return float(360.0 * path_wvl * (k_num - 1.0))
+
+
+def defect_bbox(section, params, g, seg):
+    """Bounding box of the vertices the defect actually displaces.
+
+    Sizes the FDTD mesh-override region: refining the whole box to resolve a
+    2 mm crack is unaffordable, refining a small box around it is not.
+    """
+    ds = g["mesh_ds"]
+    n_arc = mesh3d.default_arc_count(section, ds)
+    kw = {} if seg is None else {"seg_len": seg}
+    v_i, _ = mesh3d.sweep_rail_mesh(section, defect_params=None, slice_ds=ds,
+                                    arc_ds=ds, n_arc=n_arc, **kw)
+    v_d, _ = mesh3d.sweep_rail_mesh(section, defect_params=params, slice_ds=ds,
+                                    arc_ds=ds, n_arc=n_arc, **kw)
+    m = (v_d - v_i).norm(dim=1) > 1e-4
+    if not bool(m.any()):
+        return None
+    lo = v_d[m].min(dim=0).values.numpy()
+    hi = v_d[m].max(dim=0).values.numpy()
+    pad = 2 * g["wvl"]
+    return {"defect_extent_mm": {"x": [round(float(lo[0]), 2), round(float(hi[0]), 2)],
+                                 "y": [round(float(lo[1]), 2), round(float(hi[1]), 2)],
+                                 "z": [round(float(lo[2]), 2), round(float(hi[2]), 2)]},
+            "max_depth_mm": round(float((v_d - v_i).norm(dim=1).max()), 3),
+            "override_box_mm": {"x": [round(float(lo[0] - pad), 1),
+                                      round(float(hi[0] + pad), 1)],
+                                "y": [round(float(lo[1] - pad), 1),
+                                      round(float(hi[1] + pad), 1)],
+                                "z": [round(float(lo[2] - pad), 1),
+                                      round(float(hi[2] + pad), 1)]},
+            "pad_mm": pad}
+
+
+def fdtd_plan(v: np.ndarray, g: dict, z_mon: float, override: dict | None) -> dict:
+    """A buildable Lumerical FDTD setup for this exact case.
+
+    Everything here is derived from the geometry actually being exported, so it
+    cannot drift from the case it describes.
+    """
+    lam = g["wvl"]
+    lo, hi = v.min(axis=0), v.max(axis=0)
+    # TFSF must fully enclose the scatterer; outside it only the SCATTERED
+    # field exists, which is what psi1 is. Keep >= 1 lambda clearance so the
+    # source planes do not clip the geometry.
+    tf_lo = [round(float(lo[0] - lam), 1), round(float(lo[1] - lam), 1),
+             round(float(lo[2] - lam), 1)]
+    tf_hi = [round(float(hi[0] + lam), 1), round(float(hi[1] + lam), 1),
+             round(float(2 * lam), 1)]
+    # The monitor must sit OUTSIDE the TFSF box (scattered-field region) and
+    # span our comparison plane with a margin, so resampling never extrapolates.
+    mon_x = [-g["nx"] * g["dx"] / 2 - lam, g["nx"] * g["dx"] / 2 + lam]
+    mon_y = [-g["ny"] * g["dx"] / 2 - lam, g["ny"] * g["dx"] / 2 + lam]
+    # Simulation region: enclose TFSF and monitor, then >= 1.6 lambda to PML.
+    pad = 1.6 * lam
+    sim = {"x": [round(min(tf_lo[0], mon_x[0]) - pad, 1),
+                 round(max(tf_hi[0], mon_x[1]) + pad, 1)],
+           "y": [round(min(tf_lo[1], mon_y[0]) - pad, 1),
+                 round(max(tf_hi[1], mon_y[1]) + pad, 1)],
+           "z": [round(tf_lo[2] - pad, 1), round(z_mon + pad, 1)]}
+    ext = np.array([sim["x"][1] - sim["x"][0], sim["y"][1] - sim["y"][0],
+                    sim["z"][1] - sim["z"][0]])
+
+    meshes = {}
+    for div in (10, 15, 20):
+        dx = lam / div
+        n = np.ceil(ext / dx)
+        cells = float(n.prod())
+        extra = 0.0
+        if override is not None:
+            ob = override["override_box_mm"]
+            oe = np.array([ob["x"][1] - ob["x"][0], ob["y"][1] - ob["y"][0],
+                           ob["z"][1] - ob["z"][0]])
+            fine = lam / 20 if div < 20 else lam / 40
+            extra = float(np.ceil(oe / fine).prod() - np.ceil(oe / dx).prod())
+        meshes[f"lambda_over_{div}"] = {
+            "dx_mm": round(dx, 4),
+            "cells_M": round(cells / 1e6, 1),
+            "cells_with_defect_override_M": round((cells + extra) / 1e6, 1),
+            "est_RAM_GB": round((cells + extra) * 100 / 1e9, 1),
+            "phase_error_deg_to_monitor": round(
+                fdtd_phase_error_deg(div, (z_mon - float(hi[2])) / lam), 1),
+            "phase_error_deg_if_propagated_to_H_MS": round(
+                fdtd_phase_error_deg(div, (config.H_MS - float(hi[2])) / lam), 1),
+        }
+    return {
+        "why_not_full_scene": (
+            "Do NOT put the detector plane inside the FDTD box. The "
+            "phase_error_deg_if_propagated_to_H_MS column is the accumulated "
+            "numerical-dispersion error over that path -- ~126 deg at "
+            "lambda/10. Record the near field at monitor_z and propagate "
+            "analytically (rail3D's ASM, which V3 checks to 0.13%)."),
+        "monitor_z_mm": z_mon,
+        "simulation_region_mm": sim,
+        "tfsf_source_mm": {"x": [tf_lo[0], tf_hi[0]], "y": [tf_lo[1], tf_hi[1]],
+                           "z": [tf_lo[2], tf_hi[2]]},
+        "monitor_mm": {"x": [round(mon_x[0], 1), round(mon_x[1], 1)],
+                       "y": [round(mon_y[0], 1), round(mon_y[1], 1)],
+                       "z": z_mon},
+        "boundaries": "PML on all six faces (Lumerical default 8 layers, stabilized)",
+        "source": {
+            "type": "TFSF (total-field scattered-field)",
+            "angle_theta_deg": float(np.degrees(config.THETA_INC)),
+            "angle_phi_deg": 180.0,
+            "injection_axis": "z", "direction": "backward",
+            "polarization_angle_deg": 90.0,
+            "polarization_note": (
+                "90 deg puts E along y (s-polarised / TE: E perpendicular to "
+                "the x-z plane of incidence). This is the ONLY polarisation "
+                "that maps onto our scalar model: for s-pol on PEC the "
+                "tangential-E reflection coefficient is -1, which is exactly "
+                "the minus sign in scattered_fields. Compare E_y."),
+            "frequency_Hz": 299792458.0 / (g["wvl"] * 1e-3),
+        },
+        "mesh_options": meshes,
+        "recommended": ("lambda/10 for rungs 1-2 (cheap, sets the workflow up), "
+                        "lambda/15 for the defect comparison"),
+        "defect_refinement": override,
+        "materials": "PEC (Perfect Electric Conductor) -- matches R = -1 in our solver",
+        "runs_needed": [
+            "1. flat PEC plate (rung 1) -- setup check, not physics",
+            "2. intact rail (rung 2)",
+            "3. defect rail (rung 3), SAME box and mesh as run 2",
+            "then compare run3 - run2 against our psi1_defect - psi1_intact: "
+            "the common-mode numerical error largely cancels in the difference",
+        ],
+    }
+
+
 def cut_end_illumination(v: np.ndarray, f: np.ndarray, g: dict) -> dict:
     """How brightly does the source light the rail's artificial cut ends?
 
@@ -512,16 +798,22 @@ def cut_end_illumination(v: np.ndarray, f: np.ndarray, g: dict) -> dict:
                         "defensible, but the difference field is still cleaner.")}
 
 
-def export_case(section, params, g, out: Path, seg, source="horn", closed=False):
+def export_case(section, params, g, out: Path, seg, source="horn", closed=False,
+                fdtd_monitor_z=None):
     out.mkdir(parents=True, exist_ok=True)
     ds = g["mesh_ds"]
     n_arc = mesh3d.default_arc_count(section, ds)
-    kw = {} if seg is None else {"seg_len": seg}
-    v, f = mesh3d.sweep_rail_mesh(section, defect_params=params, slice_ds=ds,
-                                  arc_ds=ds, n_arc=n_arc, **kw)
+    is_plate = params is not None and params.get("class") == "plate"
+    v, f = build_mesh(section, params, ds, n_arc, seg)
     v, f = v.numpy(), f.numpy()
     watertight, vol = False, 0.0
-    if closed:
+    if closed and is_plate:
+        print("    (--export-closed ignored: a flat plate has no volume to "
+              "close. Give it thickness in the solver instead, or leave it a "
+              "PEC sheet -- for a plate the two are equivalent to the field "
+              "above it.)")
+        closed = False
+    elif closed:
         v, f, watertight, vol = close_swept_shell(v, f, n_arc)
 
     obj = out / "rail_surface.obj"
@@ -540,6 +832,16 @@ def export_case(section, params, g, out: Path, seg, source="horn", closed=False)
     tri_l10 = area / (np.sqrt(3) / 4 * (g["wvl"] / 10) ** 2)
 
     trunc = cut_end_illumination(v, f, g)
+    override = (None if is_plate or params is None
+                or params.get("class") in (None, "intact")
+                else defect_bbox(section, params, g, seg))
+    plan = fdtd_plan(v, g, z_mon=fdtd_monitor_z if fdtd_monitor_z is not None
+                     else round(6 * g["wvl"], 1), override=override)
+    if is_plate:
+        trunc["verdict"] = ("flat plate: the edges are lit by construction and "
+                            "BOTH solvers see the same finite plate, so edge "
+                            "diffraction is part of the agreed problem, not a "
+                            "confound. This is the point of rung 1.")
     freq = 299.792458 / g["wvl"]
     if source == "plane":
         src = {
@@ -589,6 +891,7 @@ def export_case(section, params, g, out: Path, seg, source="horn", closed=False)
                      "rather than an infinitely thin sheet."),
         },
         "truncation": trunc,
+        "fdtd": plan,
         "source": src,
         "observation_plane": {
             "z_mm": g["h_ms"], "nx": g["nx"], "ny": g["ny"], "dx_mm": g["dx"],
@@ -693,19 +996,38 @@ def main() -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--profile", default="lab", choices=list(config.PROFILES))
     ap.add_argument("--sample", default="crack",
-                    choices=list(config.CLASS_NAMES) + ["intact"])
+                    choices=list(config.CLASS_NAMES) + ["intact", "plate"],
+                    help="'plate' is a flat PEC square -- rung 1 of the "
+                         "full-wave ladder, where a disagreement means the "
+                         "SETUP is wrong, not the physics")
+    ap.add_argument("--plate-half", type=float, default=None,
+                    help="half-width of the flat plate in mm (default 7.5*lambda "
+                         "= the size V4 already checks)")
+    ap.add_argument("--plane-z", type=float, default=None,
+                    help="observation-plane height in mm (default config.H_MS). "
+                         "For an FDTD comparison use a LOW plane (~30 mm) and "
+                         "propagate to the detector plane afterwards -- FDTD "
+                         "accumulates ~126 deg of numerical phase error over "
+                         "the 30*lambda to H_MS at a lambda/10 mesh")
     ap.add_argument("--idx", type=int, default=0)
     ap.add_argument("--seg", type=float, default=None,
                     help="segment length override (mm); smaller = faster, for a laptop")
     ap.add_argument("--variants", nargs="*", default=None)
     ap.add_argument("--external", nargs="*", default=None,
-                    help="npz files with keys 'field' (complex (nx,ny)) and 'label'")
+                    help=".npz or .mat results from a full-wave solver. Give the "
+                         "field under 'field'/'Ey'/'E' plus 'x' and 'y' "
+                         "coordinate vectors (metres or mm, auto-detected) and "
+                         "it is resampled onto our plane grid")
     ap.add_argument("--export-case", default=None, metavar="DIR")
     ap.add_argument("--source", default="horn", choices=("horn", "plane"),
                     help="illumination for the exported case AND the reference "
                          "variant: 'horn' (what the dataset uses) or 'plane' "
                          "(unit plane wave -- removes the horn aperture model as "
                          "a confound, so use it for full-wave comparisons)")
+    ap.add_argument("--fdtd-monitor-z", type=float, default=None,
+                    help="height (mm) of the FDTD near-field monitor planned in "
+                         "case.json (default 6*lambda = 30 mm). Keep it LOW: "
+                         "FDTD must not propagate to H_MS")
     ap.add_argument("--export-only", action="store_true",
                     help="write the case bundle and stop -- exporting is instant, "
                          "solving every variant is minutes")
@@ -722,12 +1044,18 @@ def main() -> int:
     config.ensure_dirs()
     section = sections.load_reference_section()
     g5, g8 = geom_now(), LAM8
+    if args.plane_z is not None:
+        g5 = dict(g5, h_ms=args.plane_z)
 
     print(f"[rail3d] wavefront comparison on {device}   sample={args.sample}[{args.idx}]"
           f"   seg={args.seg or config.SEG_LEN} mm")
 
     params = None
-    if args.sample != "intact":
+    if args.sample == "plate":
+        params = {"class": "plate",
+                  "half": args.plate_half if args.plate_half is not None
+                          else 7.5 * config.WVL}
+    elif args.sample != "intact":
         defect = None
         if args.sample in config.DATASET_DIRS:
             files = sections.get_dataset_files(args.sample)
@@ -741,7 +1069,8 @@ def main() -> int:
 
     if args.export_case:
         export_case(section, params, g5, Path(args.export_case), args.seg,
-                    source=args.source, closed=args.export_closed)
+                    source=args.source, closed=args.export_closed,
+                    fdtd_monitor_z=args.fdtd_monitor_z)
         if args.export_only:
             return 0
 
@@ -785,10 +1114,10 @@ def main() -> int:
         print(f"  {k:32s} {tuple(psi.shape)}  {time.time()-t:6.1f} s")
 
     for path in args.external or []:
-        z = np.load(path, allow_pickle=True)
-        lab = str(z["label"]) if "label" in z else Path(path).stem
-        psi = torch.as_tensor(z["field"]).to(torch.complex64).to(device)
-        fields[f"EXT {lab}"] = {"psi": psi, "geom": g5, "external": True}
+        arr, lab, info = load_external(path, g5)
+        psi = torch.as_tensor(arr).to(torch.complex64).to(device)
+        fields[f"EXT {lab}"] = {"psi": psi, "geom": g5, "external": True,
+                                "load": info}
         print(f"  {'EXT ' + lab:32s} {tuple(psi.shape)}  (external reference)")
 
     if not fields:
@@ -834,6 +1163,8 @@ def main() -> int:
                        barcode_cos=cos_sim(barcode(psi, geo, device), ref_bar))
         if "align" in d:
             row["alignment"] = d["align"]
+        if "load" in d:
+            row["load"] = d["load"]
         rows.append(row)
 
     fig_maps(fields, ref_key, FIG / f"{args.prefix}_maps.png")
