@@ -346,6 +346,11 @@ def v6b_guard_sweep(device: torch.device, min_ts, offsets, n_intact: int = 5,
         psi, params = _solve_sample(section, "crack", ci, device, args, shadow=False)
         cracks[ci] = {"base": psi, "params": params,
                       "depth_mm": float(params.get("depth", 0.0))}
+    # The benefit columns below are only as meaningful as the samples behind
+    # them, so name them. A crack shallower than the occluder facet shows zero
+    # effect at every setting, which reads as "shadowing is inert" and is not.
+    print("    probing cracks: " + ", ".join(
+        f"c{ci} depth {c['depth_mm']:.2f} mm" for ci, c in cracks.items()))
 
     rows = []
     for mt, off in [(m, o) for o in offsets for m in min_ts]:
@@ -505,6 +510,16 @@ def main() -> int:
                         help="sweep the ray-origin lift along the face normal "
                              "(mm), e.g. --normal-offset 0 0.05 0.1 0.15 0.3 0.6. "
                              "Combine with a single --min-t to isolate it.")
+    parser.add_argument("--crack-idx", type=int, nargs="*", default=None,
+                        metavar="I",
+                        help="which crack samples the sweep probes for REAL "
+                             "shadowing (default 0 1). The benefit column is the "
+                             "whole point of the sweep, and a shallow crack "
+                             "shows none at ANY setting -- the pre-2026-09-04 "
+                             "harness probed index 0 alone and concluded "
+                             "shadowing was inert, while V6 measured 0.0197 on "
+                             "index 1 in the same run. Include a DEEP index; "
+                             "depths are printed below and stored in the report.")
     args = parser.parse_args()
     device = torch.device(args.device) if args.device else config.get_device("lab")
     print(f"[rail3d] V5-V7 running on {device}"
@@ -524,7 +539,9 @@ def main() -> int:
               f"min_t {config.SHADOW_MIN_T} mm, normal offset "
               f"{config.SHADOW_NORMAL_OFFSET} mm)")
         t0 = time.time()
-        res = v6b_guard_sweep(device, min_ts, offs)
+        kw_ci = ({} if args.crack_idx is None
+                 else {"crack_idxs": tuple(args.crack_idx)})
+        res = v6b_guard_sweep(device, min_ts, offs, **kw_ci)
         res["seconds"] = round(time.time() - t0, 2)
         report["V6b_guard_sweep"] = res
         REPORT_PATH.write_text(json.dumps(report, indent=2))

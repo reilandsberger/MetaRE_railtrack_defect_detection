@@ -162,15 +162,44 @@ python compare_wavefronts.py --sample crack  --source plane --export-closed --ex
 `--export-only` skips the variant solves (exporting is instant; solving is
 minutes). Export **both** — the primary comparison is the difference field.
 ```bash
-python validation_3d.py --min-t 3.0 1.0 0.3 0.125 0.05 2>&1 | tee ../min_t_sweep.txt
+python validation_3d.py --min-t 0.05 0.5 1.5 3.0 --normal-offset 0 0.05 0.15 0.3 0.6 --crack-idx 0 1 17 2>&1 | tee ../v6b_grid.txt
 ```
 
 The first solves one sample every way (λ=8 vs λ=5, physics terms, shadow guard,
 mesh resolution) and writes `wavefront_cuts.png` / `_maps.png` / `_metrics.png`
-plus `wavefront_fields.npz`, and exports an FDTD-ready case bundle. The second
-decides `config.SHADOW_MIN_T`: pick the SMALLEST min_t whose intact artifact is
-still flat and under 0.03. **Do not change SHADOW_MIN_T without regenerating
-into a new `--name` root** — it is a provenance key.
+plus `wavefront_fields.npz`, and exports an FDTD-ready case bundle.
+
+The second decides `SHADOW_MIN_T` **and** `SHADOW_NORMAL_OFFSET` together
+(~10 min, 20 rows). **Do not pick "the smallest artifact-safe min_t"** — that
+was the pre-2026-09-04 heuristic and it is meaningless when every benefit is
+zero. The script now selects for you: the configuration keeping the **most real
+crack shadowing** while the mean intact artifact stays under 0.03, and it prints
+`NO tested configuration…` rather than a number when nothing achieves both.
+That "None" is a result, not a failure — it authorises `SHADOW_MODE = "none"`,
+which halves generation.
+
+Why these values:
+
+| axis | why |
+|---|---|
+| `--normal-offset 0` | control — reproduces the old single-axis behaviour |
+| `0.05` | ≈ the worst-case sagitta `d²/(8R)` = 0.06 mm; the minimum that could work |
+| `0.15` | current default, ~2.5× sagitta |
+| `0.3` | headroom, still ≪ 1.5 mm (the nearest real crater wall) |
+| `0.6` | deliberately too large — the benefit column *should* collapse. If it does not, the knob is not doing what we think |
+| `--min-t 0.05` | the token value a working normal offset should permit |
+| `0.5, 1.5` | the band where crack shadowing appeared in the old sweep |
+| `3.0` | current default, for continuity with every prior result |
+| `--crack-idx 0 1 17` | **17 is the deepest crack in the set (9.57 mm).** The benefit column is the whole point, and indices 0 (2.72 mm) and 1 (5.28 mm) sit at or below the mean depth. The old harness probed index 0 alone — a crack that self-shadows at no setting — and concluded the mechanism was inert |
+
+Read the console's `probing cracks: c0 depth … c1 depth …` line to confirm what
+was actually tested, and compare `artifact mean` (the gate, field level) against
+`barcode` (through the detectors) — if they diverge by orders of magnitude, say
+so rather than moving the gate.
+
+**Neither `SHADOW_MIN_T` nor `SHADOW_NORMAL_OFFSET` may change after generation**
+— both are provenance keys, so every dataset and checkpoint built from them is
+refused when they move. Settle this BEFORE the generation step.
 
 > Interpreting what comes back: **`READING_RESULTS.md`** gives the pass rule
 > for every gate, what each field means, and the traps (V6's `worst_rel_l2`
@@ -180,7 +209,7 @@ into a new `--name` root** — it is a provenance key.
 
 **Send back (attach):** `data/generated/lab_report.md`,
 `data/generated/wavefront_comparison.json`, `data/figures/wavefront_cuts.png`,
-`data/figures/v6b_min_t_sweep.png`, `../min_t_sweep.txt`,
+`data/figures/v6b_min_t_sweep.png`, `../v6b_grid.txt`,
 `data/generated/verification_report.json`, `data/generated/geometry_scan.json`,
 `../preflight_l5.txt`, `../guard_demo.txt`,
 `data/generated/smoke/dataset_config.json` + `generation.log`,
