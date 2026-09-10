@@ -1,6 +1,6 @@
 # rail3D — Lab Workstation Setup (RTX 5090)
 
-*Last updated: 2026-09-04 · λ = 5 mm (60 GHz), V0–V8 measured on the 5090 — bump this line in any
+*Last updated: 2026-09-10 · λ = 5 mm (60 GHz), V0–V8 measured on the 5090 — bump this line in any
 commit that changes behaviour this file describes. Timings are now MEASURED
 at λ=5 on the lab 5090 (2026-09-04), not extrapolated.*
 
@@ -171,6 +171,12 @@ plus `wavefront_fields.npz`, and exports an FDTD-ready case bundle. The second
 decides `config.SHADOW_MIN_T`: pick the SMALLEST min_t whose intact artifact is
 still flat and under 0.03. **Do not change SHADOW_MIN_T without regenerating
 into a new `--name` root** — it is a provenance key.
+
+> Interpreting what comes back: **`READING_RESULTS.md`** gives the pass rule
+> for every gate, what each field means, and the traps (V6's `worst_rel_l2`
+> is a max over 8 samples; V8's `best_val` is degenerate on a smoke split;
+> the V6b sweep and `compare_wavefronts` both default to `crack[0]`, which
+> is a near-minimum-depth crack that never self-shadows).
 
 **Send back (attach):** `data/generated/lab_report.md`,
 `data/generated/wavefront_comparison.json`, `data/figures/wavefront_cuts.png`,

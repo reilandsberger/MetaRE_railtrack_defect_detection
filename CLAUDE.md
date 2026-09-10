@@ -1,6 +1,6 @@
 # CLAUDE.md — MetaRE railtrack defect detection
 
-*Last updated: 2026-09-04 · λ = 5 mm (60 GHz) · V0–V8 measured on the lab 5090.*
+*Last updated: 2026-09-10 · λ = 5 mm (60 GHz) · V0–V8 measured on the lab 5090.*
 
 Guidance for Claude Code sessions in this repo. Written for cold-start sessions on
 smaller models: read this, then `rail3D/README.md` (the full handoff doc), before
@@ -24,6 +24,11 @@ Trainable metasurface + detector "barcode" system for rail defect detection.
   Several past bugs look like harmless cleanups (image loader choice, ray-cast min_t,
   meshgrid indexing, RNG-state handling). Do not "simplify" physics code without
   re-running the verification gates.
+- **Interpreting a returned result set: `rail3D/READING_RESULTS.md`.** Pass rules
+  for every gate, what each field means, how to tell which commit produced a
+  report, and the specific ways each output has been misread. Read it before
+  quoting a number out of `verification_report.json`, a geometry scan or a
+  shadow sweep.
 - Verification gates: `rail3D/tests_physics_3d.py` (V0, V0b, V1–V4),
   `rail3D/validation_3d.py` (V5–V7), `rail3D/v8_smoke_test.py` (V8). Any
   physics/geometry/training change must keep them green; they are laptop-safe

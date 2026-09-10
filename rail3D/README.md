@@ -1,6 +1,6 @@
 # rail3D — 3D diffraction simulation + metasurface training for rail defect detection
 
-*Last updated: 2026-09-04 · λ = 5 mm (60 GHz), V0–V8 measured on the 5090 — bump this line in any
+*Last updated: 2026-09-10 · λ = 5 mm (60 GHz), V0–V8 measured on the 5090 — bump this line in any
 commit that changes behaviour this file describes.*
 
 **Handoff document.** This README is written so that a future session (any
@@ -134,7 +134,7 @@ field, plus parameter histograms.
 | `generate_dataset_3d.py` | CLI generator (`--profile lab`, `--name`, `--smoke [--smoke-n N]`, `--status`; resumable shards; refuses mixed-geometry roots) |
 | `inspect_dataset.py` | review a dataset before/after generation (re-derives geometry from seeds; warns on provenance mismatch) |
 | `tests_physics_3d.py` | V0, V0b, V0c, V1–V4 automated gates (CPU-safe) |
-| `validation_3d.py` | V5–V7 gates + figures (includes the 2D Hankel reference solver) |
+| `validation_3d.py` | V5–V7 gates + figures (includes the 2D Hankel reference solver); `--min-t/--normal-offset` runs the V6b guard sweep, which is a study, not a gate |
 | `v8_smoke_test.py` | V8 end-to-end + kill-and-resume bit-identity + refusal/regression guards |
 | `lab_report.py` | the whole verification chain in one command → paste-able `data/generated/lab_report.md` |
 | `compare_wavefronts.py` | one sample solved every way — λ=8 vs λ=5, physics terms, shadow guard, mesh, horn vs plane wave — as amplitude/phase figures + metrics; exports a full-wave case (STL+OBJ, optional closed body, `--source plane`) and accepts external solver fields back, auto-detecting their time convention and amplitude. See finding 20 |
