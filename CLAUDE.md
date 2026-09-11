@@ -66,6 +66,10 @@ Trainable metasurface + detector "barcode" system for rail defect detection.
   report, and the specific ways each output has been misread. Read it before
   quoting a number out of `verification_report.json`, a geometry scan or a
   shadow sweep.
+- After editing the notebook, run **python check_notebook.py** (~1 s, no GPU).
+  Jupyter hides cross-cell ordering, so a cell using a name defined in a LATER
+  cell looks fine while editing and only NameErrors on a fresh kernel. That has
+  already happened once.
 - Verification gates: `rail3D/tests_physics_3d.py` (V0, V0b, V1–V4),
   `rail3D/validation_3d.py` (V5–V7), `rail3D/v8_smoke_test.py` (V8). Any
   physics/geometry/training change must keep them green; they are laptop-safe
