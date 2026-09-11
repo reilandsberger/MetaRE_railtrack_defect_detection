@@ -87,7 +87,7 @@ PROVENANCE_KEYS = ("WVL", "DX", "NX", "NY", "H_MS", "PLANE_X_CENTER", "SEG_LEN",
                    "DENT_FOOTPRINT_Y", "DENT_FOOTPRINT_S",
                    "SHELL_RADIUS_RANGE", "SHELL_DEPTH_RANGE",
                    "WEAR_DEPTH_RANGE",
-                   "CRACK_LINE_COUNT", "CRACK_LINE_GAP_RANGE",
+                   "CRACK_LINE_COUNT", "CRACK_LINE_GAP_FACTOR",
                    "SHELL_GAUGE_X_RANGE")
 
 

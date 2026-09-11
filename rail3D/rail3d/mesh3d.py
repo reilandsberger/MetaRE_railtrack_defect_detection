@@ -226,7 +226,9 @@ def sample_defect_params(class_name: str, gen: torch.Generator,
         # applied PERPENDICULAR to the line in render_depth_field: the previous
         # code shifted along s, which separates a longitudinal crack but leaves
         # a transverse one (theta = pi/2) exactly on top of itself.
-        gap = _u(gen, *config.CRACK_LINE_GAP_RANGE)
+        # gap proportional to width: the clear space between adjacent lines is
+        # (factor - 1) x width, so the group reads as three lines at ANY width
+        gap = w_hair * _u(gen, *config.CRACK_LINE_GAP_FACTOR)
         mid = (config.CRACK_LINE_COUNT - 1) / 2.0
         offsets = [(i - mid) * gap for i in range(config.CRACK_LINE_COUNT)]
         p.update(theta=theta, L=L, depth=depth, width=w_hair, line_gap=gap,

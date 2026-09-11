@@ -262,7 +262,7 @@ DEFECT_CENTER_RANGE = (-10.0, 10.0)
 DEFECT_LENGTH_RANGE = {"wear": (300.0, 900.0)}
 
 CRACK_LENGTH_RANGE = (10.0, 50.0)     # along the crack line (mm)
-CRACK_WIDTH_RANGE = (2.0, 5.0)        # across the line (mm)
+CRACK_WIDTH_RANGE = (1.5, 3.0)        # across the line (mm)
 # Narrowed 2026-09-12 (user operating range): a crack deep enough to matter
 # but still a hairline. The old 2 mm floor overlapped the dent range, and the
 # 10 mm ceiling was deeper than the class needs to represent.
@@ -270,11 +270,17 @@ CRACK_DEPTH_RANGE = (4.0, 8.0)        # sampled (mm)
 
 # Hairline cracks form in GROUPS in locally worn regions, never singly, so
 # every crack sample is a set of parallel lines with identical shape, depth and
-# orientation, separated PERPENDICULAR to their length. The gap is
-# centre-to-centre; when it approaches CRACK_WIDTH_RANGE's upper end the three
-# merge into one ribbed band, which is itself what a tight cluster looks like.
+# orientation, separated PERPENDICULAR to their length.
+#
+# The gap SCALES WITH THE WIDTH rather than being an absolute range, so the
+# group always reads as three lines instead of degenerating into a patch. A
+# fixed gap cannot do this: at 2 mm it merges 3 mm-wide lines into one ribbed
+# band, and at 5 mm it spreads 1.5 mm-wide lines into three unrelated cracks.
+# The factor is the centre-to-centre gap in units of the line width, so the
+# CLEAR SPACE between adjacent lines is (factor - 1) x width -- 0.6 to 1.2
+# line-widths here, visibly three lines at every width by construction.
 CRACK_LINE_COUNT = 3
-CRACK_LINE_GAP_RANGE = (2.0, 5.0)     # centre-to-centre (mm)
+CRACK_LINE_GAP_FACTOR = (1.6, 2.2)    # centre-to-centre gap / line width
 
 # Shelling initiates at the GAUGE CORNER, and this window is the reason the
 # class is in the simulation at all: it is the part of the head the horn

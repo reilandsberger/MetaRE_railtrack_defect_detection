@@ -463,6 +463,47 @@ the 5090.) `scan_geometry.py --n 40` sharpens the field-level AUC the same way
 without storing datasets. Compare with `inspect_dataset.py --root ...` and by
 training against each root (`TrainConfig(data_root=...)`).
 
+## 7b. The one-command workflow (preferred)
+
+`run_stage.py` runs generate → gate → train → analyse as a single resumable
+command, using `config.STAGES` for both dataset size and training schedule:
+
+```bash
+python run_stage.py --stage prelim --with-baseline --bundle 2>&1 | tee ../prelim.log
+```
+
+| flag | effect |
+|---|---|
+| `--stage prelim` | 2000/class + 400 intact, ~1.8 h generation, ~3 min training |
+| `--stage full` | 5000/class + 512 intact, ~3.5 h generation |
+| `--with-baseline` | also trains the no-metasurface control |
+| `--fresh` | discard checkpoints whose SCHEDULE differs from this stage |
+| `--skip-generate` | dataset already exists |
+| `--bundle` | zip the files worth sending for review |
+
+**It refuses rather than warns.** Between generation and training it checks the
+things §13 and `READING_RESULTS.md` document as historically misread — geometry
+provenance key by key, `_counts` complete against the requested size (an
+interrupted generation otherwise *looks* finished), every class's first shard
+loadable and finite — and stops before the next long step. A checkpoint whose
+schedule differs from the stage is refused too, because resuming across that
+leaves the τ anneal and prune window half-applied.
+
+Everything is resumable: shards are atomic and skipped, training resumes from
+the 10-epoch checkpoint. Re-run the identical command to continue.
+
+It ends with `data/generated/stage_<stage>_report.md` and an explicit list of
+files to send back. Two numbers it reports without being asked: **`n_det` at the
+best checkpoint** (if that is not `N_DET_FINAL`, every downstream number
+describes the dense array — README finding 22) and **`capture_frac` against
+`n_det/130`** (above it the metasurface is concentrating light, at it the
+capture term is idle).
+
+`rail3D_pipeline.ipynb` remains the narrated route, and its section 9 reads the
+same results from a fresh kernel — see its section 0 for which cells to run.
+
+---
+
 ## 8. Generate the dataset
 
 ```bash

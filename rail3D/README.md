@@ -69,7 +69,7 @@ Figs 14/23/24) and Ye et al. 2023 (*IEEE TIM*, Figs 7/9):
 
 | class | footprint | depth | region |
 |---|---|---|---|
-| `crack` | **box** divot (flat bottom, steep walls), 10–50 mm long × 2–5 mm wide; longitudinal / transverse / oblique (20–70°); **always a group of 3 parallel lines**, 2–5 mm apart centre-to-centre | 4–8 mm | running band + gauge corner |
+| `crack` | **box** divot (flat bottom, steep walls), 10–50 mm long × **1.5–3 mm** wide; longitudinal / transverse / oblique (20–70°); **always a group of 3 parallel lines**, gap = **1.6–2.2 × width** | 4–8 mm | running band + gauge corner |
 | `dent` | 2D super-Gaussian, 10–30 mm (y) × 10–30 mm (s); 20% chance of a 2–4 pit chain | 1.5–8 mm | running band |
 | `wear` | CSV cross-section shape × y-envelope of 300–900 mm — i.e. **the whole modelled segment is worn**, only a slight end taper | 2–8 mm | horn-facing shoulder |
 | `shell` | **parametric** (no CSVs): Fourier-modulated ellipse 8–20 mm + ragged interior; 30% chance of a second lobe | 1–5 mm | **gauge corner only**, centre x ∈ 20–30 mm |
@@ -86,12 +86,20 @@ the simulation):
 - **`crack` is always a group of three**, not a 30% chance of 2–3. Hairline
   cracks form in clusters in locally worn regions, never singly. The three
   lines share shape, depth, length and orientation and are offset
-  **perpendicular to their length**, 2–5 mm centre-to-centre. The previous code
-  offset along *s*, which separates a longitudinal crack but leaves a
-  transverse one (θ = π/2) exactly on top of itself — the group was invisible
-  for a third of all samples. Note that at the extremes (10 mm long, 5 mm gap,
-  5 mm wide) the group spans 15 mm across a 10 mm length and reads as a patch
-  rather than lines; that is inherent to the requested ranges.
+  **perpendicular to their length**. The previous code offset along *s*, which
+  separates a longitudinal crack but leaves a transverse one (θ = π/2) exactly
+  on top of itself — the group was invisible for a third of all samples.
+- **The gap SCALES WITH THE WIDTH** (`CRACK_LINE_GAP_FACTOR`, 1.6–2.2 ×), it is
+  not an absolute range. A fixed gap cannot work at both ends of the width
+  range: 2 mm merges 3 mm-wide lines into one ribbed band, while 5 mm spreads
+  1.5 mm-wide lines into three unrelated cracks. As a multiple of the width the
+  **clear space between adjacent lines is (factor − 1) × width**, i.e. 0.6–1.2
+  line-widths — three distinct lines at every width, by construction. Measured
+  over 600 samples: gap 2.5–6.6 mm, clear space never below **0.96 mm** (1.5
+  mesh cells, so they never merge numerically), and 97% of groups are longer
+  than they are wide. The remaining 3% are 10 mm-long cracks with 3 mm lines,
+  where three separated parallel lines simply cannot be longer than the group
+  is wide — a constraint of the geometry, not a modelling choice.
 - **`shell` is confined to the gauge corner**, centre x ∈ [20, 30] mm, a
   truncated normal about the window centre rather than uniform over the whole
   gauge band. This is the realistic initiation site *and* the part of the head

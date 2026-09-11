@@ -1,8 +1,9 @@
 # CLAUDE.md — MetaRE railtrack defect detection
 
 *Last updated: 2026-09-12 · λ = 5 mm (60 GHz) · V0–V8 measured on the lab 5090 ·
-DEFECT MODEL REVISED 2026-09-12 (crack = 3 parallel box divots 4–8 mm deep;
-shell confined to the gauge corner x ∈ 20–30 mm) — every earlier dataset is refused ·
+DEFECT MODEL REVISED 2026-09-12 (crack = 3 parallel box divots, 4–8 mm deep,
+1.5–3 mm wide, gap = 1.6–2.2 × width; shell confined to the gauge corner
+x ∈ 20–30 mm) — every earlier dataset is refused ·
 shadow guard settled 2026-09-11 (`SHADOW_MIN_T = 0.05`, `SHADOW_NORMAL_OFFSET = 0.3`) ·
 first prelim training run 2026-09-11 — see README findings 21 (corrected) and 22.*
 
@@ -53,6 +54,13 @@ Trainable metasurface + detector "barcode" system for rail defect detection.
   Several past bugs look like harmless cleanups (image loader choice, ray-cast min_t,
   meshgrid indexing, RNG-state handling). Do not "simplify" physics code without
   re-running the verification gates.
+- **Running the whole chain: `python run_stage.py --stage prelim --bundle`**
+  (SETUP_LAB §7b). Generate → gate → train → analyse as one resumable
+  command; it REFUSES on a short or mismatched dataset rather than training
+  on it, and reports `n_det` at the best checkpoint and `capture_frac`
+  against the `n_det/130` floor without being asked. `rail3D_pipeline.ipynb`
+  is the narrated route, and its section 9 reads results from a FRESH
+  KERNEL — see its section 0 for which cells to run.
 - **Interpreting a returned result set: `rail3D/READING_RESULTS.md`.** Pass rules
   for every gate, what each field means, how to tell which commit produced a
   report, and the specific ways each output has been misread. Read it before
