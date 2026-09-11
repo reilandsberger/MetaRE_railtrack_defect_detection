@@ -322,6 +322,30 @@ FULL_PER_CLASS = 5000
 FULL_INTACT = 512
 SMOKE_PER_CLASS = 20
 
+# Training STAGES -- the single source of truth for dataset size AND schedule,
+# read by both run_stage.py and rail3D_pipeline.ipynb so they cannot drift.
+#
+# The schedule keys are the reason this table exists. An EPOCH is a full pass
+# over the training split, so steps/epoch scale with dataset size -- but
+# n_epoch, tau_anneal_end and prune_start/end are all expressed in EPOCHS and
+# were tuned on the smoke set, where the split is one batch and 1 epoch == 1
+# optimizer step. Carrying n_epoch=1200 onto a real dataset silently becomes
+# 7-16x the intended optimisation and a 10-hour run (README finding 21).
+# These values reproduce the intended STEP budget per stage. Pruning keeps >=10
+# events because 130 -> 8 at prune_keep=0.75 needs log(8/130)/log(0.75) ~ 10 and
+# events fire every prune_every EPOCHS, so that window cannot be compressed
+# below 10 * prune_every however cheap the epochs get.
+#
+# intact is NOT cosmetic: the alarm threshold is calibrated on the VALIDATION
+# intact spread and the intact split is 80/10/10, so 200 intact leaves 20
+# validation samples and "5% FPR" means literally one sample.
+STAGES = {
+    "prelim": dict(limit=2000, intact=400,
+                   n_epoch=300, tau_anneal_end=60, prune_start=25, prune_end=75),
+    "full": dict(limit=5000, intact=512,
+                 n_epoch=150, tau_anneal_end=30, prune_start=25, prune_end=75),
+}
+
 
 def smoke_intact_count(per_class: int = SMOKE_PER_CLASS) -> int:
     """Intact count for a smoke set, keeping the historical 32:20 ratio."""
