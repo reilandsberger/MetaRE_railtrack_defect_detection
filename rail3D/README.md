@@ -487,6 +487,38 @@ first) · or everything at once with `python lab_report.py`.
     → cracked rail, all plane-wave; real horn last.** SETUP_LAB §13 is the
     runbook.
 
+21. **An EPOCH is not an optimizer step, and every schedule constant is in
+    epochs.** `train()` iterates the whole training split per epoch, so steps
+    per epoch scale with dataset size — but `n_epoch`, `tau_anneal_end` and
+    `prune_start/end` were all tuned on the **smoke set, where the training
+    split is a single batch and 1 epoch is exactly 1 step**:
+
+    | dataset | n_train | steps/epoch | `n_epoch=1200` becomes |
+    |---|---|---|---|
+    | smoke (20/class) | 64 | **1** | 1,200 steps — as designed |
+    | prelim (2000/class) | 6,400 | **7** | 8,400 steps, **~10 h** |
+    | full (5000/class) | 16,000 | **16** | 19,200 steps, ~20 h |
+
+    (`lab` uses `train_batch = 1024`, so a step is 1024 + `b0`=64 samples.) The
+    TrainConfig comment saying "epochs are cheap (~0.5 s on the 5090)" is true
+    *on the smoke set only*; it is ~30 s on the prelim set. This cost a 10-hour
+    run before it was noticed.
+
+    **Scale `n_epoch` down by the steps-per-epoch factor and compress the
+    schedule to match**, keeping pruning at ≥10 events (130 → 8 at
+    `prune_keep = 0.75` needs `log(8/130)/log(0.75)` ≈ 10, and events fire every
+    `prune_every` **epochs**, so the window cannot shrink below
+    `10 × prune_every`). The notebook does this per stage:
+    prelim `n_epoch=300, tau_anneal_end=60, prune 25–75`; full
+    `n_epoch=150, tau_anneal_end=30, prune 25–75`.
+
+    `train()` now prints the real step budget in its banner and a **measured**
+    ETA after the first epoch, so this is visible in the first minute rather
+    than after ten hours. `sweep_detectors.py` multiplies the whole cost by the
+    number of counts — it is N full training runs, and the notebook leaves it
+    behind a `RUN_DETECTOR_SWEEP` flag for that reason.
+
+
 ## 6b. Objective & metrics (rev. 2)
 
 `TrainConfig(objective="rank", metric="cos", target_fpr=0.05)` is the default.

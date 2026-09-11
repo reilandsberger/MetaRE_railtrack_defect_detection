@@ -398,6 +398,22 @@ def train(cfg: TrainConfig, device: torch.device | None = None,
         print(f"splits  : train {len(data['train'])}  val {len(data['val'])}  "
               f"test {len(data['test'])}   intact {len(data['i_train'])}/"
               f"{len(data['i_val'])}/{len(data['i_test'])}")
+        # An EPOCH is a full pass over the training split, so its cost scales
+        # with dataset size -- but every schedule constant below (tau_anneal_end,
+        # prune_start/end) is expressed in epochs and was tuned on the SMOKE set,
+        # where train is one batch and 1 epoch == 1 optimizer step. On a real
+        # dataset an epoch is many steps, so n_epoch=1200 silently becomes 7-16x
+        # the intended optimisation and a 10-hour run. Print the real budget.
+        spe = max(1, -(-len(data["train"]) // cfg.batch_size))
+        total = spe * cfg.n_epoch
+        print(f"budget  : {spe} step(s)/epoch x {cfg.n_epoch} epochs = {total} "
+              f"optimizer steps, {cfg.batch_size}+{cfg.b0} samples/step")
+        if spe > 1 and total > 3000:
+            print(f"          ! the epoch-valued schedule (tau_anneal_end="
+                  f"{cfg.tau_anneal_end}, prune {cfg.prune_start}-{cfg.prune_end}) "
+                  f"was calibrated at 1 step/epoch, so this is ~{total // 1200}x "
+                  f"that budget. Consider scaling n_epoch down by ~{spe}x and "
+                  f"compressing the schedule to match -- see README finding 21.")
         print("=" * 72)
     model = build_model(cfg, device)
     optimizer = build_optimizer(cfg, model)
@@ -502,6 +518,15 @@ def train(cfg: TrainConfig, device: torch.device | None = None,
         val = evaluate(model, data, "val", cfg)
         val["epoch"] = epoch
         val["seconds"] = round(time.time() - t0, 2)
+        if verbose and epoch == start_epoch:
+            # measured, not estimated: the first completed epoch is the only
+            # honest basis for "how long will this take"
+            rem = (cfg.n_epoch - epoch - 1) * val["seconds"]
+            print(f"        first epoch took {val['seconds']:.1f} s -> "
+                  f"~{rem / 3600:.1f} h for the remaining "
+                  f"{cfg.n_epoch - epoch - 1} epochs. Ctrl-C is safe: "
+                  f"checkpoints every {cfg.checkpoint_every} epochs resume "
+                  f"bit-identically.")
         history["val"].append(val)
 
         if val["score"] > history["best_score"]:
