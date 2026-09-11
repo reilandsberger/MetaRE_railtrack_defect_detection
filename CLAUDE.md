@@ -55,7 +55,30 @@ Trainable metasurface + detector "barcode" system for rail defect detection.
   doc describes must update the doc AND bump its date line in the same commit —
   doc drift is a recurring failure mode here.
 
-## Current state (2026-09-04 — λ=5 migration VERIFIED end to end on the 5090)
+## Current state (2026-09-11 — shadow guard settled, CLEARED FOR GENERATION)
+
+**All eleven gates PASS at `min_t = 0.05`, `normal_offset = 0.3`** (lab 5090,
+2026-09-11). The three numbers that close the question:
+
+- **`intact_augmented_artifact = 0.0`** — exactly zero, the artifact the guard
+  exists to suppress is gone.
+- **`crack_shadow_omitted_by_coarse_occluder = 0.0113`**, inside the 0.02 bound.
+  This is V6's legitimately at-risk gate, measured honestly for the first time
+  (deepest crack, resolved-vs-production rather than resolved-vs-no-shadow), and
+  it passed. The λ/2 generation occluder captures **98%** of what a λ/8 one sees
+  on a 9.57 mm crack.
+- **V7 improved**: min cosine 0.9948 → **0.9969**, mean 0.9982 → 0.9988. Turning
+  real shadowing on made the λ/8 mesh *more* consistent with λ/16, not less.
+
+Generation now measures **1.62 samples/s → 3.52 h** for the full 20512-sample set
+(was 1.23 / 4.62 h). Next step is the prelim dataset (2000/class + 400 intact,
+~1.44 h) via `rail3D_pipeline.ipynb` with `STAGE = 'prelim'`.
+
+Watch on the first real run: crack untrained AUC moved 0.736 → **0.723** when
+shadowing came on. That is inside n=20 noise (±0.05) and not actionable yet, but
+crack is the limiting class and this is the direction that would matter.
+
+## Previous state (2026-09-04 — λ=5 migration VERIFIED end to end on the 5090)
 
 > **Picking this up cold? Read `rail3D/NEXT_SESSION.md` first.** It is the
 > short handoff: the two unpushed commits, the ONE open technical question

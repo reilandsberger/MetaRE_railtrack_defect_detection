@@ -159,12 +159,11 @@ def solve(section, params, g, device, chunk, *, mesh_ds=None, shadow=None,
         shadow = None                      # a flat plate cannot shadow itself
     if shadow == "raycast":
         n_occ = mesh3d.default_arc_count(section, g["occ_ds"])
-        v_o, f_o = mesh3d.sweep_rail_mesh(section, defect_params=params,
-                                          slice_ds=g["occ_ds"], arc_ds=g["occ_ds"],
-                                          n_arc=n_occ, **kw_mesh)
+        v_o, f_o = build_mesh(section, params, g["occ_ds"], n_occ, seg)
         kw = {"shadow": "raycast",
               "shadow_occluders": (v_o.to(device), f_o.to(device)),
-              "shadow_min_t": min_t}
+              "shadow_min_t": min_t,
+              "shadow_normal_offset": config.SHADOW_NORMAL_OFFSET}
     want2 = terms in ("psi12", "tot") and source != "plane"
     # a 2-D vertex tensor makes scattered_fields squeeze the batch dim itself,
     # so psi1/psi2 already come back as (nx, ny)
