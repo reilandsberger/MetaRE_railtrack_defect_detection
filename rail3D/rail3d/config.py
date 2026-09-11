@@ -263,7 +263,25 @@ DEFECT_LENGTH_RANGE = {"wear": (300.0, 900.0)}
 
 CRACK_LENGTH_RANGE = (10.0, 50.0)     # along the crack line (mm)
 CRACK_WIDTH_RANGE = (2.0, 5.0)        # across the line (mm)
-CRACK_DEPTH_RANGE = (2.0, 10.0)       # sampled (mm)
+# Narrowed 2026-09-12 (user operating range): a crack deep enough to matter
+# but still a hairline. The old 2 mm floor overlapped the dent range, and the
+# 10 mm ceiling was deeper than the class needs to represent.
+CRACK_DEPTH_RANGE = (4.0, 8.0)        # sampled (mm)
+
+# Hairline cracks form in GROUPS in locally worn regions, never singly, so
+# every crack sample is a set of parallel lines with identical shape, depth and
+# orientation, separated PERPENDICULAR to their length. The gap is
+# centre-to-centre; when it approaches CRACK_WIDTH_RANGE's upper end the three
+# merge into one ribbed band, which is itself what a tight cluster looks like.
+CRACK_LINE_COUNT = 3
+CRACK_LINE_GAP_RANGE = (2.0, 5.0)     # centre-to-centre (mm)
+
+# Shelling initiates at the GAUGE CORNER, and this window is the reason the
+# class is in the simulation at all: it is the part of the head the horn
+# illuminates AND the metasurface aperture sees. Deliberately narrower than the
+# general 'gauge' band (GAUGE_X_MIN..GAUGE_X_MAX = 15..38), which also admits
+# the crown shoulder and the lower head side.
+SHELL_GAUGE_X_RANGE = (20.0, 30.0)    # gauge-corner window (mm)
 DENT_DEPTH_RANGE = (1.5, 8.0)         # sampled (mm)
 DENT_FOOTPRINT_Y = (10.0, 30.0)       # FWHM along the rail (mm)
 DENT_FOOTPRINT_S = (10.0, 30.0)       # FWHM across the head (mm)

@@ -1,6 +1,8 @@
 # CLAUDE.md — MetaRE railtrack defect detection
 
 *Last updated: 2026-09-12 · λ = 5 mm (60 GHz) · V0–V8 measured on the lab 5090 ·
+DEFECT MODEL REVISED 2026-09-12 (crack = 3 parallel box divots 4–8 mm deep;
+shell confined to the gauge corner x ∈ 20–30 mm) — every earlier dataset is refused ·
 shadow guard settled 2026-09-11 (`SHADOW_MIN_T = 0.05`, `SHADOW_NORMAL_OFFSET = 0.3`) ·
 first prelim training run 2026-09-11 — see README findings 21 (corrected) and 22.*
 

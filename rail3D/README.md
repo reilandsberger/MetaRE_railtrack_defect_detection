@@ -1,6 +1,6 @@
 # rail3D — 3D diffraction simulation + metasurface training for rail defect detection
 
-*Last updated: 2026-09-10 · λ = 5 mm (60 GHz), V0–V8 measured on the 5090 — bump this line in any
+*Last updated: 2026-09-12 · λ = 5 mm (60 GHz), V0–V8 measured on the 5090 — bump this line in any
 commit that changes behaviour this file describes.*
 
 **Handoff document.** This README is written so that a future session (any
@@ -69,13 +69,47 @@ Figs 14/23/24) and Ye et al. 2023 (*IEEE TIM*, Figs 7/9):
 
 | class | footprint | depth | region |
 |---|---|---|---|
-| `crack` | line-divot, 10–50 mm long × 2–5 mm wide; longitudinal / transverse / oblique (20–70°); 30% chance of 2–3 parallel lines | 2–10 mm | running band + gauge corner |
+| `crack` | **box** divot (flat bottom, steep walls), 10–50 mm long × 2–5 mm wide; longitudinal / transverse / oblique (20–70°); **always a group of 3 parallel lines**, 2–5 mm apart centre-to-centre | 4–8 mm | running band + gauge corner |
 | `dent` | 2D super-Gaussian, 10–30 mm (y) × 10–30 mm (s); 20% chance of a 2–4 pit chain | 1.5–8 mm | running band |
 | `wear` | CSV cross-section shape × y-envelope of 300–900 mm — i.e. **the whole modelled segment is worn**, only a slight end taper | 2–8 mm | horn-facing shoulder |
-| `shell` | **parametric** (no CSVs): Fourier-modulated ellipse 8–20 mm + ragged interior; 30% chance of a second lobe | 1–5 mm | horn-facing shoulder |
+| `shell` | **parametric** (no CSVs): Fourier-modulated ellipse 8–20 mm + ragged interior; 30% chance of a second lobe | 1–5 mm | **gauge corner only**, centre x ∈ 20–30 mm |
 
-All depths are **sampled uniformly** from the ranges above; the CSV supplies the
-across-defect profile *shape* only. For wear the shape is normalized by its peak
+**Revised 2026-09-12** (user operating ranges, and the reason each class is in
+the simulation):
+
+- **`crack` is now a BOX divot, not a CSV notch.** Flat bottom, walls ramping
+  over a quarter of a mesh cell — as vertical as the λ/8 grid can carry. That
+  sharp edge is the feature distinguishing a crack from the smooth
+  super-Gaussian `dent`, which is exactly the discrimination the first
+  classifier failed (it collapsed 55% of dents into "crack"). Crack no longer
+  consumes a CSV profile at all; the CSVs still drive `wear`.
+- **`crack` is always a group of three**, not a 30% chance of 2–3. Hairline
+  cracks form in clusters in locally worn regions, never singly. The three
+  lines share shape, depth, length and orientation and are offset
+  **perpendicular to their length**, 2–5 mm centre-to-centre. The previous code
+  offset along *s*, which separates a longitudinal crack but leaves a
+  transverse one (θ = π/2) exactly on top of itself — the group was invisible
+  for a third of all samples. Note that at the extremes (10 mm long, 5 mm gap,
+  5 mm wide) the group spans 15 mm across a 10 mm length and reads as a patch
+  rather than lines; that is inherent to the requested ranges.
+- **`shell` is confined to the gauge corner**, centre x ∈ [20, 30] mm, a
+  truncated normal about the window centre rather than uniform over the whole
+  gauge band. This is the realistic initiation site *and* the part of the head
+  that the horn illuminates and the metasurface aperture sees — the reason the
+  class is being classified at all. Previously shells could land on the
+  vertical head side at x ≈ 38.5 mm.
+  Implementation note: x is **not monotonic** along the arc (it climbs the
+  gauge side, peaks at ≈ 38.9 mm, then falls across the crown), so the window
+  is satisfied in two disjoint runs. Taking min/max over both centres the
+  sample *between* them, where x ≈ 37 mm — measured, that put only **4%** of
+  shells inside the window. The code takes the longest contiguous in-window run
+  on the gauge shoulder instead.
+
+`CRACK_LINE_COUNT`, `CRACK_LINE_GAP_RANGE` and `SHELL_GAUGE_X_RANGE` are
+**provenance keys**, so every dataset generated before this change is refused.
+
+All depths are **sampled uniformly** from the ranges above; for `wear` the CSV
+supplies the across-defect profile *shape* only. For wear the shape is normalized by its peak
 **inside the gauge band** — normalizing globally left realized depth far below the
 sampled value, because many wear CSVs have their deepest point on the crown or
 field side, which the band mask removes.

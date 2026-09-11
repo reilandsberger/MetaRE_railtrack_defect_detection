@@ -163,6 +163,11 @@ def _notch_profile(profile: dict) -> tuple[np.ndarray, np.ndarray]:
 # ---------------------------------------------------------------------------
 # Per-class defect parameter sampling (resolution independent)
 # ---------------------------------------------------------------------------
+def _n(gen) -> float:
+    """Standard normal draw, same generator discipline as _u."""
+    return float(torch.randn(1, generator=gen))
+
+
 def _u(gen, lo, hi):
     return float(torch.empty(1).uniform_(lo, hi, generator=gen))
 
@@ -202,26 +207,31 @@ def sample_defect_params(class_name: str, gen: torch.Generator,
             sign = 1.0 if _u(gen, 0, 1) < 0.5 else -1.0
             theta = sign * math.radians(_u(gen, 20, 70))
         L = _u(gen, *config.CRACK_LENGTH_RANGE)
-        v, prof = _notch_profile(csv_profile) if csv_profile else _notch_profile({"depth": 0})
-        # Hairline character (Ye 2018 Table 1: surface width ~2 mm at 45°):
-        # the CSV notches are chunky cross-section features — keep their measured
-        # depth SHAPE but compress the across-crack support to hairline width.
         w_hair = _u(gen, *config.CRACK_WIDTH_RANGE)
-        v_span = float(v.max() - v.min())
-        if v_span > 1e-6:
-            v = v * (w_hair / v_span)
-        # Depth is SAMPLED in the measured range, not taken-and-clipped from the
-        # CSV: raw CSV crack depths (median 7.8 mm, p95 10.8) exceed the cap, so
-        # clipping pinned 66% of samples at exactly 6.9 mm and destroyed depth
-        # diversity. The CSV still supplies the across-crack profile SHAPE (and
-        # its width is rescaled to hairline anyway, so its depth carried little
-        # meaning). Range from Ye 2018 Table 1.
         depth = _u(gen, *config.CRACK_DEPTH_RANGE)
-        n_lines = 1
-        if _u(gen, 0, 1) < 0.3:
-            n_lines = 2 if _u(gen, 0, 1) < 0.7 else 3
-        offsets = [0.0] + [(-1) ** k * _u(gen, 5, 15) for k in range(1, n_lines)]
-        p.update(theta=theta, L=L, depth=depth, s0=_u(gen, s_lo + 3, s_hi - 3),
+        # BOX cross-section (2026-09-12), replacing the CSV notch shape. A crack
+        # is a steep-walled divot, and that sharp edge is exactly what
+        # distinguishes it from the smooth super-Gaussian dents -- which is the
+        # discrimination the classifier has been failing at. The walls ramp over
+        # a quarter of a mesh cell, i.e. as vertical as the lambda/8 grid can
+        # carry; a true discontinuity would only alias. Flat bottom, so the
+        # divot is a rectangular prism.
+        # NOTE: crack no longer consumes csv_profile. The CSVs still drive wear.
+        half = 0.5 * w_hair
+        edge = 0.25 * config.MESH_DS
+        v = np.array([-half - edge, -half, half, half + edge])
+        prof = np.array([0.0, 1.0, 1.0, 0.0])
+        # Cracks form in GROUPS, so every sample is CRACK_LINE_COUNT parallel
+        # lines sharing shape, depth, length and orientation. The offset is
+        # applied PERPENDICULAR to the line in render_depth_field: the previous
+        # code shifted along s, which separates a longitudinal crack but leaves
+        # a transverse one (theta = pi/2) exactly on top of itself.
+        gap = _u(gen, *config.CRACK_LINE_GAP_RANGE)
+        mid = (config.CRACK_LINE_COUNT - 1) / 2.0
+        offsets = [(i - mid) * gap for i in range(config.CRACK_LINE_COUNT)]
+        p.update(theta=theta, L=L, depth=depth, width=w_hair, line_gap=gap,
+                 n_lines=config.CRACK_LINE_COUNT,
+                 s0=_u(gen, s_lo + 3, s_hi - 3),
                  profile_v=v, profile_d=prof, offsets=offsets, band="crack")
 
     elif class_name == "dent":
@@ -267,8 +277,32 @@ def sample_defect_params(class_name: str, gen: torch.Generator,
             lobes.append((_u(gen, 0.6, 1.0) * r_y, _u(gen, -0.7, 0.7) * r_s,
                           _u(gen, 0.5, 0.9)))
         rough_seed = int(torch.randint(0, 2**31 - 1, (1,), generator=gen))
+        # Shelling initiates at the GAUGE CORNER -- restrict the centre to the
+        # arc window whose x lies in SHELL_GAUGE_X_RANGE, the part of the head
+        # the horn illuminates and the metasurface aperture sees. "Tightly
+        # distributed": a truncated normal about the window centre (sigma =
+        # 0.35 half-width) rather than uniform over the whole gauge band, which
+        # previously let shells land on the vertical head side at x ~ 38.
+        lo_x, hi_x = config.SHELL_GAUGE_X_RANGE
+        ok = ((geom["x"] >= lo_x) & (geom["x"] <= hi_x)
+              & (region_band(geom, "gauge") > 0.5))
+        # x is NOT monotonic along the arc -- it climbs the gauge side, peaks at
+        # the head corner (~38.9 mm) and falls again across the crown -- so the
+        # window is satisfied in more than one disjoint run. Take the LONGEST
+        # contiguous run (the gauge shoulder). Using min/max over all of them
+        # centres s0 BETWEEN the runs, where x is ~37 mm and outside the window
+        # entirely: measured, that put only 4% of shells where they belong.
+        idx = np.flatnonzero(ok)
+        if idx.size:
+            runs = np.split(idx, np.flatnonzero(np.diff(idx) > 1) + 1)
+            sw = geom["s"][max(runs, key=len)]
+            c = 0.5 * (float(sw.min()) + float(sw.max()))
+            hw = 0.5 * (float(sw.max()) - float(sw.min()))
+            s0 = float(np.clip(c + _n(gen) * 0.35 * hw, sw.min(), sw.max()))
+        else:                                   # window off this section: fall back
+            s0 = _u(gen, s_lo + 4, s_hi - 4)
         p.update(r_s=r_s, r_y=r_y, depth=depth, fourier=four, lobes=lobes,
-                 s0=_u(gen, s_lo + 4, s_hi - 4), rough_seed=rough_seed, band="gauge")
+                 s0=s0, rough_seed=rough_seed, band="gauge")
 
     elif class_name == "intact":
         pass
@@ -294,13 +328,16 @@ def render_depth_field(p: dict, geom: dict, y_slices: np.ndarray) -> np.ndarray:
 
     if cls == "crack":
         ct, st = math.cos(p["theta"]), math.sin(p["theta"])
+        u = Y * ct + S * st                    # along the crack line
+        v0 = -Y * st + S * ct                  # across the crack line
+        # all lines in the group share one length envelope: same shape, same
+        # orientation, offset only perpendicular to their length
+        un = np.abs(u) / (p["L"] / 2)
+        along = np.where(un <= 0.6, 1.0,
+                         np.where(un < 1.0, 0.5 * (1 + np.cos(np.pi * (un - 0.6) / 0.4)), 0.0))
         for off in p["offsets"]:
-            u = Y * ct + (S - off) * st        # along the crack line
-            v = -Y * st + (S - off) * ct       # across the crack line
-            across = np.interp(v, p["profile_v"], p["profile_d"], left=0.0, right=0.0)
-            un = np.abs(u) / (p["L"] / 2)
-            along = np.where(un <= 0.6, 1.0,
-                             np.where(un < 1.0, 0.5 * (1 + np.cos(np.pi * (un - 0.6) / 0.4)), 0.0))
+            across = np.interp(v0 - off, p["profile_v"], p["profile_d"],
+                               left=0.0, right=0.0)
             d = np.maximum(d, p["depth"] * across * along)
 
     elif cls == "dent":
