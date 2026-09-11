@@ -1,7 +1,33 @@
 # CLAUDE.md — MetaRE railtrack defect detection
 
-*Last updated: 2026-09-11 · λ = 5 mm (60 GHz) · V0–V8 measured on the lab 5090 ·
-shadow guard settled 2026-09-11 (`SHADOW_MIN_T = 0.05`, `SHADOW_NORMAL_OFFSET = 0.3`).*
+*Last updated: 2026-09-12 · λ = 5 mm (60 GHz) · V0–V8 measured on the lab 5090 ·
+shadow guard settled 2026-09-11 (`SHADOW_MIN_T = 0.05`, `SHADOW_NORMAL_OFFSET = 0.3`) ·
+first prelim training run 2026-09-11 — see README findings 21 (corrected) and 22.*
+
+## First prelim result (2026-09-11) — VALID PIPELINE, INVALID MODEL SELECTION
+
+`run_stage.py --stage prelim` completed: 8400 samples in 1.81 h, all gates green,
+analysis written. But the headline numbers describe the **wrong model**.
+
+- **`best_epoch 28` of 300, with `prune_start = 25`** — the epoch-25 prune only
+  arms the schedule, so the saved best checkpoint still had all **130**
+  detectors. `analyze_results --which best` therefore measured the dense array,
+  not the 8-detector system. Fixed: `train()` now refuses to promote a
+  checkpoint whose `n_det != n_det_final` (README finding 22).
+- **Training is ~free: 300 epochs = 36 s** (~17 ms/step). The earlier claim that
+  `n_epoch = 1200` caused a 10-hour cell was WRONG and is corrected in README
+  finding 21. `config.STAGES` budgets are back to generous
+  (prelim 1500 epochs ≈ 3 min; full 1000 ≈ 5 min) and the schedule keeps its
+  original shape.
+- The 10-hour notebook cell remains **unexplained**. Most likely that kernel
+  fell back to CPU; every entry point prints its device for this reason.
+
+Results to re-measure once the above is re-run — treat the first run's numbers
+as provisional:
+recall crack 0.27 / dent 0.65 / wear 0.99 / shell 0.42 at a 5% FPR threshold,
+detection AUC 0.80 / 0.92 / 1.00 / 0.78, and a classifier that collapses dent
+(0.55) and shell (0.68) into \crack\. The dominant blind spot is **s0, angular
+position on the railhead** (dent +0.61, shell −0.59) — not defect size.
 
 Guidance for Claude Code sessions in this repo. Written for cold-start sessions on
 smaller models: read this, then `rail3D/README.md` (the full handoff doc), before

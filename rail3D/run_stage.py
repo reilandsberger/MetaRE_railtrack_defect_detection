@@ -170,7 +170,14 @@ def train_one(cfg: train3d.TrainConfig, device, fresh: bool) -> dict:
     hist = train3d.train(cfg, device=device)
     dt = (time.time() - t0) / 3600
     best_ep, n_ep = hist.get("best_epoch", -1), cfg.n_epoch
-    say(f"   {cfg.run_name}: {dt:.2f} h, best epoch {best_ep} of {n_ep}")
+    best_nd = hist.get("best_n_det")
+    say(f"   {cfg.run_name}: {dt:.2f} h ({dt*3600:.0f} s), "
+        f"best epoch {best_ep} of {n_ep}, n_det at best {best_nd}")
+    if best_nd is not None and best_nd != cfg.n_det_final:
+        say(f"   !! the best checkpoint has {best_nd} detectors, not "
+            f"{cfg.n_det_final}: every downstream number describes the DENSE "
+            f"array, not the system being designed. n_epoch is too short for "
+            f"pruning (ends at epoch {cfg.prune_end}) to finish and recover.")
     if best_ep >= 0.9 * n_ep:
         say(f"   ! best epoch is in the last 10% — the model was still "
             f"improving; n_epoch may be too low for this stage.")

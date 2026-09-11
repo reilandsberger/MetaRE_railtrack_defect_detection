@@ -527,13 +527,31 @@ def train(cfg: TrainConfig, device: torch.device | None = None,
                   f"{cfg.n_epoch - epoch - 1} epochs. Ctrl-C is safe: "
                   f"checkpoints every {cfg.checkpoint_every} epochs resume "
                   f"bit-identically.")
+        val["n_det"] = model.detector.n_det
         history["val"].append(val)
 
-        if val["score"] > history["best_score"]:
-            history["best_score"] = val["score"]
-            history["best_epoch"] = epoch
-            save_checkpoint(best, cfg, model, optimizer, epoch, history,
-                            {"power_floor": power_floor})
+        # Only a model that MEETS THE DETECTOR BUDGET is a candidate for "best".
+        # score = auc + class_acc, and both improve with more detectors, so an
+        # unrestricted argmax reliably picks a PRE-PRUNE epoch: measured
+        # 2026-09-11, best_epoch 28 of 300 with prune_start=25 saved a
+        # 130-detector model, and the whole 130 -> n_det_final exercise was
+        # discarded at selection time. Everything downstream (analyze_results
+        # --which best, the notebook comparison table) then described the dense
+        # array rather than the system being designed.
+        # Before any final-count epoch exists, track the best so far so that a
+        # short or interrupted run still has a checkpoint; the first final-count
+        # epoch resets the baseline so only budget-meeting models compete.
+        at_final = val["n_det"] == cfg.n_det_final
+        if at_final and not history.get("best_at_final"):
+            history["best_at_final"] = True
+            history["best_score"] = -1e9
+        if at_final or not history.get("best_at_final"):
+            if val["score"] > history["best_score"]:
+                history["best_score"] = val["score"]
+                history["best_epoch"] = epoch
+                history["best_n_det"] = val["n_det"]
+                save_checkpoint(best, cfg, model, optimizer, epoch, history,
+                                {"power_floor": power_floor})
         if (epoch + 1) % cfg.checkpoint_every == 0 or epoch == cfg.n_epoch - 1:
             save_checkpoint(latest, cfg, model, optimizer, epoch, history,
                             {"power_floor": power_floor})

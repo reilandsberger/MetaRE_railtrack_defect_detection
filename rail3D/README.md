@@ -499,10 +499,16 @@ first) · or everything at once with `python lab_report.py`.
     | prelim (2000/class) | 6,400 | **7** | 8,400 steps, **~10 h** |
     | full (5000/class) | 16,000 | **16** | 19,200 steps, ~20 h |
 
-    (`lab` uses `train_batch = 1024`, so a step is 1024 + `b0`=64 samples.) The
-    TrainConfig comment saying "epochs are cheap (~0.5 s on the 5090)" is true
-    *on the smoke set only*; it is ~30 s on the prelim set. This cost a 10-hour
-    run before it was noticed.
+    (`lab` uses `train_batch = 1024`, so a step is 1024 + `b0`=64 samples.)
+
+    **Correction, measured 2026-09-11:** the step-count arithmetic above is
+    right, but an earlier version of this finding attributed a 10-hour notebook
+    cell to it. That was wrong. The prelim run's 300 epochs (2100 steps) took
+    **36 seconds** on the 5090 — about 17 ms/step — so `n_epoch = 1200` would
+    have been ~2.4 minutes, not hours. Training on this model is effectively
+    free and `n_epoch` can be raised freely. The 10-hour cell remains
+    unexplained; the most likely cause is that kernel falling back to CPU (the
+    banner prints the device for exactly this reason), not the epoch count.
 
     **Scale `n_epoch` down by the steps-per-epoch factor and compress the
     schedule to match**, keeping pruning at ≥10 events (130 → 8 at
@@ -512,11 +518,32 @@ first) · or everything at once with `python lab_report.py`.
     prelim `n_epoch=300, tau_anneal_end=60, prune 25–75`; full
     `n_epoch=150, tau_anneal_end=30, prune 25–75`.
 
-    `train()` now prints the real step budget in its banner and a **measured**
-    ETA after the first epoch, so this is visible in the first minute rather
-    than after ten hours. `sweep_detectors.py` multiplies the whole cost by the
-    number of counts — it is N full training runs, and the notebook leaves it
-    behind a `RUN_DETECTOR_SWEEP` flag for that reason.
+    `train()` prints the real step budget in its banner and a **measured** ETA
+    after the first epoch. Keep both: the arithmetic still matters for the
+    SCHEDULE (below), even though the wall-clock turned out to be trivial.
+
+22. **"Best" must mean "best model that meets the detector budget."**
+    `score = auc + class_acc`, and both improve with MORE detectors, so an
+    unrestricted `argmax` over epochs reliably selects a **pre-prune** epoch.
+    Measured on the first prelim run: `best_epoch 28` of 300 with
+    `prune_start = 25` — and because the epoch-25 prune only *arms* the
+    schedule, the saved "best" model still had all **130** detectors.
+
+    Everything downstream then described the dense array: `analyze_results
+    --which best`, the notebook comparison table, every per-class recall and
+    AUC in `analysis.json`. The 130 → 8 pruning that the whole detector design
+    exists to justify was discarded at checkpoint-selection time, silently,
+    while the run reported success.
+
+    `train()` now refuses to promote a checkpoint whose `n_det` is not
+    `n_det_final`, records `best_n_det`, and `run_stage.py` prints a loud
+    warning if the best model missed the budget. Before any budget-meeting
+    epoch exists the old behaviour still applies, so a short or interrupted run
+    is not left with no checkpoint at all.
+
+    The general lesson: a model-selection criterion that is free to ignore a
+    hard design constraint will ignore it. State the constraint in the
+    selection rule, not only in the schedule.
 
 
 ## 6b. Objective & metrics (rev. 2)

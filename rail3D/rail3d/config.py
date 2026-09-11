@@ -339,11 +339,23 @@ SMOKE_PER_CLASS = 20
 # intact is NOT cosmetic: the alarm threshold is calibrated on the VALIDATION
 # intact spread and the intact split is 80/10/10, so 200 intact leaves 20
 # validation samples and "5% FPR" means literally one sample.
+# MEASURED 2026-09-11 on the 5090: the prelim set's 300 epochs (2100 optimizer
+# steps) took 36 SECONDS -- ~17 ms/step. Training this model is effectively
+# free, so n_epoch is generous and the schedule keeps its original, unhurried
+# shape. An earlier version of this table compressed the schedule to avoid a
+# supposed 10-hour run; that attribution was wrong (README finding 21).
+#
+# n_epoch must leave a long stationary tail AFTER prune_end, because the best
+# checkpoint may only be taken from an epoch that meets the detector budget
+# (README finding 22) -- with prune_end=150 the first eligible epoch is ~150,
+# so a short run would have almost nothing to choose from. It is also what the
+# classification head needs: the first prelim run peaked at epoch 28 with the
+# head barely trained, and collapsed dent and shell into "crack".
 STAGES = {
     "prelim": dict(limit=2000, intact=400,
-                   n_epoch=300, tau_anneal_end=60, prune_start=25, prune_end=75),
+                   n_epoch=1500, tau_anneal_end=250, prune_start=60, prune_end=150),
     "full": dict(limit=5000, intact=512,
-                 n_epoch=150, tau_anneal_end=30, prune_start=25, prune_end=75),
+                 n_epoch=1000, tau_anneal_end=250, prune_start=60, prune_end=150),
 }
 
 
