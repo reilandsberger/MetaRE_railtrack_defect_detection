@@ -1,6 +1,6 @@
 # Reading rail3D's validation output
 
-*Last updated: 2026-09-10 · λ = 5 mm (60 GHz) — bump this line in any commit that
+*Last updated: 2026-09-11 · λ = 5 mm (60 GHz) — bump this line in any commit that
 changes a gate, a threshold, or what a field means.*
 
 What every file the lab run produces actually contains, what its pass rule is in
@@ -21,7 +21,7 @@ Companion docs: `README.md` §6 (why the physics is the way it is),
 | `verification_report.json` | `tests_physics_3d.py` + `validation_3d.py` + `v8_smoke_test.py`, merged | **yes** |
 | `lab_report.md` | `lab_report.py` (runs all three, then adds its own analysis) | partly |
 | `geometry_scan.json` | `scan_geometry.py` | **no** — a measurement |
-| `v6b_min_t_sweep` / `min_t_refine.txt` | `validation_3d.py --min-t …` | **no** — a study |
+| `V6b_guard_sweep` / `v6b_grid.txt` | `validation_3d.py --min-t … --normal-offset …` | **no** — a study |
 | `wavefront_comparison.json`, `wavefront_fields.npz` | `compare_wavefronts.py` | **no** — a study |
 
 The three "no" rows are the ones most often quoted as if they were gates. They
@@ -49,6 +49,12 @@ If any of those say "old", the numbers describe the old mechanism. That is not a
 reason to discard them — it is a reason not to carry their *conclusions*
 forward.
 
+**`verification_report.json` accumulates keys across runs and never clears
+them.** A single file can therefore hold results from several code versions side
+by side — e.g. both `V6b_min_t_sweep` (the 2026-09-04 single-axis study) and
+`V6b_guard_sweep` (the 2026-09-11 two-axis one), with contradictory
+recommendations. Check the key name and the fields inside before quoting either.
+
 ---
 
 ## 3. `dataset_config.json` — the geometry fingerprint
@@ -65,10 +71,11 @@ Its job is refusal, in three places:
   and silently relabel the mixed set).
 - checkpoints carry the same stamp and refuse to resume across a change.
 
-**Provenance keys that bite.** `SHADOW_MIN_T` and `SHADOW_MODE` are in the
-fingerprint. Changing either invalidates every existing dataset — which is
-correct, but means a shadow decision must be made *before* the full generation,
-not after.
+**Provenance keys that bite.** `SHADOW_MIN_T`, `SHADOW_NORMAL_OFFSET` and
+`SHADOW_MODE` are all in the fingerprint. Changing any of them invalidates every
+existing dataset — which is correct, but means the shadow decision must be made
+*before* the full generation, not after. (It was settled 2026-09-11 at
+`min_t = 0.05`, `offset = 0.3`; every dataset generated before that is refused.)
 
 **What to sanity-check:** `WVL`, `H_MS`, `NX`/`NY`, `SEG_LEN`, `MESH_DS`,
 `CLASS_NAMES` length, and `_counts`. A `_counts` of ~20/class is a **smoke**
@@ -109,7 +116,7 @@ Every entry carries `pass` and `seconds`. The pass rules, from the code:
 | **V3** | `central_rel_l2 < 0.02` | two independent propagators disagree |
 | **V4** | specular centroid within one pixel, power conserved, crown up | the scene is geometrically wrong |
 | **V5** | `pearson_r > 0.9` | 3D PO disagrees with the validated 2D code |
-| **V6** | `artifact_worst < 0.03 ∧ resolved < 0.02` | ray-cast is injecting artifacts |
+| **V6** | `artifact_worst < 0.03 ∧ omitted < 0.02` | ray-cast is injecting artifacts, or the coarse occluder misses too much |
 | **V7** | `mean_cosine > 0.95 ∧ min_cosine > 0.90` | the λ/8 generation mesh is not converged |
 | **V8** | 11 booleans ANDed, headed by `sep[-1] > sep[0] * 1.2` | training does not train |
 
@@ -141,8 +148,17 @@ cosine** (`barcode(defect) − barcode(intact)` at λ/8 vs λ/16), not raw field
 Raw complex-field L2 never converges at these facet sizes because of PO glint
 speckle; the task consumes barcodes, so fidelity is judged there.
 
-**V6 `worst_rel_l2`** — a **max over 8 samples**, and in practice 7 of them are
+**V6 `worst_rel_l2`** — a **max over 8 samples**, and in practice most are
 exactly 0. Read the `samples` list, not the headline. See §8.
+
+**V6 `crack_shadow_omitted_by_coarse_occluder`** — `‖resolved − production‖ /
+‖no-shadow‖`, i.e. what the λ/2 generation occluder misses against a λ/8 one on a
+representative crack. This replaced a field that differenced the resolved result
+against the *no-shadow* field, which is the absolute effect (~0.11 on a deep
+crack) rather than the omission — and which was measured on a crack too shallow
+to shadow at all, so it read 0.0 and satisfied its bound trivially. This is the
+**legitimately at-risk gate**: a trip here is a physics finding to report, not a
+bug.
 
 ---
 
@@ -230,15 +246,23 @@ two independent reasons a crack shows no shadow.
 
 1. **The sweep's benefit column can be a single unrepresentative sample.** The
    pre-`f046554` harness probed `crack` index 0 only — despite naming the
-   variable `crack_deep` — and index 0 is a near-minimum-depth crack that shows
-   no shadowing at any `min_t`. Its "crack effect 0.0000 everywhere" is therefore
-   not evidence that shadowing is inert; V6's own table, in the same report,
-   shows index 1 responding at the production setting. The current harness sweeps
-   `crack_idxs=(0, 1)` and prints per-index columns for exactly this reason.
-2. **"Smallest artifact-safe min_t" is not the objective.** The current code says
-   so in a comment and returns `None` instead of a number when nothing has
-   benefit. The objective is the configuration keeping the **most real
-   shadowing** while staying under the artifact bound.
+   variable `crack_deep` — and index 0 is a near-minimum-depth crack (2.72 mm,
+   shallower than the 2.5 mm occluder facet) that shows no shadowing at ANY
+   setting. **This produced a wrong standing conclusion for a week**: the
+   2026-09-11 two-axis sweep, probing idx 0 / 1 / 17 (2.72 / 5.28 / 9.57 mm),
+   measured shadowing at **5–11%** on cracks at and above the mean depth. Pass
+   `--crack-idx 0 1 17` and read the `probing cracks:` line to confirm what was
+   actually tested.
+2. **"Smallest artifact-safe min_t" is not the objective**, and neither is raw
+   benefit. The selection rule takes the **cleanest achievable artifact first**,
+   because an artifact-contaminated row's crack numbers are inflated by the same
+   false shadowing — measured 2026-09-11, the one row with a non-zero artifact
+   (0.0288) also reported the largest apparent benefit *and* a resolved-occluder
+   figure 30% above every clean row. It then excludes offsets where the **deep**
+   crack still moves with `min_t` (the offset is not yet doing the work), and
+   only then maximises the **mean** benefit across probed cracks — the max would
+   reward a configuration that serves the deepest crack while deleting shallow
+   ones, which is exactly what `min_t = 3.0` did.
 3. **The two "facet" columns are different facets.** `min_t_over_occluder_facet`
    divides by λ/2; `min_t_over_resolved_facet` divides by λ/8. Comparing the
    production and resolved columns at one "× facet" number was misleading and is

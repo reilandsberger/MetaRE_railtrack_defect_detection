@@ -169,46 +169,70 @@ SHADOW_MODE = "raycast"
 # own neighbours -- without any guard ~4% of terminator faces are falsely
 # blocked and the field moves 30-60% (README finding 3).
 #
-# MEASURED at the FIELD level, V6b sweep on the lab 5090 (2026-09-04), on
-# AUGMENTED intact meshes (roll +-2 deg, jitter +-4 mm -- what generation uses):
-#   min_t   x facet | intact artifact | crack effect | resolved-occluder
-#    3.0 mm  1.20   |  0.0020  OK     |   0.0000     |   0.0000
-#    1.0 mm  0.40   |  0.0451  BAD    |   0.0288     |   0.0597
-#    0.3 mm  0.12   |  0.0451  BAD    |   0.0500     |   0.0808
-#    0.125mm 0.05   |  0.0451  BAD    |   0.0536     |   0.0995
-#    0.05 mm 0.02   |  0.0451  BAD    |   0.0562     |   0.0995
-# The artifact is PINNED at 0.0451 for every value <= 1 mm (the whole artifact
-# population lives below 1 mm, so any smaller cutoff admits all of it) and
-# exceeds V6's 0.03 bound. An earlier un-augmented ray-distance probe put the
-# artifact at t <= 0.02 mm and suggested 0.05-0.3 mm was safe; that probe was
-# MISLEADING because it did not augment -- rolling the rail moves the
-# terminator, and near-tangential rays there skim a full facet before clearing.
-# So 3.0 mm stands as the only tested artifact-safe value. Its real cost:
-# ~5-6% of genuine crack self-shadowing is discarded (~10% against a
-# generation-resolution occluder), which is why V6's
-# crack_shadow_with_resolved_occluder reads 0.0. THE 1.0-3.0 mm GAP IS
-# UNTESTED and is where a better value would live -- sweep 1.25/1.5/2.0/2.5
-# before assuming 3.0 is optimal rather than merely safe.
-# Changing it changes the physics, so any dataset generated across the change
-# is incomparable (it is a PROVENANCE key).
-SHADOW_MIN_T = 3.0
-
-# Ray-origin lift along the face NORMAL (mm) before casting -- the geometric
-# cure for the same artifact, added 2026-09-04 after the V6b sweep showed that
-# min_t alone CANNOT work: on augmented intact meshes the artifact saturates
-# for any min_t <= 1 facet (0.0451) while crack self-shadowing only appears
-# below ~1.5 mm, so the two populations overlap in ray distance and no
-# threshold separates them.
+# MEASURED on the lab 5090 by the 2-D V6b guard sweep (2026-09-10), on
+# AUGMENTED intact meshes (roll +-2 deg, jitter +-4 mm -- what generation uses)
+# and on three cracks spanning the depth range: idx 0 = 2.72 mm (near the
+# minimum), idx 1 = 5.28 mm (near the mean), idx 17 = 9.57 mm (the deepest in
+# the set). Field-level relative L2, artifact_ok bound 0.03:
 #
-# The root cause is that field3d only nudged the origin 1 um ALONG THE RAY,
-# whose perpendicular component vanishes at grazing incidence -- precisely
-# where self-hits happen. Lifting along the normal instead clears the
-# neighbouring chord directly. Scale: the chord sagitta d^2/(8R) is
-# 0.003 mm on the crown (R~300) to 0.06 mm at the gauge corner (R~13), so
-# 0.15 mm is ~2.5x the worst sagitta and ~10x below the nearest real occluder
-# (crater walls at >= 1.5 mm). PROVENANCE key: changing it changes the physics.
-# Sweep it with `python validation_3d.py --normal-offset 0 0.05 0.1 0.15 0.3 0.6`.
-SHADOW_NORMAL_OFFSET = 0.15
+#   min_t  offset | artifact  | crack 2.7mm  5.3mm  9.6mm | resolved  prod/res
+#    3.00   0.00  |  0.0000   |   0.0000   0.0197  0.0950 |  0.1135    84%
+#    0.05   0.00  |  0.0288   |   0.0562   0.0737  0.1371 |  0.1488    92%
+#    0.05   0.05  |  0.0000   |   0.0533   0.0676  0.1125 |  0.1138    99%
+#    0.05   0.15  |  0.0000   |   0.0495   0.0615  0.0954 |  0.1139    84%
+#    3.00   0.30  |  0.0000   |   0.0000   0.0191  0.1121 |  0.1142    98%
+#    0.05   0.30  |  0.0000   |   0.0485   0.0580  0.1119 |  0.1141    98%
+#    0.05   0.60  |  0.0000   |   0.0438   0.0573  0.1135 |  0.1144    99%
+#
+# THREE RESULTS, and they overturn what this block used to say:
+#
+# 1. The normal offset is a COMPLETE cure, not a partial one. Every row with
+#    offset >= 0.05 has artifact EXACTLY 0.0 (mean AND max; 1.19e-08 at the
+#    barcode level = float32 epsilon). Only offset = 0 rows show any artifact.
+#    The old 0.0451 "pinned" figure was the artifact with no offset at all.
+#
+# 2. Ray-cast shadowing is NOT inert. It is a 5-11% field effect on cracks at
+#    and above the mean depth. The previous "inert" finding came entirely from
+#    probing crack idx 0 -- a 2.72 mm crack, shallower than the 2.5 mm occluder
+#    facet that would have to represent it, which shows zero at EVERY setting.
+#    SHADOW_MODE = "none" would therefore NOT be bit-identical; it would delete
+#    up to 11% of the field on deep cracks.
+#
+# 3. min_t must be a TOKEN value, and the offset must do the work. At
+#    offset 0.30 the deep-crack result is identical across all four min_t
+#    values tested (0.1119-0.1122) -- the guard has become min_t-INDEPENDENT,
+#    which is the signature of an offset that is actually sufficient. At
+#    offset 0.05/0.15 it is not (0.0950 -> 0.1125 as min_t drops), so those
+#    are on a knife edge. Shallow cracks still need the small min_t: their
+#    crater walls sit within a few mm of the shading point, and min_t = 3.0
+#    deleted them outright (crack 2.7mm: 0.0000 -> 0.0485).
+#
+# Chosen: min_t 0.05 mm (token), offset 0.30 mm. Offset 0.05 scores ~6% more
+# total shadowing, but 0.30 is 5x the worst measured intact chord sagitta
+# (d^2/(8R) = 0.003 mm on the crown, 0.06 mm at the gauge corner), sits on a
+# flat min_t-independent plateau, and agrees with a generation-resolution
+# occluder to 98% -- and the artifact is measured only on INTACT meshes, so
+# margin against an unmeasured defect-mesh failure is worth more than 6% of
+# signal. False physics is worse than missing physics: the historical grazing
+# artifact was ~4% of faces and produced a 30-60% field error.
+#
+# BOTH are PROVENANCE keys -- changing either makes every dataset and
+# checkpoint built across the change incomparable, and they are refused rather
+# than silently reused. Re-sweep with:
+#   python validation_3d.py --min-t 0.05 0.5 1.5 3.0 \
+#       --normal-offset 0 0.05 0.15 0.3 0.6 --crack-idx 0 1 17
+SHADOW_MIN_T = 0.05
+
+# Ray-origin lift along the face NORMAL (mm) before casting. The self-hit is a
+# PERPENDICULAR problem -- faceted chords sag inside the true convex surface --
+# but min_t biases ALONG THE RAY, and a ray at grazing angle theta rises the
+# sagitta only after travelling sagitta/sin(theta), which diverges exactly at
+# the terminator where self-hits occur (~3.4 mm at 1 deg). That is why a
+# working min_t had to be 1.2x the occluder facet, which is wider than a crack
+# (2-5 mm) and so deleted the physics the guard exists to find. Lifting along
+# the normal clears the neighbouring chord independent of theta. See the table
+# above for the measurement that settled the value.
+SHADOW_NORMAL_OFFSET = 0.3
 
 # --- Defect geometry parameters (rev. 2: per-point depth fields d(s, y)) ---
 # Baseline ranges came from laser-scan measurements -- Ye et al. 2018 Table 1

@@ -210,6 +210,11 @@ def _solve_sample(section, class_name, sample_idx, device, args,
     return psi, params
 
 
+# Deepest crack in the set (9.57 mm). The resolved-occluder control is
+# meaningless on a crack shallower than the occluder facet -- see v6_shadowing.
+CRACK_PROBE_IDX = 17
+
+
 def v6_shadowing(device: torch.device, n_per_class: int = 2) -> dict:
     """Shadowing at the generation config (λ/8 mesh, λ/2 occluders, config.SHADOW_MIN_T).
 
@@ -243,34 +248,44 @@ def v6_shadowing(device: torch.device, n_per_class: int = 2) -> dict:
                              roll=roll, jit=jit, params=intact_params)
         artifact_worst = max(artifact_worst, float((a - b).norm() / b.norm()))
 
-    # Informational: the generation occluder is λ/2, which CANNOT represent a
-    # ~2 mm hairline crack — so shadowing is inert for cracks at the production
-    # config (worst_rel_l2 = 0). Re-measure one crack against a generation-
-    # resolution occluder to record the true magnitude of what we are omitting.
-    files = sections.get_dataset_files("crack")
-    d0 = sections.match_reference_width(sections.load_vertices_from_csv(files[0]), section)
-    n_arc_fine = mesh3d.default_arc_count(section, config.MESH_DS)
-    crack_params, _ = mesh3d.defect_params_for_sample(
-        section, "crack", d0, config.sample_seed("crack", 0), n_arc=n_arc_fine)
-    v_f, f_f = mesh3d.sweep_rail_mesh(section, defect_params=crack_params,
-                                      slice_ds=config.MESH_DS, arc_ds=config.MESH_DS)
-    no_sh, _ = field3d.scattered_fields(v_f.to(device), f_f.to(device), *args,
-                                        chunk_faces=2048, compute_psi2=False)
-    with_sh, _ = field3d.scattered_fields(
-        v_f.to(device), f_f.to(device), *args, chunk_faces=2048, compute_psi2=False,
-        shadow="raycast", shadow_occluders=(v_f.to(device), f_f.to(device)),
-        shadow_min_t=config.SHADOW_MIN_T)
-    resolved = float((with_sh - no_sh).norm() / no_sh.norm())
+    # How much does the COARSE generation occluder miss? The lambda/2 occluder
+    # cannot represent a hairline crack, so re-solve one crack against a
+    # generation-resolution (lambda/8) occluder and difference the two SHADOWED
+    # fields. That difference is the magnitude being omitted.
+    #
+    # Two corrections, 2026-09-10. This probed crack index 0 -- a 2.72 mm crack,
+    # shallower than the 2.5 mm occluder facet, which shows zero shadowing at
+    # EVERY guard setting -- so it reported 0.0 and the <0.02 bound was
+    # satisfied trivially. And it differenced the resolved field against the
+    # NO-SHADOW field, which is the absolute effect (0.11 on a deep crack), not
+    # the omission. Probe a representative crack and difference the two
+    # shadowed fields instead.
+    a, cp = _solve_sample(section, "crack", CRACK_PROBE_IDX, device, args,
+                          shadow=False)
+    b, _ = _solve_sample(section, "crack", CRACK_PROBE_IDX, device, args,
+                         shadow=True, params=cp)
+    c, _ = _solve_sample(section, "crack", CRACK_PROBE_IDX, device, args,
+                         shadow=True, params=cp, occ_ds=config.MESH_DS)
+    denom = a.norm()
+    production_effect = float((b - a).norm() / denom)
+    resolved = float((c - a).norm() / denom)
+    omitted = float((c - b).norm() / denom)
 
     return {"worst_rel_l2": worst, "samples": per_sample,
             "intact_augmented_artifact": artifact_worst,
+            "crack_probe_idx": CRACK_PROBE_IDX,
+            "crack_probe_depth_mm": float(cp.get("depth", 0.0)),
+            "crack_shadow_production_occluder": production_effect,
             "crack_shadow_with_resolved_occluder": resolved,
+            "crack_shadow_omitted_by_coarse_occluder": omitted,
             "generation_shadow_mode": config.SHADOW_MODE,
             "shadow_min_t": config.SHADOW_MIN_T,
-            "note": ("lambda/2 occluders cannot resolve hairline cracks, so the "
-                     "production shadow test is inert for them; the resolved-occluder "
-                     "figure is the magnitude being omitted (accepted if < 0.02)"),
-            "pass": artifact_worst < 0.03 and resolved < 0.02}
+            "shadow_normal_offset": config.SHADOW_NORMAL_OFFSET,
+            "note": ("omitted = ||resolved - production|| / ||no-shadow||, i.e. what "
+                     "the lambda/2 generation occluder misses on a representative "
+                     "crack (accepted if < 0.02). This is the legitimately at-risk "
+                     "gate: a trip here is a physics finding to report, not a bug."),
+            "pass": artifact_worst < 0.03 and omitted < 0.02}
 
 
 # ---------------------------------------------------------------------------
@@ -393,11 +408,49 @@ def v6b_guard_sweep(device: torch.device, min_ts, offsets, n_intact: int = 5,
     # shadowing while staying under the artifact bound. "smallest safe min_t"
     # was the wrong objective -- it is meaningless when every benefit is zero.
     def benefit(r):
-        return max([r[k] for k in r if k.startswith("crack") and k.endswith("_effect")] or [0.0])
+        """MEAN real shadowing over the probed cracks, not the max.
+
+        The max rewards a configuration that serves only the deepest crack;
+        the guard has to work across the depth range, and min_t 3.0 scored
+        well on max while deleting shallow-crack shadowing entirely.
+        """
+        vals = [r[k] for k in r if k.startswith("crack") and k.endswith("_effect")]
+        return float(np.mean(vals)) if vals else 0.0
 
     safe = [r for r in rows if r["artifact_ok"]]
-    useful = [r for r in safe if benefit(r) > 1e-6]
+    # An artifact-contaminated row's crack numbers are inflated by the SAME
+    # false shadowing that shows up on intact, so it cannot be compared on
+    # benefit against a clean row. (Measured 2026-09-10: the one row with
+    # artifact 0.0288 also reported the largest "benefit" AND a
+    # resolved-occluder figure 30% above every clean row -- both contaminated.)
+    # So take the cleanest achievable artifact first, then maximise benefit.
+    best_art = min((r["artifact_mean"] for r in safe), default=0.0)
+    clean = [r for r in safe if r["artifact_mean"] <= best_art + 1e-6]
+    useful = [r for r in clean if benefit(r) > 1e-6]
     rec = max(useful, key=benefit) if useful else None
+
+    # Is the offset actually SUFFICIENT, or is min_t still doing the work?
+    # Measured on the DEEPEST crack only: shallow cracks depend on min_t for a
+    # real reason (their crater walls sit within a few mm of the shading point,
+    # so a large min_t deletes them), and averaging them in masks the signal.
+    # A deep crack's shadowing should not care about min_t once the offset
+    # clears the neighbouring chord -- if it still does, the offset is on a
+    # knife edge. Measured 2026-09-10: spread/magnitude is 18% at offset
+    # 0.05 mm but 0.3% at 0.15/0.3/0.6, a clean separation.
+    deep_key = f"crack{max(cracks, key=lambda k: cracks[k]['depth_mm'])}_effect"
+    sens, sufficient = {}, set()
+    for off in sorted({r["normal_offset_mm"] for r in rows}):
+        d = [r[deep_key] for r in rows if r["normal_offset_mm"] == off]
+        if not d:
+            continue
+        spread, mag = max(d) - min(d), float(np.median(d))
+        frac = spread / mag if mag > 1e-9 else 0.0
+        sens[f"{off:g}"] = round(frac, 4)
+        if frac <= 0.10:
+            sufficient.add(off)
+    if sufficient:
+        useful = [r for r in useful if r["normal_offset_mm"] in sufficient] or useful
+        rec = max(useful, key=benefit) if useful else None
 
     fig, ax = plt.subplots(1, 2, figsize=(13, 4.4))
     for a, xkey, xlab, fixed in [
@@ -427,13 +480,19 @@ def v6b_guard_sweep(device: torch.device, min_ts, offsets, n_intact: int = 5,
             "occluder_ds": config.OCCLUDER_DS,
             "n_intact_augmentations": n_intact,
             "crack_depths_mm": {str(k): v["depth_mm"] for k, v in cracks.items()},
+            "min_t_sensitivity_by_offset": sens,
             "recommended": ({"min_t_mm": rec["min_t_mm"],
                              "normal_offset_mm": rec["normal_offset_mm"],
                              "artifact_mean": rec["artifact_mean"],
                              "crack_effect": benefit(rec)} if rec else None),
-            "note": ("recommended = most real crack shadowing kept while the mean "
-                     "intact artifact stays under 0.03. None means NO tested "
-                     "configuration achieves both, which is itself the result."),
+            "note": ("recommended = the cleanest achievable intact artifact "
+                     "first, then the most real crack shadowing (MEAN over the "
+                     "probed cracks) among those. None means NO tested "
+                     "configuration achieves both, which is itself the result. "
+                     "Offsets whose DEEP-crack result still moves with min_t "
+                     "(min_t_sensitivity_by_offset > 0.10) are excluded first: "
+                     "there the offset is not yet sufficient and min_t is "
+                     "carrying the guard."),
             "pass": True}
 
 
@@ -546,9 +605,14 @@ def main() -> int:
         report["V6b_guard_sweep"] = res
         REPORT_PATH.write_text(json.dumps(report, indent=2))
         rec = res["recommended"]
+        print("  deep-crack min_t sensitivity by offset "
+              "(<=0.10 => the offset alone suffices): "
+              + ", ".join(f"{k}:{v:.3f}"
+                          for k, v in res["min_t_sensitivity_by_offset"].items()))
         print("\n  " + (f"best configuration: min_t {rec['min_t_mm']} mm, normal offset "
                         f"{rec['normal_offset_mm']} mm -> artifact "
-                        f"{rec['artifact_mean']:.4f}, crack shadow {rec['crack_effect']:.4f}"
+                        f"{rec['artifact_mean']:.4f}, mean crack shadow "
+                        f"{rec['crack_effect']:.4f}"
                         if rec else
                         "NO tested configuration keeps the artifact under 0.03 AND any "
                         "real crack shadowing -- that is the result, not a failure"))

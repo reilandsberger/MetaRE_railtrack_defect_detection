@@ -143,9 +143,9 @@ def raycast_shadow_mask(
     ray_mask: torch.Tensor | None = None,
     budget: int = 2**24,
     eps: float = 1e-6,
-    min_t: float = 3.0,
+    min_t: float = 0.05,
     normals: torch.Tensor | None = None,
-    normal_offset: float = 0.15,
+    normal_offset: float = 0.3,
 ) -> torch.Tensor:
     """1.0 where the face centroid sees ``src_point``, 0.0 where occluded.
 
@@ -172,11 +172,22 @@ def raycast_shadow_mask(
     lets min_t drop to a token value. normal_offset=0.0 (or normals=None)
     reproduces the pre-2026-09-04 behaviour.
 
-    Why that matters: the V6b field-level sweep showed the two populations
-    OVERLAP in ray distance — on augmented intact meshes the artifact
-    saturates for any min_t <= 1 facet, while crack self-shadowing only
-    appears below ~1.5 mm — so NO threshold on t alone separates them. The
-    normal offset separates them geometrically instead.
+    Why that matters: the two populations OVERLAP in ray distance, so NO
+    threshold on t alone separates them — the normal offset separates them
+    geometrically instead. The 2-D V6b sweep (2026-09-10, three cracks
+    spanning 2.7-9.6 mm depth) measured how completely: every configuration
+    with normal_offset >= 0.05 mm has an intact artifact of EXACTLY 0.0, mean
+    and max, at every min_t down to 0.05 mm, while real crack shadowing stays
+    at 5-11%. At offset 0.30 the deep-crack result is the same to 3 decimals
+    across all four min_t values tested, i.e. the guard has become
+    min_t-independent — which is the signature of an offset that is actually
+    sufficient, and the reason the shipped min_t is a token 0.05 mm.
+
+    An earlier single-axis sweep concluded that shadowing was inert. It was
+    not: that sweep probed one 2.72 mm crack, shallower than the lambda/2
+    occluder facet that would have to represent it, which shows zero effect at
+    every setting. Probe a crack at or above the mean depth (config's
+    CRACK_DEPTH_RANGE mean is ~5.8 mm) before drawing that conclusion again.
 
     This module stays config-free (every physical quantity arrives as an
     argument); callers pass ``config.SHADOW_MIN_T`` and

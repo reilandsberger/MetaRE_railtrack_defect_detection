@@ -1,6 +1,7 @@
 # CLAUDE.md — MetaRE railtrack defect detection
 
-*Last updated: 2026-09-10 · λ = 5 mm (60 GHz) · V0–V8 measured on the lab 5090.*
+*Last updated: 2026-09-11 · λ = 5 mm (60 GHz) · V0–V8 measured on the lab 5090 ·
+shadow guard settled 2026-09-11 (`SHADOW_MIN_T = 0.05`, `SHADOW_NORMAL_OFFSET = 0.3`).*
 
 Guidance for Claude Code sessions in this repo. Written for cold-start sessions on
 smaller models: read this, then `rail3D/README.md` (the full handoff doc), before
@@ -71,14 +72,23 @@ All eleven gates PASS at λ=5 on the RTX 5090. What the numbers say:
   0.840 at 20λ, 0.874 at 40λ) and the dark-field structure reproduces — 10λ
   collapses to 0.523 (near chance) with 20× the energy. An 80×80 aperture
   scores best overall (0.889/0.893) at 3.6× generation cost; not taken.
-- **Ray-cast shadowing is INERT.** V6 passes, but
-  `crack_shadow_with_resolved_occluder = 0.0` and 7 of 8 samples are exactly
-  0.0. The V6b sweep says `SHADOW_MIN_T = 3.0` is the ONLY artifact-safe value
-  tested: below 1 mm the augmented-intact artifact pins at 0.0451, over V6's
-  0.03 bound. Cost: ~5–6% of real crack self-shadowing discarded. **The
-  1.0–3.0 mm gap is untested** — that is the open question. (An earlier
-  un-augmented ray-distance probe suggested 0.05–0.3 mm was safe; it was
-  misleading, see README finding 3.)
+- **Ray-cast shadowing is NOT inert — that earlier finding was wrong, and is
+  now corrected.** The 2-D V6b sweep (2026-09-11, `min_t` × `normal_offset`,
+  three cracks spanning 2.7–9.6 mm depth) found shadowing is a **5–11% field
+  effect** on cracks at and above the mean depth. The "inert" conclusion came
+  entirely from probing crack idx 0 — a 2.72 mm crack, shallower than the
+  2.5 mm occluder facet that would have to represent it, which shows exactly
+  zero at every setting. Three separate artifacts (the old sweep, V6's
+  resolved-occluder control, and `compare_wavefronts`' default sample) all used
+  that same crack.
+- **The normal offset is a complete cure for the artifact, and `min_t` never
+  was.** Every configuration with `offset ≥ 0.05 mm` has an intact artifact of
+  **exactly 0.0** (mean and max; float32 epsilon at the barcode level) at every
+  `min_t` down to 0.05 mm. Only `offset = 0` rows show any artifact. Shipped:
+  **`SHADOW_MIN_T = 0.05`, `SHADOW_NORMAL_OFFSET = 0.3`** — 0.3 is 5× the worst
+  measured intact chord sagitta, makes the deep-crack result `min_t`-INDEPENDENT
+  (0.3% spread vs 18% at offset 0.05), and agrees with a λ/8 occluder to 98%.
+  README finding 3 carries the full table and the reasoning.
 - **Speckle statistics are PRESERVED, not improved** — measured grain 8.0 mm
   (λ=8) → 5.0 mm (λ=5), ratio exactly 5/8, window/grain 2.27 at both. A
   previous claim that λ=5 buys ~2.6× more independent cells was WRONG and is
@@ -99,11 +109,16 @@ All eleven gates PASS at λ=5 on the RTX 5090. What the numbers say:
 
 ### Open decisions before the full generation
 
-1. Refine the V6b sweep in the untested 1.0–3.0 mm gap
-   (`--min-t 2.5 2.0 1.75 1.5 1.25`) — a value there may keep the artifact
-   under 0.03 while restoring some crack shadowing.
-2. If shadowing stays inert, consider `SHADOW_MODE="none"` for generation:
-   it would produce a **bit-identical** dataset in roughly half the time.
+1. ~~Refine the V6b sweep in the untested 1.0–3.0 mm gap~~ **CLOSED
+   2026-09-11.** The gap was the wrong axis: `min_t` cannot separate the two
+   populations at all, because the self-hit is a perpendicular problem and
+   `min_t` biases along the ray. The normal offset separates them
+   geometrically. Settled at `min_t = 0.05`, `offset = 0.3`.
+2. ~~If shadowing stays inert, consider `SHADOW_MODE="none"`~~ **WITHDRAWN —
+   the premise was false.** Shadowing is a 5–11% effect on representative
+   cracks, so turning it off would NOT be bit-identical; it would delete that
+   much field on deep cracks. The ~50% of generation time it costs buys real
+   physics.
 3. **Which full-wave solver is licensed** (blocks the cross-check run, not the
    code). The answer to "Zemax or Lumerical?" is **neither** — it is a MoM
    problem: **Ansys HFSS-IE** (needs the Integral Equation licence, not just

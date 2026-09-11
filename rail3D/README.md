@@ -208,49 +208,79 @@ first) · or everything at once with `python lab_report.py`.
    complex-field L2 does not converge at any practical facet size (glint
    speckle) — judge fidelity at the **detector-barcode level**, not the field
    level.
-3. **Ray-cast shadowing needs a `min_t` guard — but a SMALL one.** Facet
-   chords sag inside the true convex surface, so horizon-grazing rays clip
-   their own neighbouring facets. Without any guard ~4% of faces (terminator
-   band) are falsely blocked and the field changes ~30–60%, while the 2D
-   line-of-sight ground truth says the real intact-rail shadow effect is ~1%.
-   **The two populations were measured directly** (2026-08-17, hit distances
-   with the guard disabled):
+3. **Ray-cast shadowing needs a NORMAL OFFSET, not a `min_t` guard — and it
+   is NOT inert.** Facet chords sag inside the true convex surface, so
+   horizon-grazing rays clip their own neighbouring facets. Without any guard
+   ~4% of faces (terminator band) are falsely blocked and the field changes
+   ~30–60%.
 
-   | population | where it lives |
-   |---|---|
-   | artifact (intact rail — a convex rail cannot shadow itself) | `t ≤ 0.021 mm` (λ=5), `≤ 0.037 mm` (λ=8) — the chord sagitta `d²/(8R)`, ~1/100 of a facet |
-   | real crater-wall occlusion (crack / dent / shell) | `t ≥ 0.3 mm`, out to ~9 mm |
+   **Why `min_t` was always the wrong knob.** The self-hit is a
+   *perpendicular* problem — the neighbour sags by the chord sagitta
+   `δ = d²/(8R)`, 0.003 mm on the crown (R≈300) to 0.06 mm at the gauge corner
+   (R≈13). But `min_t` biases *along the ray*, and a ray leaving at grazing
+   angle θ rises δ only after travelling `δ/sin θ`, which diverges exactly at
+   the terminator where self-hits occur (~3.4 mm at 1°). That is why the only
+   value that suppressed the artifact was 3.0 mm = 1.2 × the occluder facet —
+   it was not clearing a sagitta, it was skipping the whole neighbouring
+   facet. And 3.0 mm is **wider than a crack** (2–5 mm), so it deleted the
+   physics the guard exists to find.
 
-   **That probe was run on an UN-AUGMENTED rail, and it was misleading.**
-   The V6b field-level sweep (2026-09-04, lab 5090, augmented intact meshes —
-   roll ±2°, jitter ±4 mm, which is what generation actually uses) says:
+   **The 2-D sweep that settled it** (2026-09-10, lab 5090; augmented intact
+   meshes, three cracks spanning the depth range — idx 0 = 2.72 mm, idx 1 =
+   5.28 mm, idx 17 = 9.57 mm, the deepest in the set):
 
-   | `min_t` | ×facet | intact artifact | crack effect | resolved-occluder |
-   |---|---|---|---|---|
-   | 3.0 mm | 1.20 | **0.0020 OK** | 0.0000 | 0.0000 |
-   | 1.0 mm | 0.40 | 0.0451 **BAD** | 0.0288 | 0.0597 |
-   | 0.3 mm | 0.12 | 0.0451 **BAD** | 0.0500 | 0.0808 |
-   | 0.125 mm | 0.05 | 0.0451 **BAD** | 0.0536 | 0.0995 |
-   | 0.05 mm | 0.02 | 0.0451 **BAD** | 0.0562 | 0.0995 |
+   | `min_t` | offset | intact artifact | crack 2.7 mm | 5.3 mm | 9.6 mm | resolved |
+   |---|---|---|---|---|---|---|
+   | 3.00 | 0.00 | 0.0000 | 0.0000 | 0.0197 | 0.0950 | 0.1135 |
+   | 0.05 | 0.00 | 0.0288 | 0.0562 | 0.0737 | 0.1371 | 0.1488 |
+   | 0.05 | 0.05 | **0.0000** | 0.0533 | 0.0676 | 0.1125 | 0.1138 |
+   | 0.05 | 0.15 | **0.0000** | 0.0495 | 0.0615 | 0.0954 | 0.1139 |
+   | **0.05** | **0.30** | **0.0000** | **0.0485** | **0.0580** | **0.1119** | 0.1141 |
+   | 0.05 | 0.60 | **0.0000** | 0.0438 | 0.0573 | 0.1135 | 0.1144 |
 
-   Under augmentation the artifact jumps to **4.5%** — over V6's 3% bound —
-   and is *pinned at exactly 0.0451* for every value ≤1 mm, i.e. the whole
-   artifact population lives below 1 mm and any smaller cutoff admits all of
-   it. Rolling the rail moves the terminator, and near-tangential rays there
-   skim far enough to clip facets a whole facet-length away: the original
-   "a few facet lengths" reasoning was right for the case that matters, even
-   though the un-augmented hit distances are 100× smaller.
+   Three results, and they overturn what this finding used to say:
 
-   **So `min_t = 3.0 mm` stands — it is the only tested value that keeps the
-   artifact under the bound.** The cost is real and must be stated: it also
-   discards ~5–6% of genuine crack self-shadowing (~10% against a
-   generation-resolution occluder), which is why V6's
-   `crack_shadow_with_resolved_occluder` reads 0.0. **The 1.0–3.0 mm gap is
-   untested** and is where a better value would live; sweep 1.25/1.5/2.0/2.5
-   before assuming 3.0 is optimal rather than merely safe.
-   `config.SHADOW_MIN_T` is the single source and a **provenance key**
-   (datasets are incomparable across a change). Occluders are the **λ/2
-   coarse mesh** (16× cheaper, verified equivalent).
+   - **The normal offset is a complete cure.** Every configuration with
+     `offset ≥ 0.05` has an intact artifact of **exactly 0.0** — mean *and*
+     max, and 1.19e-08 at the barcode level, which is float32 epsilon. Only
+     `offset = 0` rows show any artifact at all. The old "pinned at 0.0451"
+     figure was the artifact with no offset in play.
+   - **Shadowing is not inert.** It is a **5–11% field effect** on cracks at
+     and above the mean depth. The earlier "inert" conclusion came entirely
+     from probing crack idx 0 — a 2.72 mm crack, *shallower than the 2.5 mm
+     occluder facet that would have to represent it*, which shows exactly zero
+     at every setting. `SHADOW_MODE = "none"` would therefore **not** be
+     bit-identical; it would delete up to 11% of the field on deep cracks.
+   - **`min_t` must be a token, and the offset must do the work.** At
+     `offset ≥ 0.15` the deep-crack result is min_t-**independent** (spread
+     0.3% across all four values tested) — the signature of an offset that is
+     actually sufficient. At 0.05 it is not (18% spread), so that row is on a
+     knife edge. Shallow cracks still need the small `min_t`: their crater
+     walls sit within a few mm of the shading point, and `min_t = 3.0` deleted
+     them outright (2.7 mm crack: 0.0000 → 0.0485).
+
+   **Shipped: `SHADOW_MIN_T = 0.05`, `SHADOW_NORMAL_OFFSET = 0.3`.** Offset
+   0.05 scores ~6% more total shadowing, but 0.3 is 5× the worst measured
+   intact sagitta, sits on the min_t-independent plateau, and agrees with a
+   generation-resolution (λ/8) occluder to 98%. The artifact is measured only
+   on *intact* meshes, so margin against an unmeasured defect-mesh failure is
+   worth more than 6% of signal — **false physics is worse than missing
+   physics**, and the historical grazing artifact was ~4% of faces producing a
+   30–60% field error.
+
+   Two lessons that generalise beyond this finding:
+
+   - **A benefit column measured on one sample is not a benefit column.**
+     Three separate artifacts (the old V6b sweep, V6's resolved-occluder
+     control, and `compare_wavefronts`' default) all happened to use crack
+     idx 0 and all reported zero shadow effect. Probe a crack at or above the
+     mean depth; `--crack-idx` exists for this.
+   - **An artifact-contaminated row cannot be compared on benefit.** The
+     `offset = 0, min_t = 0.05` row reports both the largest "benefit" (0.1371)
+     *and* a resolved-occluder figure 30% above every clean row — both are the
+     same false shadowing leaking into the measurement. The selection rule now
+     takes the cleanest achievable artifact first.
+
 4. **PO terminator discontinuity**: the Face3D formulation applies no receive-
    cosine at the face, so faces at grazing incidence carry O(1) amplitude and
    binary visibility toggles them discontinuously. This is faithful to the
