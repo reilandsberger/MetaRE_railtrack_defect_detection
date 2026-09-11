@@ -45,6 +45,30 @@ from rail3d import config, data3d, train3d
 REPORT = config.GENERATED_DIR / "surface_ablation.json"
 
 
+def best_val_of(hist: dict) -> dict:
+    """The validation record of the epoch train() actually selected.
+
+    train() does NOT store a "best_val" key -- it keeps one dict per epoch in
+    history["val"] and the winning epoch in history["best_epoch"]. Match on the
+    val dict's own "epoch" field rather than trusting list position, so this
+    stays correct if validation ever stops running every epoch; fall back to
+    position for histories written before that field existed.
+    """
+    be = hist.get("best_epoch", -1)
+    vals = hist.get("val") or []
+    if be < 0 or not vals:
+        return {}
+    for v in vals:
+        if v.get("epoch") == be:
+            return v
+    return vals[be] if be < len(vals) else {}
+
+
+def fmt(x, spec=".4f") -> str:
+    """Format a metric that may be missing, without killing a finished run."""
+    return format(x, spec) if isinstance(x, (int, float)) else "  n/a"
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -85,8 +109,13 @@ def main() -> int:
         cfg = train3d.TrainConfig(run_name=f"abl_{name}_{tag}", **base, **kw)
         t0 = time.time()
         hist = train3d.train(cfg, device=device, verbose=False)
-        best = hist.get("best_val") or {}
+        best = best_val_of(hist)
         tr = (hist.get("train") or [{}])[-1]
+        if not best:
+            print(f"  !! {name}: no validation record for best_epoch "
+                  f"{hist.get('best_epoch')} ({len(hist.get('val') or [])} val "
+                  f"entries) - the run trained but selected nothing; its "
+                  f"checkpoint is in place, so re-running resumes it.")
         out["runs"][name] = {
             # read back from cfg, never from kw: an omitted knob takes the
             # TrainConfig default (w_capture is 0.2, not 0) and recording the
@@ -101,13 +130,21 @@ def main() -> int:
             "capture_frac_last": tr.get("capture_frac"), "seconds": round(time.time() - t0),
         }
         r = out["runs"][name]
-        print(f"  {name:16s} auc {r['auc']:.4f}  class_acc {r['class_acc']:.4f}  "
-              f"score {r['score']:.4f}  cap {r['capture_frac_last'] or 0:.3f}  "
+        print(f"  {name:16s} auc {fmt(r['auc'])}  class_acc {fmt(r['class_acc'])}  "
+              f"score {fmt(r['score'])}  cap {fmt(r['capture_frac_last'], '.3f')}  "
               f"[{r['seconds']}s, best ep {r['best_epoch']}, n_det {r['n_det_at_best']}]")
+        # persist AS WE GO: training is the expensive part and a later error
+        # must never throw away a run that already finished
+        REPORT.write_text(json.dumps(out, indent=2), encoding="utf-8")
 
     ctrl = out["runs"]["none_ctrl"]["auc"]
-    best_slm = max((v for k, v in out["runs"].items() if k != "none_ctrl"),
-                   key=lambda v: v["auc"])
+    scored = [v for k, v in out["runs"].items()
+              if k != "none_ctrl" and isinstance(v.get("auc"), float)]
+    if ctrl is None or not scored:
+        print("\n  !! not enough scored runs to compare; see surface_ablation.json")
+        REPORT.write_text(json.dumps(out, indent=2), encoding="utf-8")
+        return 1
+    best_slm = max(scored, key=lambda v: v["auc"])
     out["baseline_auc"] = ctrl
     out["best_slm_auc"] = best_slm["auc"]
     out["slm_beats_baseline"] = best_slm["auc"] > ctrl
@@ -133,7 +170,7 @@ def main() -> int:
                                   **{**base, "n_epoch": 4 * sched["n_epoch"]}, **kw)
         t0 = time.time()
         hist = train3d.train(cfg, device=device, verbose=False)
-        best = hist.get("best_val") or {}
+        best = best_val_of(hist)
         out["runs"][name] = {
             "surface": "slm", "slm_init_std": kw["slm_init_std"],
             "w_capture": kw["w_capture"], "n_epoch": cfg.n_epoch,
@@ -141,7 +178,8 @@ def main() -> int:
             "auc": best.get("auc"), "class_acc": best.get("class_acc"),
             "score": best.get("score"), "seconds": round(time.time() - t0)}
         r = out["runs"][name]
-        print(f"\n  {name:16s} auc {r['auc']:.4f}  score {r['score']:.4f}  "
+        REPORT.write_text(json.dumps(out, indent=2), encoding="utf-8")
+        print(f"\n  {name:16s} auc {fmt(r['auc'])}  score {fmt(r['score'])}  "
               f"[{r['seconds']}s, best ep {r['best_epoch']} of {cfg.n_epoch}]")
         if r["best_epoch"] >= 0.9 * cfg.n_epoch:
             print("  ! still improving at 4x epochs — the schedule is the binding limit")

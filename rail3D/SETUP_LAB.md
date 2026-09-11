@@ -533,7 +533,10 @@ python ablate_surface.py --stage prelim --long 2>&1 | tee ../ablation.log
 ```
 
 Five runs at ~3 min each (2×2 over SLM initialisation and `w_capture`, plus the
-control), then `--long` repeats the winner at 4× epochs. It trains against the
+control), then `--long` repeats the winner at 4× epochs. **It is resumable and
+writes `surface_ablation.json` after every run**, so an interrupted or failed
+invocation keeps the runs that finished; re-running picks up from each run's
+checkpoint rather than retraining it. It trains against the
 dataset already on disk — nothing is regenerated. Send back
 `data/generated/surface_ablation.json`.
 

@@ -83,6 +83,13 @@ Trainable metasurface + detector "barcode" system for rail defect detection.
   call `data3d.stage_root(stage)` and `data3d.run_tag(root)`. A provenance
   change auto-suffixes the root with a geometry digest so the generator has a
   legal next move instead of refusing with nowhere to go (README finding 23).
+- **`python tests_plumbing.py` (~6 s, CPU) after touching anything that
+  addresses, reads back or compares results** — dataset-root resolution, the
+  history schema the reports read, or the SLM/baseline identity. These are NOT
+  physics gates; they exist because the last three lab failures were all
+  non-physics assumptions that only broke on the 5090, mid-run. P1 drives the
+  real `train()` loop on synthetic tensors, so it catches a wrong history key
+  in seconds instead of after a finished 3-minute run.
 - After editing the notebook, run **python check_notebook.py** (~1 s, no GPU).
   Jupyter hides cross-cell ordering, so a cell using a name defined in a LATER
   cell looks fine while editing and only NameErrors on a fresh kernel. That has
