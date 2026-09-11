@@ -35,6 +35,7 @@ sys.path.insert(0, str(HERE))
 import torch
 
 from rail3d import config, data3d, train3d
+from rail3d.data3d import run_tag, stage_root
 
 PY = sys.executable
 LOG: list[str] = []
@@ -134,7 +135,7 @@ def result_files(stage: str) -> list[Path]:
     training in the kernel and training through run_stage.py must not give
     different review packages.
     """
-    root = config.GENERATED_DIR / f"L5_{stage}"
+    root = stage_root(stage)
     cand = [config.GENERATED_DIR / f"stage_{stage}_summary.json",
             config.GENERATED_DIR / f"stage_{stage}_report.md",
             config.GENERATED_DIR / "analysis.json",
@@ -157,7 +158,8 @@ def write_summary(stage: str) -> Path:
     budget (README finding 22), and whether the capture term did anything.
     """
     out: dict = {"stage": stage}
-    root = config.GENERATED_DIR / f"L5_{stage}"
+    root = stage_root(stage)
+    out["dataset_root"] = root.name
     cfgp = root / "dataset_config.json"
     if cfgp.exists():
         meta = json.loads(cfgp.read_text(encoding="utf-8"))
@@ -171,7 +173,7 @@ def write_summary(stage: str) -> Path:
                             "CRACK_LINE_GAP_FACTOR", "SHELL_GAUGE_X_RANGE")}
     runs = {}
     for surface in ("slm", "none", "metaunit"):
-        ck = config.CHECKPOINT_DIR / f"ms3d_{surface}_l5_{stage}" / "best.pt"
+        ck = config.CHECKPOINT_DIR / f"ms3d_{surface}_{run_tag(root)}" / "best.pt"
         if not ck.exists():
             continue
         st = torch.load(ck, map_location="cpu", weights_only=False)
@@ -281,13 +283,18 @@ def main() -> int:
     ap.add_argument("--with-baseline", action="store_true",
                     help="also train the no-metasurface baseline (doubles the time)")
     ap.add_argument("--skip-generate", action="store_true")
+    ap.add_argument("--name", default=None,
+                    help="dataset root name override; by default the root is "
+                         "L5_<stage>, or L5_<stage>_<geometry tag> once that "
+                         "holds a different geometry")
     ap.add_argument("--bundle", action="store_true",
                     help="zip the files to send back")
     args = ap.parse_args()
 
     spec = config.STAGES[args.stage]
-    tag = f"l5_{args.stage}"
-    root = config.GENERATED_DIR / f"L5_{args.stage}"
+    root = (config.GENERATED_DIR / args.name if args.name
+            else data3d.stage_root(args.stage))
+    tag = data3d.run_tag(root)
     device = config.get_device(args.profile)
     config.ensure_dirs()
 
@@ -300,6 +307,9 @@ def main() -> int:
     say(f"shadow     {config.SHADOW_MODE}, min_t={config.SHADOW_MIN_T}, "
         f"normal_offset={config.SHADOW_NORMAL_OFFSET}")
     say(f"stage      {spec['limit']}/class + {spec['intact']} intact  ->  {root.name}")
+    if root.name != f"L5_{args.stage}":
+        say(f"           (L5_{args.stage} holds a DIFFERENT geometry, so this "
+            f"run uses a fresh root; the old one stays as the record)")
     say(f"schedule   n_epoch={spec['n_epoch']}, tau_anneal_end="
         f"{spec['tau_anneal_end']}, prune {spec['prune_start']}-{spec['prune_end']}")
 

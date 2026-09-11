@@ -1,6 +1,6 @@
 # Reading rail3D's validation output
 
-*Last updated: 2026-09-11 · λ = 5 mm (60 GHz) — bump this line in any commit that
+*Last updated: 2026-09-13 · λ = 5 mm (60 GHz) — bump this line in any commit that
 changes a gate, a threshold, or what a field means.*
 
 What every file the lab run produces actually contains, what its pass rule is in
@@ -59,7 +59,7 @@ recommendations. Check the key name and the fields inside before quoting either.
 
 ## 3. `dataset_config.json` — the geometry fingerprint
 
-36 keys recording the geometry the fields were computed with, plus `_created`,
+40 keys recording the geometry the fields were computed with, plus `_created`,
 `_git_commit`, `_host`, `_counts`, `_duration_hours`, `_samples_per_second`.
 
 Its job is refusal, in three places:
@@ -76,6 +76,15 @@ Its job is refusal, in three places:
 existing dataset — which is correct, but means the shadow decision must be made
 *before* the full generation, not after. (It was settled 2026-09-11 at
 `min_t = 0.05`, `offset = 0.3`; every dataset generated before that is refused.)
+
+**The root name tells you the geometry.** A root called `L5_prelim_9d5878`
+carries a 6-hex digest of those 40 keys: it exists because `L5_prelim` already
+held a *different* geometry, so `data3d.stage_root()` sent this run somewhere
+fresh rather than letting the generator refuse with nowhere to go (README
+finding 23). Two bundles with different suffixes are **not comparable** — check
+`dataset_root` in `stage_<stage>_summary.json` before putting their numbers in
+the same table. An unsuffixed `L5_prelim` just means that root was free or
+already matched; it is not a mark of being the newest.
 
 **What to sanity-check:** `WVL`, `H_MS`, `NX`/`NY`, `SEG_LEN`, `MESH_DS`,
 `CLASS_NAMES` length, and `_counts`. A `_counts` of ~20/class is a **smoke**

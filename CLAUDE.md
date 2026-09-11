@@ -1,6 +1,6 @@
 # CLAUDE.md — MetaRE railtrack defect detection
 
-*Last updated: 2026-09-12 · λ = 5 mm (60 GHz) · V0–V8 measured on the lab 5090 ·
+*Last updated: 2026-09-13 · λ = 5 mm (60 GHz) · V0–V8 measured on the lab 5090 ·
 DEFECT MODEL REVISED 2026-09-12 (crack = 3 parallel box divots, 4–8 mm deep,
 1.5–3 mm wide, gap = 1.6–2.2 × width; shell confined to the gauge corner
 x ∈ 20–30 mm) — every earlier dataset is refused ·
@@ -66,6 +66,10 @@ Trainable metasurface + detector "barcode" system for rail defect detection.
   report, and the specific ways each output has been misread. Read it before
   quoting a number out of `verification_report.json`, a geometry scan or a
   shadow sweep.
+- **Dataset roots are geometry-addressed.** Never hardcode `L5_<stage>` —
+  call `data3d.stage_root(stage)` and `data3d.run_tag(root)`. A provenance
+  change auto-suffixes the root with a geometry digest so the generator has a
+  legal next move instead of refusing with nowhere to go (README finding 23).
 - After editing the notebook, run **python check_notebook.py** (~1 s, no GPU).
   Jupyter hides cross-cell ordering, so a cell using a name defined in a LATER
   cell looks fine while editing and only NameErrors on a fresh kernel. That has

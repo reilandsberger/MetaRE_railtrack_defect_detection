@@ -1,6 +1,6 @@
 # rail3D — Lab Workstation Setup (RTX 5090)
 
-*Last updated: 2026-09-12 · λ = 5 mm (60 GHz), V0–V8 measured on the 5090 — bump this line in any
+*Last updated: 2026-09-13 · λ = 5 mm (60 GHz), V0–V8 measured on the 5090 — bump this line in any
 commit that changes behaviour this file describes. Timings are now MEASURED
 at λ=5 on the lab 5090 (2026-09-04), not extrapolated.*
 
@@ -498,6 +498,18 @@ best checkpoint** (if that is not `N_DET_FINAL`, every downstream number
 describes the dense array — README finding 22) and **`capture_frac` against
 `n_det/130`** (above it the metasurface is concentrating light, at it the
 capture term is idle).
+
+**The dataset root follows the geometry, not the stage name.** `run_stage.py`
+and the notebook both resolve it through `data3d.stage_root()`: you get
+`L5_<stage>` while that root is free or holds the geometry currently in
+`config.py`, and `L5_<stage>_<6-hex geometry tag>` once it holds a different
+one. So changing a defect range, a shadow parameter or the wavelength sends the
+next run into a fresh root instead of being refused by the generator, and the
+old dataset stays on disk as the record. Checkpoint names follow the root
+(`ms3d_slm_l5_prelim_9d5878`), so the checkpoint geometry stamp cannot refuse
+either. The banner says which root was chosen and why; `--name X` overrides.
+Only the 40 provenance keys move the tag — changing `n_epoch` does not, because
+those datasets are still comparable.
 
 **Or run it from the notebook.** The `run_stage.py` cell in section 6 shells out
 to this same script, so the output streams into the cell and you get the same

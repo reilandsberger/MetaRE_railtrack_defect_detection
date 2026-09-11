@@ -14,6 +14,8 @@ Field modes (Face3D convention): "sca" = psi1 only (scattered single bounce),
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 from pathlib import Path
 
@@ -89,6 +91,47 @@ PROVENANCE_KEYS = ("WVL", "DX", "NX", "NY", "H_MS", "PLANE_X_CENTER", "SEG_LEN",
                    "WEAR_DEPTH_RANGE",
                    "CRACK_LINE_COUNT", "CRACK_LINE_GAP_FACTOR",
                    "SHELL_GAUGE_X_RANGE")
+
+
+def geometry_tag(n: int = 6) -> str:
+    """Short digest of the CURRENT provenance-tracked geometry.
+
+    Used to disambiguate dataset roots automatically. Two configs that differ
+    in any provenance key -- a wavelength, a shadow parameter, a defect range --
+    produce different tags, which is exactly the set of changes that make two
+    datasets incomparable.
+    """
+    payload = json.dumps({k: _jsonable(getattr(config, k))
+                          for k in PROVENANCE_KEYS}, sort_keys=True)
+    return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:n]
+
+
+def stage_root(stage: str) -> Path:
+    """Where this stage's dataset lives, given the geometry in force NOW.
+
+    `L5_<stage>` while that root is free or already holds THIS geometry;
+    `L5_<stage>_<geometry_tag>` once it holds a different one.
+
+    Without this a geometry change strands the run: the generator correctly
+    refuses to mix shards into an incompatible root, but every entry point
+    derived the root from the stage name alone, so there was no way forward
+    except renaming by hand. Old roots stay on disk as the record.
+    """
+    base = config.GENERATED_DIR / f"L5_{stage}"
+    if not (base / "dataset_config.json").exists():
+        return base
+    return base if not check_dataset_config(base, strict=False) else \
+        config.GENERATED_DIR / f"L5_{stage}_{geometry_tag()}"
+
+
+def run_tag(root: Path) -> str:
+    """Checkpoint/run-name suffix for a dataset root.
+
+    Derived from the ROOT, not the stage, so a geometry change gets fresh
+    checkpoints too -- otherwise train3d would refuse to resume across the
+    geometry stamp and the run would stall for a second reason.
+    """
+    return root.name.lower()
 
 
 def _jsonable(v):

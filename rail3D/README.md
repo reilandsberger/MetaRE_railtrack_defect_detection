@@ -1,6 +1,6 @@
 # rail3D — 3D diffraction simulation + metasurface training for rail defect detection
 
-*Last updated: 2026-09-12 · λ = 5 mm (60 GHz), V0–V8 measured on the 5090 — bump this line in any
+*Last updated: 2026-09-13 · λ = 5 mm (60 GHz), V0–V8 measured on the 5090 — bump this line in any
 commit that changes behaviour this file describes.*
 
 **Handoff document.** This README is written so that a future session (any
@@ -586,6 +586,27 @@ first) · or everything at once with `python lab_report.py`.
     The general lesson: a model-selection criterion that is free to ignore a
     hard design constraint will ignore it. State the constraint in the
     selection rule, not only in the schedule.
+
+
+23. **A geometry change must move the dataset root, not block the run.**
+    The provenance guard is correct to refuse mixing shards of two geometries
+    into one root — but every entry point derived the root from the stage name
+    alone (`L5_prelim`), so after the rev.3 defect model landed there was no
+    way forward at all: the generator refused, and renaming by hand was the
+    only escape. A guard with no legal next move is a guard people disable.
+
+    `data3d.stage_root(stage)` now resolves it: `L5_<stage>` while that root is
+    free or already holds THIS geometry, `L5_<stage>_<geometry tag>` once it
+    holds a different one, where the tag is a 6-hex digest of the 40
+    `PROVENANCE_KEYS`. `data3d.run_tag(root)` derives the run/checkpoint name
+    from the ROOT rather than the stage, so a geometry change gets fresh
+    checkpoints too — otherwise the checkpoint's geometry stamp would refuse to
+    resume and the run would stall for a *second* reason a step later.
+
+    `run_stage.py` and the notebook's STAGE cell both call it, so they cannot
+    drift. Old roots stay on disk as the record; `--name` overrides. Note that
+    only provenance keys move the tag — a training-schedule change does not,
+    which is right, because those datasets are comparable.
 
 
 ## 6b. Objective & metrics (rev. 2)
