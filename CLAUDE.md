@@ -1,36 +1,49 @@
 # CLAUDE.md — MetaRE railtrack defect detection
 
-*Last updated: 2026-09-13 · λ = 5 mm (60 GHz) · V0–V8 measured on the lab 5090 ·
-DEFECT MODEL REVISED 2026-09-12 (crack = 3 parallel box divots, 4–8 mm deep,
-1.5–3 mm wide, gap = 1.6–2.2 × width; shell confined to the gauge corner
-x ∈ 20–30 mm) — every earlier dataset is refused ·
-shadow guard settled 2026-09-11 (`SHADOW_MIN_T = 0.05`, `SHADOW_NORMAL_OFFSET = 0.3`) ·
-first prelim training run 2026-09-11 — see README findings 21 (corrected) and 22.*
+*Last updated: 2026-09-13 · λ = 5 mm (60 GHz) · rev.3 defect model · prelim run
+2026-09-11 on L5_prelim_9d5878 — see README findings 24 (the baseline beats the
+metasurface: an optimization failure), 25 (s0 is the dominant variable) and
+26 (stale gate blocks). Shadow guard settled 2026-09-11 (min_t 0.05, offset 0.3).*
 
-## First prelim result (2026-09-11) — VALID PIPELINE, INVALID MODEL SELECTION
+## Prelim result, rev.3 defect model (2026-09-11) — PIPELINE CLEAN, MODEL NOT
 
-`run_stage.py --stage prelim` completed: 8400 samples in 1.81 h, all gates green,
-analysis written. But the headline numbers describe the **wrong model**.
+`run_stage.py --stage prelim` on `L5_prelim_9d5878`: 8400 samples in **0.57 h**
+(4.07 samples/s), all eleven gates green, both fixes from the previous run
+confirmed working — `meets_detector_budget: true`, best epoch 1152/1500 at
+**n_det 8** for both surfaces (finding 22 holds), and the geometry-tagged root
+picked itself when `L5_prelim` turned out to hold the old geometry (finding 23).
 
-- **`best_epoch 28` of 300, with `prune_start = 25`** — the epoch-25 prune only
-  arms the schedule, so the saved best checkpoint still had all **130**
-  detectors. `analyze_results --which best` therefore measured the dense array,
-  not the 8-detector system. Fixed: `train()` now refuses to promote a
-  checkpoint whose `n_det != n_det_final` (README finding 22).
-- **Training is ~free: 300 epochs = 36 s** (~17 ms/step). The earlier claim that
-  `n_epoch = 1200` caused a 10-hour cell was WRONG and is corrected in README
-  finding 21. `config.STAGES` budgets are back to generous
-  (prelim 1500 epochs ≈ 3 min; full 1000 ≈ 5 min) and the schedule keeps its
-  original shape.
-- The 10-hour notebook cell remains **unexplained**. Most likely that kernel
-  fell back to CPU; every entry point prints its device for this reason.
+**The result that matters: the no-metasurface control BEAT the metasurface.**
+val AUC `slm` **0.880** vs `none` **0.976**; pass rate 0.757 vs 0.954. This is
+an optimization failure and is provable as one — zero phase reproduces
+`surface="none"` exactly (measured 0.000e+00 on detector powers), so the
+baseline is inside the SLM's hypothesis space. **Do not report this as a
+finding about metasurfaces.** Suspects: `SLM2D` initialises at phase std π/2 (a
+random diffuser), and `w_capture = 0.2` optimises receiver SNR while evaluation
+runs noiseless (`ONN3D.add_noise` is gated on `self.training`) — the run drove
+`capture_frac` to 0.457 against a 0.062 floor while AUC fell. README finding 24.
+**Next step: `python ablate_surface.py --stage prelim --long`** (~20 min,
+SETUP_LAB §7c), which is a 2×2 over those two knobs plus the control.
 
-Results to re-measure once the above is re-run — treat the first run's numbers
-as provisional:
-recall crack 0.27 / dent 0.65 / wear 0.99 / shell 0.42 at a 5% FPR threshold,
-detection AUC 0.80 / 0.92 / 1.00 / 0.78, and a classifier that collapses dent
-(0.55) and shell (0.68) into \crack\. The dominant blind spot is **s0, angular
-position on the railhead** (dent +0.61, shell −0.59) — not defect size.
+**Second: `s0` (arc position), not defect size, is the dominant variable.**
+Crack detection runs 0.03 → 0.82 across s0 107 → 148 mm (r = +0.51); depth
+correlates at r = +0.04. Every one of the eight worst misses sits at
+s0 ≈ 100–130 mm, several of them 7 mm+ deep. Shell's jump (recall 0.42 →
+**0.975**) is this effect, not a defect-model win: confining shells to the gauge
+corner put them at s0 ≈ 147–154, the only well-seen band. Wear (0.99) and shell
+are saturated; crack (0.39) and dent (0.565) carry all remaining signal.
+README finding 25.
+
+**Read the confusion matrix before quoting `class_acc`.** The classifier
+defaults to \`crack\`: dent 0.60 and shell 0.34 of their rows are predicted
+crack, so crack's `class_acc` 0.895 is a base-rate artifact, not skill. Dent's
+0.205 is at chance.
+
+**Gate blocks now carry `_stamp`** (time, commit, geometry digest) because this
+bundle's V6b blocks were stale leftovers from the pre-rev.3 config and looked
+current — README finding 26, READING_RESULTS §5. An unstamped block was not
+re-run. Ignore V6b's `recommended` field: it contradicts the shipped shadow
+guard, which is settled.
 
 Guidance for Claude Code sessions in this repo. Written for cold-start sessions on
 smaller models: read this, then `rail3D/README.md` (the full handoff doc), before

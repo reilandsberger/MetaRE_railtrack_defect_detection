@@ -534,7 +534,7 @@ def main() -> int:
         except Exception as err:  # noqa: BLE001
             res = {"pass": False, "error": repr(err)}
         res["seconds"] = round(time.time() - t0, 2)
-        report[name] = res
+        report[name] = data3d.stamp(res)
         ok &= bool(res["pass"])
         status = "PASS" if res["pass"] else "FAIL"
         detail = {k: v for k, v in res.items() if k not in ("pass",)}

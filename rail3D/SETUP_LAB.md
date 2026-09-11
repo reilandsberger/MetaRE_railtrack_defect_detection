@@ -521,6 +521,29 @@ including training run cell-by-cell in the kernel.
 
 ---
 
+## 7c. Why the baseline beats the metasurface (open, 2026-09-11)
+
+The prelim run scored `slm` at 0.880 val AUC and the no-MS control at **0.976**.
+Zero phase reproduces the control exactly, so this is an optimization failure,
+not physics (README finding 24). Measure it before drawing any conclusion about
+the metasurface:
+
+```bash
+python ablate_surface.py --stage prelim --long 2>&1 | tee ../ablation.log
+```
+
+Five runs at ~3 min each (2×2 over SLM initialisation and `w_capture`, plus the
+control), then `--long` repeats the winner at 4× epochs. It trains against the
+dataset already on disk — nothing is regenerated. Send back
+`data/generated/surface_ablation.json`.
+
+Read `auc` (detection, the system's job), not `score` — a run can win on
+`score = auc + class_acc` while losing the thing the system exists to do. Any
+SLM row still below the `none` row means the optimizer, not the surface, is the
+blocker.
+
+---
+
 ## 8. Generate the dataset
 
 ```bash

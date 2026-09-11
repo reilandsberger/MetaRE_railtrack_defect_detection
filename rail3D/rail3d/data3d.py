@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from datetime import datetime
 import os
 from pathlib import Path
 
@@ -91,6 +92,24 @@ PROVENANCE_KEYS = ("WVL", "DX", "NX", "NY", "H_MS", "PLANE_X_CENTER", "SEG_LEN",
                    "WEAR_DEPTH_RANGE",
                    "CRACK_LINE_COUNT", "CRACK_LINE_GAP_FACTOR",
                    "SHELL_GAUGE_X_RANGE")
+
+
+def stamp(block: dict) -> dict:
+    """Tag one verification-report block with when/what computed it.
+
+    verification_report.json is MERGE-loaded (tests_physics_3d, validation_3d
+    and v8_smoke_test each write their own gates into it), so a block that was
+    not re-run simply survives. Without a stamp a stale block is
+    indistinguishable from a fresh one -- which is how the 2026-09-11 bundle
+    shipped V6b results computed under the previous defect geometry.
+
+    `geometry` is the same digest that names dataset roots, so a block whose
+    geometry differs from the run you are reading was computed for a DIFFERENT
+    scene and its numbers do not describe this one.
+    """
+    block["_stamp"] = {"at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                       "commit": _git_commit(), "geometry": geometry_tag()}
+    return block
 
 
 def geometry_tag(n: int = 6) -> str:

@@ -126,12 +126,21 @@ class PropagatorASM2D(nn.Module):
 # Metasurface layers
 # ---------------------------------------------------------------------------
 class SLM2D(nn.Module):
-    """Phase-only mask on the rectangular grid; explicitly initialized."""
+    """Phase-only mask on the rectangular grid; explicitly initialized.
 
-    def __init__(self, nx: int = config.NX, ny: int = config.NY, seed: int = 0):
+    `init_std` is the std (radians) of the random phase at epoch 0. The
+    inherited default pi/2 is a full random diffuser. **Zero reproduces the
+    surface="none" baseline EXACTLY** (verified: identical detector powers to
+    float32 zero), so the baseline is strictly inside this layer's hypothesis
+    space -- which makes init_std a pure optimization knob, not a physics one.
+    See README finding 24 before changing the default.
+    """
+
+    def __init__(self, nx: int = config.NX, ny: int = config.NY, seed: int = 0,
+                 init_std: float = np.pi / 2):
         super().__init__()
         gen = torch.Generator().manual_seed(seed)
-        init = torch.randn(nx, ny, generator=gen) * (np.pi / 2)
+        init = torch.randn(nx, ny, generator=gen) * init_std
         self.phase = nn.Parameter(init)
 
     def forward(self, signal: torch.Tensor) -> torch.Tensor:
@@ -371,6 +380,7 @@ class ONN3D(nn.Module):
         snr_multiple: float = config.SNR_MULTIPLE,
         seed: int = config.SEED,
         detector: SoftDetector2D | None = None,
+        slm_init_std: float = np.pi / 2,
     ):
         super().__init__()
         if len(layer_distances) != n_layer:
@@ -380,7 +390,8 @@ class ONN3D(nn.Module):
         self.snr_multiple = snr_multiple
 
         if surface == "slm":
-            self.layers = nn.ModuleList([SLM2D(seed=seed + i) for i in range(n_layer)])
+            self.layers = nn.ModuleList(
+                [SLM2D(seed=seed + i, init_std=slm_init_std) for i in range(n_layer)])
         elif surface == "metaunit":
             self.layers = nn.ModuleList([MetaUnitSoft(seed=seed + i) for i in range(n_layer)])
         elif surface == "none":

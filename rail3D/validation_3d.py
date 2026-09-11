@@ -31,7 +31,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
-from rail3d import config, field3d, mesh3d, sections
+from rail3d import config, data3d, field3d, mesh3d, sections
 
 REPORT_PATH = config.GENERATED_DIR / "verification_report.json"
 
@@ -602,7 +602,7 @@ def main() -> int:
                  else {"crack_idxs": tuple(args.crack_idx)})
         res = v6b_guard_sweep(device, min_ts, offs, **kw_ci)
         res["seconds"] = round(time.time() - t0, 2)
-        report["V6b_guard_sweep"] = res
+        report["V6b_guard_sweep"] = data3d.stamp(res)
         REPORT_PATH.write_text(json.dumps(report, indent=2))
         rec = res["recommended"]
         print("  deep-crack min_t sensitivity by offset "
@@ -630,7 +630,7 @@ def main() -> int:
         except Exception as err:  # noqa: BLE001
             res = {"pass": False, "error": repr(err)}
         res["seconds"] = round(time.time() - t0, 2)
-        report[name] = res
+        report[name] = data3d.stamp(res)
         ok &= bool(res["pass"])
         status = "PASS" if res["pass"] else "FAIL"
         brief = {k: v for k, v in res.items() if k not in ("pass", "samples")}

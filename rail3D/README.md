@@ -609,6 +609,82 @@ first) · or everything at once with `python lab_report.py`.
     which is right, because those datasets are comparable.
 
 
+24. **The no-metasurface baseline BEAT the trained metasurface — and that is a
+    provable optimization failure, not a result about metasurfaces.**
+    Prelim, 2026-09-11, same dataset / schedule / seed / detector lattice:
+    `surface="slm"` val AUC **0.880**, `surface="none"` val AUC **0.976**
+    (pass rate 0.757 vs 0.954). The SLM won only on `class_acc` (0.607 vs
+    0.541), which is why the `auc + class_acc` selection score still ranked
+    them 1.488 vs 1.517 — the baseline wins on the selection criterion too.
+
+    What makes this a bug rather than a finding: `surface="none"` is
+    `nn.Identity` with the SAME propagator, detector and noise path, so an SLM
+    holding zero phase reproduces it **exactly** — measured at 0.000e+00 on
+    the detector powers. The baseline is strictly inside the SLM's hypothesis
+    space, so a correctly optimized SLM cannot score below it. It gave up
+    0.10 AUC to a point it could have reached by setting a parameter to zero.
+
+    Two suspects, both cheap to test (`ablate_surface.py`, ~3 min/run):
+    - **Initialisation.** `SLM2D` starts at phase std **π/2** (measured 1.61 rad
+      over 1800 pixels) — a full random diffuser that scrambles the defect
+      signature into speckle at epoch 0. `TrainConfig.slm_init_std = 0.0`
+      starts the run AT the baseline instead.
+    - **`w_capture = 0.2`.** It rewards power on the retained detectors for
+      RECEIVER SNR, but `ONN3D.add_noise` is gated on `self.training`, so
+      evaluation is noiseless and capture buys nothing at scoring time. The
+      shipped run drove `capture_frac` to **0.457** against a 0.062 floor
+      (7.4× concentration) while AUC fell. In a noiseless eval that term can
+      only trade against contrast.
+
+    The general lesson, and the second time this exact shape has appeared here
+    (finding 22 was the first): **when a model scores below a point inside its
+    own hypothesis space, stop interpreting the science and debug the
+    optimizer.** Do not report "the metasurface underperforms" until an SLM
+    seeded at zero phase has been measured.
+
+25. **The system is nearly blind outside the gauge corner — `s0`, not defect
+    size, is the dominant variable.** Detection rate vs arc position, prelim:
+    crack rises 0.03 → 0.82 across s0 ≈ 107 → 148 mm (r = +0.51); dent 0.17 →
+    1.00 (r = +0.68). Depth correlates at r = +0.04 (crack) and +0.14 (dent) —
+    essentially nothing. Every one of the eight worst missed detections sits at
+    s0 ≈ 100–130 mm, and several are 7 mm+ deep cracks: **a deep defect in the
+    wrong place is invisible, a shallow one in the right place is not.**
+
+    This also explains the headline shell improvement (recall 0.42 → **0.975**,
+    AUC 0.78 → 0.996). Confining shells to the gauge corner (`SHELL_GAUGE_X_RANGE
+    = 20–30 mm`, the physically-motivated change) put them at s0 ≈ 147–154 — the
+    only well-seen band. Shells did not become easier to detect; they were moved
+    into the region the geometry already saw. Read it as confirmation of the
+    field-of-view limit, not as a defect-model win.
+
+    Wear (recall 0.99) and shell are now saturated and cannot show further
+    improvement. Crack (0.39) and dent (0.565) are the whole remaining signal,
+    and both are limited by *where* the defect sits.
+
+26. **`verification_report.json` is merge-loaded, so a gate that was not re-run
+    silently survives and reads as current.** The 2026-09-11 bundle carried
+    `V6b_guard_sweep` blocks computed under the PREVIOUS defect geometry —
+    `crack_depths_mm {0: 2.72, 1: 5.28, 17: 9.57}` (the old 2–10 mm range) and
+    `current_min_t: 3.0, current_normal_offset: 0.15` — sitting beside
+    genuinely fresh V0–V8 results, with nothing in the file to tell them apart.
+    Anyone reading it would have concluded the shipped shadow guard was 3.0/0.15
+    rather than 0.05/0.3.
+
+    The merge itself is correct (three scripts write into one file; a wholesale
+    rewrite would erase the others). What was missing is provenance per block.
+    Every gate now carries `_stamp` with the time, commit and **geometry
+    digest**, so a block whose geometry differs from the dataset root you are
+    reading was computed for a different scene. A block with NO `_stamp` was
+    not re-run since this landed — treat it as stale.
+
+    Corollary for the V6b blocks specifically: their `recommended` field still
+    optimises "most crack shadowing subject to intact artifact < 0.03", which
+    selects an `offset = 0` row with artifact 0.0288. We shipped `offset = 0.3`
+    because every `offset ≥ 0.05` row has artifact **exactly 0.0**. The
+    recommendation contradicts the shipped setting and should not be acted on;
+    the shadow question is closed (finding 3).
+
+
 ## 6b. Objective & metrics (rev. 2)
 
 `TrainConfig(objective="rank", metric="cos", target_fpr=0.05)` is the default.

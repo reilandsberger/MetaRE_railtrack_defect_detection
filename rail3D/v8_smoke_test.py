@@ -27,7 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import torch
 
-from rail3d import config, train3d
+from rail3d import config, data3d, train3d
 
 SMOKE_ROOT = config.GENERATED_DIR / "smoke"
 REPORT_PATH = config.GENERATED_DIR / "verification_report.json"
@@ -191,7 +191,7 @@ def main() -> int:
                        and res["stale_ckpt_refused"])
 
     report = json.loads(REPORT_PATH.read_text()) if REPORT_PATH.exists() else {}
-    report["V8_end_to_end_smoke"] = res
+    report["V8_end_to_end_smoke"] = data3d.stamp(res)
     REPORT_PATH.write_text(json.dumps(report, indent=2, default=str))
     status = "PASS" if res["pass"] else "FAIL"
     print(f"[{status}] V8: { {k: v for k, v in res.items() if k != 'best_val'} }")

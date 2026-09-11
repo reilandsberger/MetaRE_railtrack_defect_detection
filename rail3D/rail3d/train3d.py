@@ -85,6 +85,12 @@ class TrainConfig:
     # weight of the captured-power reward (recorded in checkpoints so runs
     # remain attributable); 0.0 reproduces the pre-capture objective exactly.
     w_capture: float = losses3d.W_CAPTURE
+    # Phase std (rad) at epoch 0 for surface="slm". pi/2 is a random diffuser;
+    # 0.0 starts AT the no-metasurface baseline, which is inside this model's
+    # hypothesis space exactly (README finding 24). Provenance-free: it changes
+    # only the optimizer's starting point, so runs remain comparable in
+    # geometry, but NOT in initialisation -- record it when comparing scores.
+    slm_init_std: float = float(np.pi / 2)
 
 
 def _ckpt_dir(cfg: TrainConfig) -> Path:
@@ -106,6 +112,7 @@ def build_model(cfg: TrainConfig, device: torch.device) -> optics3d.ONN3D:
     model = optics3d.ONN3D(
         n_layer=cfg.n_layer, layer_distances=cfg.layer_distances,
         surface=cfg.surface, noise=cfg.noise, seed=cfg.seed, detector=detector,
+        slm_init_std=cfg.slm_init_std,
     )
     return model.to(device)
 

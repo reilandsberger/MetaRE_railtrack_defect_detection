@@ -113,6 +113,31 @@ flight.
 
 ## 5. `verification_report.json` — the gates
 
+**Check `_stamp` on every block before quoting it.** This file is merge-loaded:
+`tests_physics_3d.py`, `validation_3d.py` and `v8_smoke_test.py` each write
+their own gates into it, so a gate that was NOT re-run simply survives from the
+last time it was. Each block now carries:
+
+```json
+"_stamp": {"at": "...", "commit": "30a83de", "geometry": "9d5878"}
+```
+
+`geometry` is the same digest that names dataset roots (section 3). A block
+whose digest differs from the dataset you are reading was computed for a
+DIFFERENT scene — its numbers do not describe this run. A block with **no**
+`_stamp` predates this mechanism and was not re-run; treat it as stale.
+
+This is not hypothetical: the 2026-09-11 prelim bundle carried `V6b_guard_sweep`
+with `crack_depths_mm {0: 2.72, ...}` from the old 2–10 mm crack range and
+`current_min_t: 3.0`, next to fresh V0–V8 blocks. Reading it straight would have
+said the shipped shadow guard was 3.0/0.15 instead of 0.05/0.3.
+
+**Ignore V6b's `recommended` field.** It maximises crack shadowing subject to
+intact artifact < 0.03, which picks an `offset = 0` row with artifact 0.0288.
+We shipped `offset = 0.3` because every `offset >= 0.05` row is **exactly 0.0**.
+The shadow question is closed; the sweep is informational only.
+
+
 Every entry carries `pass` and `seconds`. The pass rules, from the code:
 
 | gate | pass rule (source) | what a failure would mean |
