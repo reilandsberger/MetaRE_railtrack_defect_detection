@@ -127,6 +127,86 @@ def dataset_gate(root: Path, want: dict) -> None:
         say(f"   {cls:7s} shard0 {tuple(psi.shape)}  |psi1| mean {amp:.5f}  finite")
 
 
+def result_files(stage: str) -> list[Path]:
+    """The artifacts worth sending back, whichever way the stage was run.
+
+    Importable, so the notebook produces the SAME bundle as this script --
+    training in the kernel and training through run_stage.py must not give
+    different review packages.
+    """
+    root = config.GENERATED_DIR / f"L5_{stage}"
+    cand = [config.GENERATED_DIR / f"stage_{stage}_summary.json",
+            config.GENERATED_DIR / f"stage_{stage}_report.md",
+            config.GENERATED_DIR / "analysis.json",
+            config.GENERATED_DIR / "verification_report.json",
+            root / "dataset_config.json",
+            root / "generation.log"]
+    cand += [config.FIGURE_DIR / n for n in (
+        "analysis_parameters.png", "analysis_performance.png",
+        "analysis_failures.png", "dataset_review.png", "dataset_meta.png",
+        "detector_sweep.png", "defect_model_check.png")]
+    return [q for q in cand if q.exists()]
+
+
+def write_summary(stage: str) -> Path:
+    """One small JSON that answers the review questions without opening anything.
+
+    Written whichever route ran the stage, so a notebook run is as reviewable
+    as a scripted one. The two checks here are the ones that silently invalidated
+    the first prelim run: whether the best checkpoint actually met the detector
+    budget (README finding 22), and whether the capture term did anything.
+    """
+    out: dict = {"stage": stage}
+    root = config.GENERATED_DIR / f"L5_{stage}"
+    cfgp = root / "dataset_config.json"
+    if cfgp.exists():
+        meta = json.loads(cfgp.read_text(encoding="utf-8"))
+        out["dataset"] = {k: meta.get(k) for k in
+                          ("_counts", "_created", "_git_commit",
+                           "_duration_hours", "_samples_per_second")}
+        out["geometry"] = {k: meta.get(k) for k in
+                           ("WVL", "H_MS", "SEG_LEN", "MESH_DS", "SHADOW_MIN_T",
+                            "SHADOW_NORMAL_OFFSET", "CRACK_DEPTH_RANGE",
+                            "CRACK_WIDTH_RANGE", "CRACK_LINE_COUNT",
+                            "CRACK_LINE_GAP_FACTOR", "SHELL_GAUGE_X_RANGE")}
+    runs = {}
+    for surface in ("slm", "none", "metaunit"):
+        ck = config.CHECKPOINT_DIR / f"ms3d_{surface}_l5_{stage}" / "best.pt"
+        if not ck.exists():
+            continue
+        st = torch.load(ck, map_location="cpu", weights_only=False)
+        h = st.get("history", {})
+        tr = h.get("train") or [{}]
+        runs[surface] = {
+            "best_epoch": h.get("best_epoch"),
+            "n_det_at_best": st.get("n_det"),
+            "n_det_target": config.N_DET_FINAL,
+            "meets_detector_budget": st.get("n_det") == config.N_DET_FINAL,
+            "capture_frac_last": tr[-1].get("capture_frac"),
+            "capture_floor": config.N_DET_FINAL / 130,
+            "best_val": h.get("val", [{}])[h["best_epoch"]]
+                        if h.get("best_epoch", -1) >= 0 and h.get("val") else None,
+        }
+    out["runs"] = runs
+    ana = config.GENERATED_DIR / "analysis.json"
+    if ana.exists():
+        out["analysis"] = json.loads(ana.read_text(encoding="utf-8"))
+    q = config.GENERATED_DIR / f"stage_{stage}_summary.json"
+    q.write_text(json.dumps(out, indent=2, default=str), encoding="utf-8")
+    return q
+
+
+def make_bundle(stage: str) -> Path:
+    """Zip the review package. Safe to call from the notebook."""
+    write_summary(stage)
+    files = result_files(stage)
+    z = config.GENERATED_DIR / f"stage_{stage}_bundle.zip"
+    with zipfile.ZipFile(z, "w", zipfile.ZIP_DEFLATED) as zf:
+        for q in files:
+            zf.write(q, q.name)
+    return z
+
+
 def schedule_of(cfg: train3d.TrainConfig) -> dict:
     keys = ("n_epoch", "tau_anneal_end", "prune_start", "prune_end",
             "prune_keep", "n_det_final")
@@ -275,23 +355,13 @@ def main() -> int:
                  ana.read_text(encoding="utf-8")[:6000], "```", ""]
     report.write_text("\n".join(body), encoding="utf-8")
 
-    want = [report, ana, root / "dataset_config.json", root / "generation.log",
-            config.GENERATED_DIR / "verification_report.json",
-            config.FIGURE_DIR / "analysis_parameters.png",
-            config.FIGURE_DIR / "analysis_performance.png",
-            config.FIGURE_DIR / "analysis_failures.png",
-            config.FIGURE_DIR / "dataset_review.png"]
-    want = [p for p in want if p.exists()]
+    write_summary(args.stage)
 
     step("done — send these back")
-    for p in want:
-        print(f"   {p}")
+    for q in result_files(args.stage):
+        print(f"   {q}")
     if args.bundle:
-        z = config.GENERATED_DIR / f"stage_{args.stage}_bundle.zip"
-        with zipfile.ZipFile(z, "w", zipfile.ZIP_DEFLATED) as zf:
-            for p in want:
-                zf.write(p, p.name)
-        print(f"\n   bundled -> {z}")
+        print(f"\n   bundled -> {make_bundle(args.stage)}")
     return 0
 
 

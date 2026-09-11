@@ -499,8 +499,13 @@ describes the dense array — README finding 22) and **`capture_frac` against
 `n_det/130`** (above it the metasurface is concentrating light, at it the
 capture term is idle).
 
-`rail3D_pipeline.ipynb` remains the narrated route, and its section 9 reads the
-same results from a fresh kernel — see its section 0 for which cells to run.
+**Or run it from the notebook.** The `run_stage.py` cell in section 6 shells out
+to this same script, so the output streams into the cell and you get the same
+bundle — the shell is not required. `FRESH` and `WITH_BASELINE` are plain
+variables at the top of that cell. Section 9 then reads the results from a fresh
+kernel (see section 0 for which cells that needs), and ends with a cell that
+writes the summary and zips the review package **whichever route you took** —
+including training run cell-by-cell in the kernel.
 
 ---
 
