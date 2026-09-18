@@ -326,6 +326,37 @@ detected time convention, the fitted gain and phase, and the resampling coverage
 
 ---
 
+## 9b. `fdtd_agreement_<sample>[_target].png/.json` — Lumerical vs rail3D
+
+**First, check the title.** `TARGET` in red means the FDTD side was
+SYNTHESIZED from rail3D plus the stated `TARGET_MODEL`: a specification of what
+passing looks like, not a measurement. A real run says `external <file>` in
+`mode`.
+
+**"% agreement" is `complex_corr`**, fitted after alignment. The residual after
+the fit is `sqrt(1 − corr²)` by construction, so this is the number to quote.
+It is gated at 0.98. LUMERICAL.md's 0.95 only says the *setup* is not broken.
+
+**Read the alignment line before any metric.** `conjugated` is expected
+(Lumerical uses exp(+jωt)). `! both conventions score alike` means the fields are
+uncorrelated: go back to rung 1, and do not read the rest.
+
+**The two rows are gated differently, on purpose** (README finding 27):
+
+| row | gated on | reported only |
+|---|---|---|
+| z = 30 monitor (primary) | complex corr, % pixels in tolerance, worst-pixel |dA| and |dφ| | amplitude corr, weighted rms phase |
+| MS plane | complex corr, 130-detector barcode cosine | the per-pixel numbers, because speckle makes them harsh |
+
+**Worst-pixel residuals carry a location.** A worst pixel sitting on a shadow
+boundary or near the window edge is the expected physical-optics weakness. One
+sitting in the middle of the specular lobe is a setup problem.
+
+**The window ceiling** (footer, and `window_ceiling_complex_corr` in the JSON)
+is how well the z = 30 window reproduces rail3D's own MS-plane field. It is the
+best the MS row could ever score. With the ±80×±70 mm monitor it is 0.983. If it
+drops, the monitor was built smaller than `case.json` says.
+
 ## 10. V8 — what it does and does not claim
 
 **It is a training smoke test, not a performance measurement.**

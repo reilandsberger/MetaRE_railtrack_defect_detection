@@ -771,6 +771,15 @@ Measured at **λ=5 on the lab 5090** (2026-09-04):
 
 ## 13. Full-wave (MoM) cross-check — which solver, and how to feed it
 
+> **With Lumerical FDTD (the licence actually available): follow
+> `LUMERICAL.md`.** Score a run with `python fdtd_agreement.py --sample intact
+> --external intact_z30.mat` (both planes, % agreement, worst-pixel residuals
+> with locations, pass/fail). `--target` draws what passing looks like.
+> `python lumerical_mockup.py --screenshot <layout.png>` draws the target setup
+> into a screenshot of the FDTD Layout window, with every box taken from
+> `case.json`. The MoM discussion below still holds as the stronger reference if
+> an IE licence ever appears.
+
 **The question this answers:** our solver is physical optics — scalar, PEC
 tangent-plane currents, single + double bounce. At λ=5 mm the crack widths are
 2–5 mm = **0.4–1λ**, which is precisely where that approximation is expected to

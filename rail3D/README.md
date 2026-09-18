@@ -1,6 +1,6 @@
 # rail3D — 3D diffraction simulation + metasurface training for rail defect detection
 
-*Last updated: 2026-09-13 · λ = 5 mm (60 GHz), V0–V8 measured on the 5090 — bump this line in any
+*Last updated: 2026-09-18 · λ = 5 mm (60 GHz), V0–V8 measured on the 5090 — bump this line in any
 commit that changes behaviour this file describes.*
 
 **Handoff document.** This README is written so that a future session (any
@@ -683,6 +683,35 @@ first) · or everything at once with `python lab_report.py`.
     because every `offset ≥ 0.05` row has artifact **exactly 0.0**. The
     recommendation contradicts the shipped setting and should not be acted on;
     the shadow question is closed (finding 3).
+
+27. **The FDTD near-field monitor must cover the rail's length, not just the
+    comparison plane, and per-pixel agreement is the wrong gate at the
+    metasurface plane.** Both were found while building `fdtd_agreement.py`
+    (2026-09-18).
+
+    *Monitor.* The MS-plane comparison carries the z = 30 window up to H_MS
+    with the ASM, so the window must contain all the light that reaches the
+    aperture. The rail runs y = ±60, and cut-end light crosses z = 30 outside
+    the ±42.5 mm monitor LUMERICAL.md used to specify. Measured on rail3D's own
+    field (intact rail, plane wave, production shadowing; ASM from the window
+    vs a direct solve at H_MS): ±80×±42.5 → complex corr **0.943**; ±80×±70 →
+    **0.983**; ±110×±80 → 0.989. `fdtd_plan` now sizes y as
+    ±(rail half-length + 2λ), +7% cells. That residual 0.983 is the ceiling on
+    any MS-plane comparison through this window, and the tool reports it on
+    every run.
+
+    *Gates.* Sweeping a synthetic disagreement showed per-pixel tolerance
+    collapsing at the MS plane long before anything the detectors see: at
+    99.4% complex correlation only 73% of lit MS pixels sit within 5% / 15°,
+    while the 130-detector barcode stays at 0.997. That is finding 2 again
+    (raw complex error never converges on speckle), now at the solver-comparison
+    level. So the z = 30 row is gated per pixel, and the MS row is gated on
+    complex correlation and barcode cosine only.
+
+    Also fixed: full-wave runs were scored against rail3D's **no-shadow** field
+    (`compare_wavefronts` predates the shadow retraction, finding 3), which
+    would have charged our own switched-off physics to the solver comparison.
+    Both tools now use production shadowing.
 
 
 ## 6b. Objective & metrics (rev. 2)

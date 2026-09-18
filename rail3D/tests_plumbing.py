@@ -1,6 +1,6 @@
 """Plumbing gates: the non-physics assumptions that have actually broken runs.
 
-    python tests_plumbing.py          # ~15 s, CPU, no dataset, no GPU
+    python tests_plumbing.py          # ~25 s, CPU, no dataset, no GPU
 
 tests_physics_3d.py guards the solver. This guards the things AROUND it -- how
 results are addressed, read back and compared -- which is where the last three
@@ -21,6 +21,11 @@ run rather than here:
       "moved from init" number is only meaningful if that holds), writes a
       wrapped phase with |t| = 1, and does not change matplotlib's backend on
       import (the notebook plots inline).
+  P4  fdtd_agreement.py --external recovers rail3D's own field from a file
+      shaped like LUMERICAL.md 5's matlabsave: SI metres, a 4x finer FDTD-like
+      grid, CONJUGATED (exp(+jwt)), an arbitrary complex gain. The round trip
+      must score ~100% on both planes -- anything less is the tool, not physics,
+      and would otherwise first show up as "FDTD disagrees" on a real run.
 
 Every check runs the real code path on tiny synthetic inputs. Add one here
 whenever a run dies on something that was not physics.
@@ -234,12 +239,84 @@ def p3_slm_profile() -> dict:
 
 
 # ---------------------------------------------------------------------------
+def p4_fdtd_agreement_roundtrip() -> dict:
+    """A real Lumerical export's bookkeeping must cost nothing."""
+    import sys as _sys
+    from scipy.interpolate import RegularGridInterpolator
+    from scipy.io import savemat
+    import compare_wavefronts as cw
+    import fdtd_agreement as fa
+    from rail3d import sections
+
+    tmp = Path(tempfile.mkdtemp())
+    saved = (config.FIGURE_DIR, config.GENERATED_DIR, list(_sys.argv))
+    config.FIGURE_DIR = config.GENERATED_DIR = tmp
+    try:
+        sec = sections.load_reference_section()
+        params = fa.sample_params("plate", sec)
+        v, _ = cw.build_mesh(sec, params, config.MESH_DS,
+                             mesh3d_arc(sec), None)
+        plan = cw.fdtd_plan(v.numpy(), dict(cw.geom_now(), h_ms=fa.Z_MON), fa.Z_MON, None)
+        gw = fa.window_geom(plan["monitor_mm"])
+        dev = torch.device("cpu")
+        ref = cw.solve(g=gw, section=sec, params=params, device=dev, chunk=512, seg=None,
+                       source="plane", shadow="raycast", min_t=config.SHADOW_MIN_T)
+        X, Y = cw.plane_grid(gw, dev)
+        xs, ys = X[0, :, 0].numpy(), Y[0, 0, :].numpy()
+        # FDTD-like: 4x finer, one extra sample beyond each edge (a real monitor
+        # is wider than the window), coordinates in METRES, field conjugated
+        fx = np.concatenate([[xs[0] - 0.625], np.arange(xs[0], xs[-1] + 1e-9, 0.625),
+                             [xs[-1] + 0.625]])
+        fy = np.concatenate([[ys[0] - 0.625], np.arange(ys[0], ys[-1] + 1e-9, 0.625),
+                             [ys[-1] + 0.625]])
+        FX, FY = np.meshgrid(np.clip(fx, xs[0], xs[-1]), np.clip(fy, ys[0], ys[-1]),
+                             indexing="ij")
+        r = ref.numpy()
+        fine = sum(RegularGridInterpolator((xs, ys), getattr(r, part))(
+            np.stack([FX.ravel(), FY.ravel()], -1)).reshape(FX.shape) * unit
+            for part, unit in (("real", 1), ("imag", 1j)))
+        gain = 2.5e-3 * np.exp(1j * np.radians(30.0))
+        mat = tmp / "plate_z30.mat"
+        savemat(str(mat), {"Ey": np.conj(fine) * gain,
+                           "x": (fx * 1e-3)[:, None], "y": (fy * 1e-3)[:, None]})
+
+        _sys.argv = ["fdtd_agreement.py", "--sample", "plate", "--external", str(mat),
+                     "--profile", "cpu"]
+        rc = fa.main()
+        out = json.loads((tmp / "fdtd_agreement_plate.json").read_text(encoding="utf-8"))
+        al, z30, ms = out["alignment"], out["z30"], out["ms_plane"]
+        res = {
+            "exit_ok": rc == 0,
+            "conjugation_detected": bool(al["conjugated"]),
+            "gain_recovered": abs(al["gain"] * 2.5e-3 - 1) < 0.01,
+            "z30_corr": round(z30["complex_corr"], 6),
+            "ms_corr": round(ms["complex_corr"], 6),
+            "z30_roundtrip_exact": z30["complex_corr"] > 0.9999,
+            "ms_roundtrip_exact": ms["complex_corr"] > 0.9999,
+            "all_gates_pass": all(z30["pass"].values()) and all(ms["pass"].values()),
+            "figure_written": (tmp / "fdtd_agreement_plate.png").exists(),
+            "stamped": "_stamp" in out,
+        }
+        res["pass"] = all(v for v in res.values() if isinstance(v, bool))
+        return res
+    finally:
+        config.FIGURE_DIR, config.GENERATED_DIR, _sys.argv[:] = saved[0], saved[1], saved[2]
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def mesh3d_arc(section) -> int:
+    from rail3d import mesh3d
+    return mesh3d.default_arc_count(section, config.MESH_DS)
+
+
+# ---------------------------------------------------------------------------
 def main() -> int:
     ok = True
     for name, fn in [("P0_stage_root", p0_stage_root),
                      ("P1_history_schema", p1_history_schema),
                      ("P2_zero_phase_is_baseline", p2_zero_phase_is_baseline),
-                     ("P3_slm_profile", p3_slm_profile)]:
+                     ("P3_slm_profile", p3_slm_profile),
+                     ("P4_fdtd_agreement_roundtrip", p4_fdtd_agreement_roundtrip)]:
         t0 = time.time()
         try:
             res = fn()

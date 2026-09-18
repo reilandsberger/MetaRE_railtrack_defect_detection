@@ -662,8 +662,17 @@ def fdtd_plan(v: np.ndarray, g: dict, z_mon: float, override: dict | None) -> di
              round(float(2 * lam), 1)]
     # The monitor must sit OUTSIDE the TFSF box (scattered-field region) and
     # span our comparison plane with a margin, so resampling never extrapolates.
+    # In y it must ALSO cover the rail's full length plus 2 lambda: the
+    # near-field window is what gets propagated to the MS plane, and light
+    # from the cut ends that reaches the metasurface passes z = 30 outside a
+    # +/-42.5 mm window. Measured 2026-09-18 (intact rail, plane wave,
+    # production shadowing), ASM from the window vs rail3D solved directly at
+    # H_MS: +/-80 x +/-42.5 -> complex_corr 0.943; +/-80 x +/-70 -> 0.983;
+    # +/-110 x +/-80 -> 0.989. Widening x barely helps; y is the axis.
     mon_x = [-g["nx"] * g["dx"] / 2 - lam, g["nx"] * g["dx"] / 2 + lam]
-    mon_y = [-g["ny"] * g["dx"] / 2 - lam, g["ny"] * g["dx"] / 2 + lam]
+    y_half = max(g["ny"] * g["dx"] / 2 + lam,
+                 float(max(abs(lo[1]), abs(hi[1]))) + 2 * lam)
+    mon_y = [-y_half, y_half]
     # Simulation region: enclose TFSF and monitor, then >= 1.6 lambda to PML.
     pad = 1.6 * lam
     sim = {"x": [round(min(tf_lo[0], mon_x[0]) - pad, 1),
@@ -710,6 +719,12 @@ def fdtd_plan(v: np.ndarray, g: dict, z_mon: float, override: dict | None) -> di
         "monitor_mm": {"x": [round(mon_x[0], 1), round(mon_x[1], 1)],
                        "y": [round(mon_y[0], 1), round(mon_y[1], 1)],
                        "z": z_mon},
+        "ms_plane_leg": (
+            "The monitor window is propagated to H_MS with rail3D's ASM for the "
+            "MS-plane comparison (fdtd_agreement.py). Its y extent covers the "
+            "rail length + 2 lambda so the cut-end light that reaches the "
+            "metasurface is inside it; at +/-42.5 mm the window reproduces "
+            "rail3D's own MS-plane field at only complex_corr 0.943."),
         "boundaries": "PML on all six faces (Lumerical default 8 layers, stabilized)",
         "source": {
             "type": "TFSF (total-field scattered-field)",
@@ -1090,8 +1105,12 @@ def main() -> int:
         # plane-wave illumination: no horn, so no psi0 and no psi2. These are
         # the variants a full-wave reference should be compared against.
         "lam5 pw psi1 (no shadow)": lambda: solve(g=g5, source="plane", **common),
-        "lam5 pw psi1 (raycast 3.0)": lambda: solve(
-            g=g5, source="plane", shadow="raycast", min_t=3.0, **common),
+        # PRODUCTION shadowing -- the physics the dataset is generated with
+        # (min_t 0.05, normal offset 0.3, settled 2026-09-11). This is the
+        # reference a full-wave run is scored against; FDTD shadows for real.
+        "lam5 pw psi1 (production shadow)": lambda: solve(
+            g=g5, source="plane", shadow="raycast", min_t=config.SHADOW_MIN_T,
+            **common),
     }
     PLANE = [k for k in ALL if k.startswith("lam5 pw")]
     if args.variants:
@@ -1123,7 +1142,10 @@ def main() -> int:
         print("no variants solved")
         return 1
 
-    pref = ("lam5 pw psi1 (no shadow)" if args.source == "plane"
+    # full-wave comparisons score against PRODUCTION shadowing: FDTD/MoM shadow
+    # for real, so a no-shadow reference would charge rail3D's own switched-off
+    # physics to the solver comparison (README finding 3 retracted "inert").
+    pref = ("lam5 pw psi1 (production shadow)" if args.source == "plane"
             else "lam5 psi1 (no shadow)")
     ref_key = pref if pref in fields else list(fields)[0]
     ref = fields[ref_key]["psi"]

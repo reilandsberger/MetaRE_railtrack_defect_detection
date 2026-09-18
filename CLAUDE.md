@@ -83,7 +83,7 @@ Trainable metasurface + detector "barcode" system for rail defect detection.
   call `data3d.stage_root(stage)` and `data3d.run_tag(root)`. A provenance
   change auto-suffixes the root with a geometry digest so the generator has a
   legal next move instead of refusing with nowhere to go (README finding 23).
-- **`python tests_plumbing.py` (~6 s, CPU) after touching anything that
+- **`python tests_plumbing.py` (~25 s, CPU) after touching anything that
   addresses, reads back or compares results** — dataset-root resolution, the
   history schema the reports read, or the SLM/baseline identity. These are NOT
   physics gates; they exist because the last three lab failures were all
@@ -397,7 +397,9 @@ plane), `inspect_dataset.py` (review a dataset), `analyze_results.py` (where it
 succeeds and fails, per defect parameter), `sweep_detectors.py` (final detector
 count / MS→detector distance), `slm_profile.py` (the trained mask: wrapped phase,
 |t| — exactly 1 for the phase-only SLM — incident light, change from init),
-`rail3D_pipeline.ipynb` (narrated end to end).
+`fdtd_agreement.py` (Lumerical vs rail3D at z = 30 and the MS plane; `--target`
+draws a labelled TARGET), `lumerical_mockup.py` (the target setup drawn into a
+Layout-window screenshot), `rail3D_pipeline.ipynb` (narrated end to end).
 
 ## Dataset hygiene (2026-08-17)
 

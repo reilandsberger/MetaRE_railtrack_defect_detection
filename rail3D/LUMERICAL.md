@@ -1,6 +1,6 @@
 # Validating rail3D against Ansys Lumerical FDTD
 
-*Last updated: 2026-09-10 · λ = 5 mm (59.9585 GHz) · written for Lumerical FDTD 2025 R1*
+*Last updated: 2026-09-18 · λ = 5 mm (59.9585 GHz) · written for Lumerical FDTD 2025 R1*
 
 The question this answers: `field3d.py` is **physical optics** — scalar, PEC
 tangent-plane currents, single + double bounce. Crack widths are 2–5 mm =
@@ -30,9 +30,9 @@ geometry (`case.json` → `fdtd.mesh_options`):
 
 | mesh | cells | RAM | phase error to a monitor at z = 30 mm | …if propagated to H_MS = 150 mm |
 |---|---|---|---|---|
-| λ/10 (0.500 mm) | 26.9 M | 2.9 GB | 25° | **125°** |
-| λ/15 (0.333 mm) | 90.9 M | 9.2 GB | 11° | 54° |
-| λ/20 (0.250 mm) | 215 M | 23 GB | 6° | 30° |
+| λ/10 (0.500 mm) | 28.8 M | 2.9 GB | 25° | **125°** |
+| λ/15 (0.333 mm) | 97.1 M | 9.7 GB | 11° | 54° |
+| λ/20 (0.250 mm) | 230 M | 23 GB | 6° | 30° |
 
 125° of numerical phase error would swamp every physical effect we are trying
 to measure.
@@ -43,7 +43,7 @@ already checks against the Rayleigh–Sommerfeld path to 0.13%. FDTD then only
 has to do the part it is uniquely good at: the scattering off the surface,
 which is precisely the part PO approximates.
 
-This also shrinks the box to something comfortable: **26.9 Mcells at λ/10**.
+This also shrinks the box to something comfortable: **28.8 Mcells at λ/10**.
 
 ### What you will see at z = 30 that you do not see at 150
 
@@ -116,7 +116,7 @@ the thing to follow. Everything is on the **Objects Tree** (left) and the
 | field | value |
 |---|---|
 | x min / x max | **−88 / 88** mm |
-| y min / y max | **−73 / 73** mm |
+| y min / y max | **−78 / 78** mm |
 | z min / z max | **−92.9 / 38** mm |
 | dimension | 3D |
 
@@ -183,13 +183,28 @@ sits in the scattered-field region.
 |---|---|
 | monitor type | 2D Z-normal |
 | x min / x max | **−80 / 80** mm |
-| y min / y max | **−42.5 / 42.5** mm |
+| y min / y max | **−70 / 70** mm |
 | z | **30** mm |
 
-The monitor is deliberately wider than our comparison plane (±75 / ±37.5 mm) so
-resampling never has to extrapolate. If you shrink it, `--external` will tell
-you the coverage dropped below 100% rather than silently scoring zeros as
-disagreement.
+**Why y is ±70 and not ±42.5 (changed 2026-09-18).** This window is what gets
+carried up to the metasurface plane for the MS-plane comparison
+(`fdtd_agreement.py`). The rail runs y = ±60 mm, and light from its ends that
+reaches the metasurface passes z = 30 *outside* a ±42.5 mm window. Measured by
+propagating rail3D's own z = 30 field with the ASM and comparing it with rail3D
+solved directly at H_MS (intact rail, plane wave, production shadowing):
+
+| monitor window | reproduces the MS-plane field (complex corr) |
+|---|---|
+| ±80 × ±42.5 mm (the old setting) | 0.943 |
+| **±80 × ±70 mm** | **0.983** |
+| ±110 × ±80 mm | 0.989 |
+
+y is what matters: widening x barely helps. The rule `case.json` now applies is
+y = ±(rail half-length + 2λ). It costs ~7% more cells.
+
+The monitor is also wider than our z = 30 comparison plane, so resampling never
+has to extrapolate. If you shrink it, the tools report coverage below 100%
+rather than silently scoring zeros as disagreement.
 
 *General* tab: **override global monitor settings** ✓, **frequency points** `1`.
 Under *Data to record*, `E` is enough (untick H to save disk).
@@ -212,16 +227,20 @@ A 2 mm crack at a 0.5 mm global mesh is 4 cells across — too coarse to trust.
 Refine only where it matters: **Simulation** dropdown → **Mesh** (a mesh
 override region).
 
-For the exported `crack` sample, `case.json` → `fdtd.defect_refinement` gives:
+For the exported `crack` sample (rev.3 defect model: three parallel box divots;
+sample 0 is transverse, 4.36 mm deep), `case.json` → `fdtd.defect_refinement`
+gives:
 
 | field | value |
 |---|---|
 | x min / x max | **−17.5 / 41.2** mm |
-| y min / y max | **−18.8 / 4.4** mm |
-| z min / z max | **−14.4 / 9.9** mm |
+| y min / y max | **−23.1 / 7.5** mm |
+| z min / z max | **−16.1 / 9.9** mm |
 | dx = dy = dz | **0.25** mm (λ/20) |
 
-That adds only ~1.9 Mcells to a 26.9 Mcell run. **Use the identical override
+That adds ~2.6 Mcells to a 28.8 Mcell run. Re-export after any defect-model
+change and take the numbers from `case.json`, which is regenerated from the
+geometry. The rev.2 box printed here previously is stale. **Use the identical override
 box in the intact run too**, even though there is no defect there — matched
 meshes are what make the difference field cancel numerical error.
 
@@ -310,11 +329,29 @@ matlabsave("crack_z30.mat", Ey, x, y);
 s-polarised component from §2. Save `x` and `y`; they are what lets the
 comparison resample the monitor grid onto ours.
 
-Then, back in `rail3D/`:
+Then, back in `rail3D/`. **The agreement report** is both planes, with pixel-level
+residuals, % agreement and pass/fail against stated criteria:
+
+```bash
+python fdtd_agreement.py --sample intact --external intact_z30.mat
+```
+
+It records nothing FDTD did not measure. It compares at z = 30, then carries
+**both** fields to the metasurface plane with the same ASM, so the MS-plane row
+shows the near-field disagreement as the metasurface would see it. Run it with
+`--target` (no Lumerical file) to see what a passing run looks like. That
+figure is titled TARGET and footnoted as synthesized.
+
+The variant-by-variant comparison is still available:
 
 ```bash
 python compare_wavefronts.py --sample crack --source plane --plane-z 30 --external crack_z30.mat
 ```
+
+Both tools score against rail3D with **production shadowing** (`min_t` 0.05,
+offset 0.3). Before 2026-09-18 `compare_wavefronts` scored full-wave runs
+against the *no-shadow* field, which charged rail3D's own switched-off physics
+to the comparison.
 
 It reports, before any metric:
 
@@ -364,10 +401,10 @@ fix.
 
 | run | mesh | cells | RAM | notes |
 |---|---|---|---|---|
-| rung 0–1 (plate) | λ/10 | ~27 M | ~3 GB | minutes |
-| rung 2 (intact) | λ/10 | ~27 M | ~3 GB | |
-| rung 3 (crack + override) | λ/10 + λ/20 local | ~29 M | ~3 GB | run intact again with the same override |
-| production comparison | λ/15 | ~91 M | ~9 GB | 11° phase error to the monitor |
+| rung 0–1 (plate) | λ/10 | ~29 M | ~3 GB | minutes |
+| rung 2 (intact) | λ/10 | ~29 M | ~3 GB | |
+| rung 3 (crack + override) | λ/10 + λ/20 local | ~31 M | ~3 GB | run intact again with the same override |
+| production comparison | λ/15 | ~97 M | ~10 GB | 11° phase error to the monitor |
 
 All well inside a 5090's 32 GB. Lumerical's GPU solver supports a subset of
 features — if it refuses the setup, the CPU solver at this size is still
