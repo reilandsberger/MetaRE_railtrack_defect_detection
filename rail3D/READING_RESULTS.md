@@ -337,8 +337,11 @@ passing looks like, not a measurement. A real run says `external <file>` in
 the fit is `sqrt(1 − corr²)` by construction, so this is the number to quote.
 It is gated at 0.98. LUMERICAL.md's 0.95 only says the *setup* is not broken.
 
-**Read the alignment line before any metric.** `conjugated` is expected
-(Lumerical uses exp(+jωt)). `! both conventions score alike` means the fields are
+**Read the alignment line before any metric.** `as-is` is expected: Lumerical
+uses exp(−iωt), the same as rail3D (README finding 28 — an earlier version of
+this section said `conjugated` was expected; that was wrong). `conjugated` from a
+Lumerical file means check the source Direction first; from HFSS/FEKO it is
+normal. `! both conventions score alike` means the fields are
 uncorrelated: go back to rung 1, and do not read the rest.
 
 **The two rows are gated differently, on purpose** (README finding 27):
@@ -356,6 +359,18 @@ sitting in the middle of the specular lobe is a setup problem.
 is how well the z = 30 window reproduces rail3D's own MS-plane field. It is the
 best the MS row could ever score. With the ±80×±70 mm monitor it is 0.983. If it
 drops, the monitor was built smaller than `case.json` says.
+
+**Rung 0 (`fdtd_rung0.json`) comes first, and gates everything after it.** It
+scores the EMPTY-box field at z = 0 against rail3D's horn over the rail
+footprint: correlation ≥ 0.98 **as-is**, beam centroid within 5 mm, and the
+z = 30 monitor's leakage (nothing to reflect) < 1% of the injected peak. A
+centroid in the wrong place means the beam was injected the wrong way; do not
+read any later rung until rung 0 passes. The leakage figure is the floor under
+every later comparison.
+
+**Which illumination?** The JSON's `source` is `horn` (the LUMERICAL.md setup:
+rail3D's psi1 + psi2 under its horn) or `plane` (the older plane-wave
+comparison). Files with `_plane` in the name are the latter.
 
 ## 10. V8 — what it does and does not claim
 

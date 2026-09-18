@@ -1,8 +1,9 @@
 """Lumerical FDTD vs rail3D: how well do they agree, pixel by pixel?
 
-    python fdtd_agreement.py --target                       # the TARGET figure
+    python fdtd_agreement.py --injection empty_z0.mat --leak empty_z30.mat   # rung 0
+    python fdtd_agreement.py --sample plate --external plate_z30.mat        # rung 1
     python fdtd_agreement.py --external intact_z30.mat      # a REAL Lumerical run
-    python fdtd_agreement.py --sample plate --external plate_z30.mat   # rung 1
+    python fdtd_agreement.py --target                       # the TARGET figure
 
 Both modes run the SAME metrics and draw the SAME figure, so the target is a
 literal preview of what a passing Lumerical run will produce. Only the source of
@@ -30,11 +31,22 @@ Two rows:
               (the "window ceiling"): rail3D's ASM-carried field vs rail3D solved
               directly at H_MS.
 
-WHAT is compared: the SCATTERED field psi1 under a unit s-polarised plane wave at
-55 deg (the TFSF setup). That is the only part of the "incident field on the
-metasurface" that physical optics approximates. The horn's direct field is
-analytic and identical in both by construction, so including it would only
-inflate agreement.
+WHAT is compared (--source horn, the default and the setup LUMERICAL.md builds):
+the field the rail sends UP under rail3D's own horn, injected into FDTD as an
+Import source at z = 15 mm (horn_source.py). The z = 30 monitor sits above that
+plane, so it records only the up-going field -- reflected + scattered, every
+bounce -- and rail3D's side is psi1 + psi2 under the horn. The horn's DIRECT
+field to the metasurface (psi0) is analytic and identical in both by
+construction, so including it would only inflate agreement.
+(--source plane keeps the older plane-wave comparison: psi1 under a unit
+s-polarised plane wave, for a plane-wave source in the external solver.)
+
+RUNG 0 (--injection): before any rail, the empty box shows whether Lumerical
+injects what rail3D thinks the horn delivers. The field recorded at z = 0 is
+scored against rail3D's horn field there, over the rail footprint only (where
+the windowed source reproduces the full horn to 0.999), and --leak measures how
+much up-going field the z = 30 monitor sees with nothing to reflect it -- the
+noise floor every later rung sits on.
 
 Metrics (per row; thresholds in CRITERIA, one block, all proposed).
 
@@ -111,7 +123,10 @@ TARGET_MODEL = {
     "additive_rms": 0.025,    # PO-missing diffraction, fraction of peak, corr 10 mm
     "gain": 1.2e-3,           # source normalisation (V/m vs unitless)
     "gain_phase_deg": -14.0,  # constant phase offset
-    "conjugate": True,        # Lumerical's exp(+j w t) time convention
+    # Lumerical uses exp(-i w t) like rail3D ("P(w) = int e^{i w t} P(t) dt",
+    # Ansys Optics KB), so a real export aligns AS-IS. An earlier version set
+    # this True on the belief that Lumerical used exp(+j w t); it does not.
+    "conjugate": False,
     "seed": 0,
 }
 
@@ -301,9 +316,10 @@ def draw(rows, target: bool, meta: dict, path: Path) -> None:
                 color="#555", va="top", transform=ax.transAxes)
         sub.suptitle(label.split("\n")[0], fontsize=12, x=0.01, ha="left")
 
+    illum = ("horn (Import source at z = 15 mm), up-going field psi1+psi2"
+             if meta.get("source") == "horn" else "s-pol plane wave at 55 deg, psi1")
     head = ("TARGET: " if target else "") + (
-        f"Lumerical FDTD vs rail3D -- scattered field psi1, {meta['sample']} rail, "
-        f"s-pol plane wave at 55 deg, {config.WVL:g} mm")
+        f"Lumerical FDTD vs rail3D -- {meta['sample']} rail, {illum}, {config.WVL:g} mm")
     fig.suptitle(head, fontsize=14, fontweight="bold",
                  color="#b00020" if target else "black")
     foot = (f"alignment: {meta['align']['convention']} (corr as-is "
@@ -328,6 +344,53 @@ def draw(rows, target: bool, meta: dict, path: Path) -> None:
     plt.close(fig)
 
 
+def rung0(args, device) -> int:
+    """Empty box: does the Import source deliver rail3D's horn field at z = 0?"""
+    import horn_source
+    g0 = dict(cw.geom_now(), h_ms=0.0, nx=48, ny=56)            # x +/-60, y +/-70
+    arr, lab, info = cw.load_external(args.injection, g0)
+    X, Y = cw.plane_grid(g0, torch.device("cpu"))
+    X, Y = X[0].numpy(), Y[0].numpy()
+    ref = horn_source.horn_field(X[:, 0], Y[0, :], 0.0, device)
+    foot = (np.abs(X) <= 40) & (np.abs(Y) <= 60)
+    a = torch.as_tensor(ref[foot])
+    b = torch.as_tensor(np.asarray(arr)[foot])
+    aligned, al = cw.align_external(b, a)
+    corr = cw.complex_corr(aligned, a)
+    # centroids over the FOOTPRINT: outside it the windowed source is meant to
+    # differ from the full horn, which shifted a whole-monitor centroid ~3 mm
+    I_ext = np.abs(arr) ** 2 * foot
+    I_ref = np.abs(ref) ** 2 * foot
+    cx_ext = float((I_ext * X).sum() / I_ext.sum())
+    cx_ref = float((I_ref * X).sum() / I_ref.sum())
+    print(f"RUNG 0 injection ({lab}): complex corr over the rail footprint {corr:.4f}"
+          f"  [{al['convention']}: as-is {al['corr_as_is']:.3f} / conj "
+          f"{al['corr_conjugated']:.3f}]")
+    print(f"  beam centroid x at z=0: FDTD {cx_ext:+.1f} mm, rail3D {cx_ref:+.1f} mm")
+    ok = corr >= 0.98 and al["convention"] == "as-is" and abs(cx_ext - cx_ref) < 5
+    if al["convention"] != "as-is":
+        print("  ! matched only when CONJUGATED. Lumerical is exp(-i w t) like rail3D, "
+              "so check the source Direction (must be Backward) before anything else.")
+    if abs(cx_ext - cx_ref) >= 5:
+        print("  ! the beam lands in the wrong place: a mirrored centroid means the "
+              "profile was injected the wrong way (Direction, or the E/H pair).")
+    out = {"injection_corr_footprint": corr, "alignment": al,
+           "centroid_x_mm": {"fdtd": cx_ext, "rail3d": cx_ref}, "pass": bool(ok)}
+    if args.leak:
+        g30 = dict(cw.geom_now(), h_ms=Z_MON, nx=64, ny=56)
+        leak, _, _ = cw.load_external(args.leak, g30)
+        ratio = float(np.abs(leak).max() / np.abs(arr).max())
+        out["leak_peak_over_injected_peak"] = ratio
+        print(f"  leakage at the z=30 monitor (nothing to reflect): {ratio:.2e} of the "
+              f"injected peak -- every later rung's floor")
+        ok = ok and ratio < 1e-2
+        out["pass"] = bool(ok)
+    js = config.GENERATED_DIR / "fdtd_rung0.json"
+    js.write_text(json.dumps(data3d.stamp(out), indent=2, default=str), encoding="utf-8")
+    print(f"  -> {'PASS' if ok else 'FAIL'}   ({js})")
+    return 0 if ok else 1
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -338,10 +401,19 @@ def main() -> int:
                       help="synthesize the FDTD side from the stated model (a TARGET)")
     mode.add_argument("--external", default=None,
                       help="Lumerical E_y export (.mat/.npz with x, y) at z = 30 mm")
+    mode.add_argument("--injection", default=None,
+                      help="RUNG 0: E_y at z = 0 from the EMPTY-box run")
+    ap.add_argument("--leak", default=None,
+                    help="RUNG 0: E_y at the z = 30 monitor from the EMPTY-box run")
+    ap.add_argument("--source", default="horn", choices=("horn", "plane"),
+                    help="illumination rail3D is scored under (default horn: the "
+                         "Import-source setup in LUMERICAL.md)")
     ap.add_argument("--profile", default="lab", choices=list(config.PROFILES))
     args = ap.parse_args()
 
     device = config.get_device(args.profile)
+    if args.injection:
+        return rung0(args, device)
     chunk = config.PROFILES[args.profile].chunk_faces
     config.ensure_dirs()
     section = sections.load_reference_section()
@@ -353,14 +425,17 @@ def main() -> int:
     plan = cw.fdtd_plan(v.numpy(), dict(cw.geom_now(), h_ms=Z_MON), Z_MON, None)
     gw = window_geom(plan["monitor_mm"])
     win_txt = f"x +/-{gw['nx']*gw['dx']/2:g} y +/-{gw['ny']*gw['dx']/2:g} mm"
+    # horn: every bounce (FDTD has them all); plane: single bounce, as before
+    terms = "psi12" if args.source == "horn" else "psi1"
     common = dict(section=section, params=params, device=device, chunk=chunk,
-                  seg=None, source="plane", shadow="raycast", min_t=config.SHADOW_MIN_T)
+                  seg=None, source=args.source, shadow="raycast",
+                  min_t=config.SHADOW_MIN_T, terms=terms)
 
     t = time.time()
     ref_w = cw.solve(g=gw, **common)
     direct_ms = cw.solve(g=dict(cw.geom_now(), h_ms=config.H_MS), **common)
-    print(f"rail3D psi1: window {gw['nx']}x{gw['ny']} at z={Z_MON:g} and direct at "
-          f"H_MS={config.H_MS:g} ({time.time()-t:.1f} s on {device})")
+    print(f"rail3D {terms} under {args.source}: window {gw['nx']}x{gw['ny']} at "
+          f"z={Z_MON:g} and direct at H_MS={config.H_MS:g} ({time.time()-t:.1f} s on {device})")
 
     if args.target:
         ext_raw = synthesize_target(ref_w, gw)
@@ -385,10 +460,11 @@ def main() -> int:
     m30 = score(ref_w, ext_w, gw, device, ms_plane=False)
     mms = score(ref_ms, ext_ms, g_ms, device, ms_plane=True)
 
-    tag = f"{args.sample}{'_target' if args.target else ''}"
+    tag = f"{args.sample}{'_plane' if args.source == 'plane' else ''}" \
+          f"{'_target' if args.target else ''}"
     commit = data3d._git_commit()
     meta = {"sample": args.sample, "align": align, "window": win_txt,
-            "window_ceiling": ceiling, "commit": commit}
+            "window_ceiling": ceiling, "commit": commit, "source": args.source}
     rows = [(f"z = {Z_MON:g} mm near-field monitor ({win_txt}) -- where FDTD is recorded",
              ref_w, ext_w, m30, gw),
             (f"MS plane, z = {config.H_MS:g} mm ({config.NX}x{config.NY} aperture) -- "
@@ -399,7 +475,8 @@ def main() -> int:
     strip = lambda m: {k: v for k, v in m.items() if k != "_maps"}   # noqa: E731
     out = data3d.stamp({
         "mode": "TARGET (synthesized FDTD side)" if args.target else f"external {args.external}",
-        "sample": args.sample, "window": win_txt, "window_ceiling_complex_corr": ceiling,
+        "sample": args.sample, "source": args.source, "terms": terms,
+        "window": win_txt, "window_ceiling_complex_corr": ceiling,
         "alignment": align, "criteria": CRITERIA,
         "target_model": TARGET_MODEL if args.target else None,
         "z30": strip(m30), "ms_plane": strip(mms)})

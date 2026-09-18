@@ -326,10 +326,13 @@ def align_external(psi, ref):
     reported as a physics disagreement:
 
     (a) TIME CONVENTION. rail3D uses exp(-i w t), so outgoing waves carry
-        exp(+i k0 R) (see field3d.rs_kernel). HFSS, FEKO and Lumerical use the
-        engineering convention exp(+j w t) and therefore exp(-j k0 R): their
-        fields arrive CONJUGATED. Conjugating the wrong one turns a perfect
-        match into an apparent total failure, so test both and report which won.
+        exp(+i k0 R) (see field3d.rs_kernel). **Lumerical uses the same** -- its
+        documented transform is P(w) = int e^{i w t} P(t) dt, with J = -i w P
+        ("Methodology for optical force calculations", Ansys Optics KB) -- so a
+        Lumerical export should align AS-IS. HFSS and FEKO use the engineering
+        convention exp(+j w t), and their fields arrive CONJUGATED. Conjugating
+        the wrong one turns a perfect match into an apparent total failure, so
+        both are tested and the winner is reported, never silently applied.
     (b) ABSOLUTE AMPLITUDE. rail3D fields are unnormalised scalars; a full-wave
         solver returns V/m for whatever source power it was given. One complex
         gain alpha (least squares over the whole plane) absorbs the scale and
@@ -645,14 +648,25 @@ def defect_bbox(section, params, g, seg):
             "pad_mm": pad}
 
 
-def fdtd_plan(v: np.ndarray, g: dict, z_mon: float, override: dict | None) -> dict:
+def fdtd_plan(v: np.ndarray, g: dict, z_mon: float, override: dict | None,
+              source: str = "plane", horn: dict | None = None) -> dict:
     """A buildable Lumerical FDTD setup for this exact case.
 
     Everything here is derived from the geometry actually being exported, so it
     cannot drift from the case it describes.
+
+    source="horn" (the setup LUMERICAL.md documents): NO TFSF. The horn enters
+    as a z-normal Import source at horn["plane_z_mm"] over horn["window_mm"]
+    (horn_source.py), injecting DOWN; the z_mon monitor sits above it and so
+    records only the up-going field. Lumerical's GPU solver does not support
+    TFSF at all ("Getting started with running FDTD on GPU", Ansys Optics KB),
+    while single-frequency Import sources run on GPU from 2025 R1.1.
+    source="plane": the TFSF plane-wave plan, kept for reference.
     """
     lam = g["wvl"]
     lo, hi = v.min(axis=0), v.max(axis=0)
+    if source == "horn":
+        return _fdtd_plan_horn(v, g, z_mon, override, horn, lo, hi)
     # TFSF must fully enclose the scatterer; outside it only the SCATTERED
     # field exists, which is what psi1 is. Keep >= 1 lambda clearance so the
     # source planes do not clip the geometry.
@@ -744,13 +758,107 @@ def fdtd_plan(v: np.ndarray, g: dict, z_mon: float, override: dict | None) -> di
         "recommended": ("lambda/10 for rungs 1-2 (cheap, sets the workflow up), "
                         "lambda/15 for the defect comparison"),
         "defect_refinement": override,
-        "materials": "PEC (Perfect Electric Conductor) -- matches R = -1 in our solver",
+        "materials": "PEC (Perfect Electrical Conductor) -- matches R = -1 in our solver",
         "runs_needed": [
             "1. flat PEC plate (rung 1) -- setup check, not physics",
             "2. intact rail (rung 2)",
             "3. defect rail (rung 3), SAME box and mesh as run 2",
             "then compare run3 - run2 against our psi1_defect - psi1_intact: "
             "the common-mode numerical error largely cancels in the difference",
+        ],
+    }
+
+
+def _mesh_table(ext, lam, override, hi_z, z_mon):
+    meshes = {}
+    for div in (10, 15, 20):
+        dx = lam / div
+        cells = float(np.ceil(ext / dx).prod())
+        extra = 0.0
+        if override is not None:
+            ob = override["override_box_mm"]
+            oe = np.array([ob["x"][1] - ob["x"][0], ob["y"][1] - ob["y"][0],
+                           ob["z"][1] - ob["z"][0]])
+            fine = lam / 20 if div < 20 else lam / 40
+            extra = float(np.ceil(oe / fine).prod() - np.ceil(oe / dx).prod())
+        meshes[f"lambda_over_{div}"] = {
+            "dx_mm": round(dx, 4),
+            "cells_M": round(cells / 1e6, 1),
+            "cells_with_defect_override_M": round((cells + extra) / 1e6, 1),
+            "est_RAM_GB": round((cells + extra) * 100 / 1e9, 1),
+            "phase_error_deg_to_monitor": round(
+                fdtd_phase_error_deg(div, (z_mon - float(hi_z)) / lam), 1),
+            "phase_error_deg_if_propagated_to_H_MS": round(
+                fdtd_phase_error_deg(div, (config.H_MS - float(hi_z)) / lam), 1),
+        }
+    return meshes
+
+
+def _fdtd_plan_horn(v, g, z_mon, override, horn, lo, hi) -> dict:
+    """Import-source (horn) plan: region, source plane, monitors, mesh."""
+    if horn is None:
+        raise ValueError("source='horn' needs the horn_source.build() info")
+    lam = g["wvl"]
+    win, zs = horn["window_mm"], horn["plane_z_mm"]
+    if not (float(hi[2]) < zs < z_mon):
+        raise ValueError(f"source plane z={zs} must sit between the crown "
+                         f"({float(hi[2]):.1f}) and the monitor ({z_mon})")
+    mon_x = [-g["nx"] * g["dx"] / 2 - lam, g["nx"] * g["dx"] / 2 + lam]
+    y_half = max(g["ny"] * g["dx"] / 2 + lam, float(max(abs(lo[1]), abs(hi[1]))) + 2 * lam)
+    mon_y = [-y_half, y_half]
+    pad = 1.6 * lam                                  # clearance to the PML
+    sim = {"x": [round(min(lo[0] - lam, mon_x[0], win["x"][0]) - pad, 1),
+                 round(max(hi[0] + lam, mon_x[1], win["x"][1]) + pad, 1)],
+           "y": [round(min(lo[1] - lam, mon_y[0], win["y"][0]) - pad, 1),
+                 round(max(hi[1] + lam, mon_y[1], win["y"][1]) + pad, 1)],
+           "z": [round(float(lo[2]) - lam - pad, 1), round(z_mon + pad, 1)]}
+    ext = np.array([sim["x"][1] - sim["x"][0], sim["y"][1] - sim["y"][0],
+                    sim["z"][1] - sim["z"][0]])
+    return {
+        "design": ("horn Import source, NO TFSF. The source plane sits between the "
+                   "rail and the monitor and injects DOWN, so the monitor above it "
+                   "records only the up-going (reflected + scattered) field."),
+        "why_not_full_scene": (
+            "Do NOT put the metasurface plane inside the FDTD box: numerical "
+            "dispersion accumulates with distance (see the phase-error columns). "
+            "Record the near field at monitor_z and propagate analytically "
+            "(rail3D's ASM, which V3 checks to 0.13%)."),
+        "monitor_z_mm": z_mon,
+        "simulation_region_mm": sim,
+        "import_source": {
+            "file": "horn_EM_dataset.mat (written by load_horn_source.lsf)",
+            "plane_z_mm": zs, "window_mm": win, "sample_mm": horn["sample_mm"],
+            "injection_axis": "z (automatic from the data)", "direction": "Backward",
+            "frequency_Hz": horn["frequency_Hz"],
+            "polarisation": horn["polarisation"],
+            "note": ("E AND H are supplied: Lumerical's own guidance for beams "
+                     "more complex than Gaussian/plane-wave. Single frequency, so "
+                     "it runs on GPU from 2025 R1.1."),
+        },
+        "monitor_mm": {"x": [round(mon_x[0], 1), round(mon_x[1], 1)],
+                       "y": [round(mon_y[0], 1), round(mon_y[1], 1)], "z": z_mon},
+        "rung0_injection_monitor_mm": {
+            "x": [-60.0, 60.0], "y": [-70.0, 70.0], "z": 0.0,
+            "note": ("EMPTY box only (no rail): records what the Import source "
+                     "delivers at crown height, to score against rail3D's horn "
+                     "field there (fdtd_agreement.py --injection). Delete or "
+                     "disable it once the rail is in."),
+        },
+        "ms_plane_leg": (
+            "The monitor window is propagated to H_MS with rail3D's ASM for the "
+            "MS-plane comparison (fdtd_agreement.py). Its y extent covers the rail "
+            "length + 2 lambda (README finding 27)."),
+        "boundaries": "PML on all six faces (stabilized profile)",
+        "mesh_options": _mesh_table(ext, lam, override, hi[2], z_mon),
+        "recommended": ("lambda/10 uniform for rungs 0-2; lambda/15 uniform (or "
+                        "lambda/10 + the lambda/20 defect override) for rung 3"),
+        "defect_refinement": override,
+        "materials": "PEC (Perfect Electrical Conductor)",
+        "runs_needed": [
+            "0. EMPTY box: injection check at z=0 + leakage at the z=30 monitor",
+            "1. flat PEC plate (native Rectangle, 1 mm thick, top at z=0)",
+            "2. intact rail (STL)",
+            "3. crack rail (STL), SAME region, mesh, override and source as run 2",
         ],
     }
 
@@ -813,7 +921,7 @@ def cut_end_illumination(v: np.ndarray, f: np.ndarray, g: dict) -> dict:
 
 
 def export_case(section, params, g, out: Path, seg, source="horn", closed=False,
-                fdtd_monitor_z=None):
+                fdtd_monitor_z=None, device=None):
     out.mkdir(parents=True, exist_ok=True)
     ds = g["mesh_ds"]
     n_arc = mesh3d.default_arc_count(section, ds)
@@ -849,8 +957,18 @@ def export_case(section, params, g, out: Path, seg, source="horn", closed=False,
     override = (None if is_plate or params is None
                 or params.get("class") in (None, "intact")
                 else defect_bbox(section, params, g, seg))
-    plan = fdtd_plan(v, g, z_mon=fdtd_monitor_z if fdtd_monitor_z is not None
-                     else round(6 * g["wvl"], 1), override=override)
+    z_mon = fdtd_monitor_z if fdtd_monitor_z is not None else round(6 * g["wvl"], 1)
+    horn = None
+    if source == "horn":
+        # the horn's wavefront as a Lumerical Import source (horn_source.py);
+        # computed from the INTACT rail so every rung shares one source file
+        import horn_source
+        horn = horn_source.build(out, device or torch.device("cpu"))
+        print(f"    horn Import source: z={horn['plane_z_mm']:g} mm, window "
+              f"{horn['window_mm']}, rail illumination fidelity "
+              + ", ".join(f"{k} {v_:.4f}" for k, v_ in horn["illumination_fidelity"].items()
+                          if k.startswith("z=")))
+    plan = fdtd_plan(v, g, z_mon=z_mon, override=override, source=source, horn=horn)
     if is_plate:
         trunc["verdict"] = ("flat plate: the edges are lit by construction and "
                             "BOTH solvers see the same finite plate, so edge "
@@ -918,10 +1036,10 @@ def export_case(section, params, g, out: Path, seg, source="horn", closed=False,
         "conventions": {
             "rail3D_time_convention": "exp(-i w t); outgoing waves carry exp(+i k0 R)",
             "engineering_convention": "exp(+j w t); outgoing waves carry exp(-j k0 R)",
-            "consequence": ("HFSS / FEKO / Lumerical fields arrive CONJUGATED "
-                            "relative to rail3D. compare_wavefronts.py --external "
-                            "detects this and reports which convention matched; "
-                            "it does not silently fix it."),
+            "consequence": ("Lumerical uses exp(-i w t) like rail3D, so its "
+                            "fields should align AS-IS. HFSS / FEKO use exp(+j w t) "
+                            "and arrive CONJUGATED. --external tests both and "
+                            "reports which matched; it does not silently fix it."),
             "amplitude": ("rail3D fields are unnormalised scalars. The comparison "
                           "fits one complex gain alpha over the whole plane before "
                           "differencing, so absolute units do not matter."),
@@ -961,6 +1079,10 @@ def export_case(section, params, g, out: Path, seg, source="horn", closed=False,
         "- **HFSS SBR+** is shooting-bounce-ray PO with PTD edge corrections: an\n"
         "  upgrade on our model, not an independent check. A useful third point,\n"
         "  not the validator.\n"
+        + ("- **Lumerical FDTD (the licensed solver): follow rail3D/LUMERICAL.md.**\n"
+           "  This folder also holds the horn as an Import source\n"
+           "  (`horn_source.mat` + `load_horn_source.lsf`, see `horn_source.json`).\n"
+           if source == "horn" else "") +
         "- **Lumerical FDTD** is valid physics but volumetric. Do NOT box the\n"
         "  whole scene out to z=150 mm (~390 Mcells at lambda/20, ~39 GB, which\n"
         "  does not fit a 32 GB GPU). Box the rail only, record a near-field\n"
@@ -1084,7 +1206,7 @@ def main() -> int:
     if args.export_case:
         export_case(section, params, g5, Path(args.export_case), args.seg,
                     source=args.source, closed=args.export_closed,
-                    fdtd_monitor_z=args.fdtd_monitor_z)
+                    fdtd_monitor_z=args.fdtd_monitor_z, device=device)
         if args.export_only:
             return 0
 

@@ -772,9 +772,12 @@ Measured at **λ=5 on the lab 5090** (2026-09-04):
 ## 13. Full-wave (MoM) cross-check — which solver, and how to feed it
 
 > **With Lumerical FDTD (the licence actually available): follow
-> `LUMERICAL.md`.** Score a run with `python fdtd_agreement.py --sample intact
-> --external intact_z30.mat` (both planes, % agreement, worst-pixel residuals
-> with locations, pass/fail). `--target` draws what passing looks like.
+> `LUMERICAL.md`** — rail3D's horn enters as an **Import source** (no TFSF;
+> `horn_source.py`, written into every `--source horn --export-case` bundle).
+> Rung 0 first: `python fdtd_agreement.py --injection empty_z0.mat --leak
+> empty_z30.mat`. Then score each run with `python fdtd_agreement.py --sample
+> intact --external intact_z30.mat` (both planes, % agreement, worst-pixel
+> residuals with locations, pass/fail). `--target` draws what passing looks like.
 > `python lumerical_mockup.py --screenshot <layout.png>` draws the target setup
 > into a screenshot of the FDTD Layout window, with every box taken from
 > `case.json`. The MoM discussion below still holds as the stronger reference if

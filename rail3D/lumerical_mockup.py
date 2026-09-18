@@ -1,4 +1,4 @@
-"""Draw the TARGET rung-2 setup into a screenshot of the Lumerical FDTD layout.
+"""Draw the TARGET rung-2 setup (horn Import source) into a Lumerical screenshot.
 
     python lumerical_mockup.py --screenshot path/to/lumerical_layout.png
 
@@ -8,8 +8,9 @@ a real screenshot. It is a MOCKUP, not a run: the title bar and every pane carry
 a TARGET label, so no crop of it can pass for a completed simulation.
 
 Every box is taken from the SAME calls that write case.json --
-compare_wavefronts.fdtd_plan (region, TFSF, monitor) and defect_bbox (the mesh
-override) -- on the geometry the exporter actually writes, so the picture
+compare_wavefronts.fdtd_plan (region, horn Import-source plane, monitor) and
+defect_bbox (the mesh override) -- on the geometry the exporter actually writes,
+with the source window from horn_source.py, so the picture
 cannot drift from LUMERICAL.md or from the STL you import. Rung 2 (intact rail)
 is drawn WITH the crack's mesh override because LUMERICAL.md 3.5 requires the
 identical override in the intact run; rung 3 only swaps the STL.
@@ -44,7 +45,7 @@ PML = (153 / 255, 76 / 255, 0)
 REGION = (253 / 255, 126 / 255, 0)
 HANDLE = (250 / 255, 71 / 255, 71 / 255)
 GRID = (0.16, 0.16, 0.16)
-SOURCE = "white"
+SOURCE = (0.72, 0.72, 0.72)            # Lumerical draws plane sources grey
 K_ARROW = (0.72, 0.38, 0.95)
 E_ARROW = (0.30, 0.60, 1.00)
 MONITOR = (1.0, 0.86, 0.0)
@@ -55,13 +56,17 @@ GRID_PX = 20                          # the CAD grid is ~20 px in the screenshot
 
 
 def setup_geometry() -> dict:
-    """Region/TFSF/monitor from fdtd_plan, override from defect_bbox, rail outline."""
+    """Region/source/monitor from fdtd_plan, override from defect_bbox, rail outline."""
+    import horn_source as hs
     sec = sections.load_reference_section()
     g = dict(cw.geom_now(), h_ms=30.0)
     n = mesh3d.default_arc_count(sec, config.MESH_DS)
     v, _ = cw.build_mesh(sec, {"class": "intact"}, config.MESH_DS, n, None)
     v = v.numpy()
-    plan = cw.fdtd_plan(v, g, 30.0, None)
+    horn = {"window_mm": hs.window(hs.ray_bundle()), "plane_z_mm": hs.Z_SRC,
+            "sample_mm": hs.SAMPLE, "frequency_Hz": hs.C0 / (config.WVL * 1e-3),
+            "polarisation": "E along y (s-pol)"}
+    plan = cw.fdtd_plan(v, g, 30.0, None, source="horn", horn=horn)
     defect = None
     if "crack" in config.DATASET_DIRS:
         files = sections.get_dataset_files("crack")
@@ -72,7 +77,8 @@ def setup_geometry() -> dict:
     # the rail's cross-section: the first swept slice, in arc order
     y0 = v[:, 1].min()
     sl = v[np.isclose(v[:, 1], y0, atol=1e-6)]
-    return {"sim": plan["simulation_region_mm"], "tfsf": plan["tfsf_source_mm"],
+    src = {"x": horn["window_mm"]["x"], "y": horn["window_mm"]["y"], "z": horn["plane_z_mm"]}
+    return {"sim": plan["simulation_region_mm"], "src": src,
             "mon": plan["monitor_mm"], "ov": ov,
             "rail_xz": sl[:, [0, 2]], "rail_y": (float(v[:, 1].min()), float(v[:, 1].max())),
             "theta": float(np.degrees(config.THETA_INC))}
@@ -133,13 +139,13 @@ def to_image(fig) -> Image.Image:
 
 
 def draw_xy(G):
-    s, t, m, o = G["sim"], G["tfsf"], G["mon"], G["ov"]
+    s, t, m, o = G["sim"], G["src"], G["mon"], G["ov"]
     fig, ax, mpp = view_axes("xy", (s["y"][0] - 14, s["y"][1] + 14), 0.0)
     region(ax, s["x"], s["y"])
     xr = (G["rail_xz"][:, 0].min(), G["rail_xz"][:, 0].max())
     rect(ax, xr, G["rail_y"], facecolor=RAIL, edgecolor="#d8dde3", lw=1, alpha=0.85, zorder=3)
     ax.plot([0, 0], G["rail_y"], color="#7c848f", lw=0.8, zorder=3)         # crown line
-    rect(ax, t["x"], t["y"], facecolor="none", edgecolor=SOURCE, lw=1.4, zorder=5)
+    rect(ax, t["x"], t["y"], facecolor=(*SOURCE, 0.18), edgecolor=SOURCE, lw=1.6, zorder=5)
     rect(ax, o["x"], o["y"], facecolor="none", edgecolor=OVERRIDE, lw=1.4, ls="--", zorder=6)
     rect(ax, m["x"], m["y"], facecolor="none", edgecolor=MONITOR, lw=1.8, zorder=7)
     handles(ax, m["x"], m["y"], mpp)
@@ -149,17 +155,17 @@ def draw_xy(G):
 
 
 def draw_xz(G):
-    s, t, m, o = G["sim"], G["tfsf"], G["mon"], G["ov"]
+    s, t, m, o = G["sim"], G["src"], G["mon"], G["ov"]
     fig, ax, mpp = view_axes("xz", (s["z"][0] - 12, s["z"][1] + 12), 0.0)
     region(ax, s["x"], s["z"])
     ax.add_patch(Polygon(G["rail_xz"], closed=True, facecolor=RAIL, edgecolor="#d8dde3",
                          lw=1, alpha=0.9, zorder=3))
-    rect(ax, t["x"], t["z"], facecolor="none", edgecolor=SOURCE, lw=1.4, zorder=5)
+    ax.plot(t["x"], [t["z"], t["z"]], color=SOURCE, lw=5, solid_capstyle="butt", zorder=5)
     rect(ax, o["x"], o["z"], facecolor="none", edgecolor=OVERRIDE, lw=1.4, ls="--", zorder=6)
     ax.plot(m["x"], [m["z"], m["z"]], color=MONITOR, lw=2.4, zorder=7)
     handles(ax, m["x"], (m["z"], m["z"]), mpp)
     th = np.radians(G["theta"])
-    start = (t["x"][1] - 6, t["z"][1] - 4)
+    start = (t["x"][1] - 12, t["z"])
     arrow(ax, start, (-np.sin(th), -np.cos(th)), K_ARROW, mpp, 80)          # 55 deg, down-left
     ax.plot(*start, marker="o", ms=9, mfc="none", mec=E_ARROW, mew=2, zorder=8)
     ax.plot(*start, marker=".", ms=6, color=E_ARROW, zorder=8)              # E out of page (+y)
@@ -167,17 +173,17 @@ def draw_xz(G):
 
 
 def draw_yz(G):
-    s, t, m, o = G["sim"], G["tfsf"], G["mon"], G["ov"]
+    s, t, m, o = G["sim"], G["src"], G["mon"], G["ov"]
     fig, ax, mpp = view_axes("yz", (s["z"][0] - 12, s["z"][1] + 12), 0.0)
     region(ax, s["y"], s["z"])
     zr = (G["rail_xz"][:, 1].min(), G["rail_xz"][:, 1].max())
     rect(ax, G["rail_y"], zr, facecolor=RAIL, edgecolor="#d8dde3", lw=1, alpha=0.9, zorder=3)
-    rect(ax, t["y"], t["z"], facecolor="none", edgecolor=SOURCE, lw=1.4, zorder=5)
+    ax.plot(t["y"], [t["z"], t["z"]], color=SOURCE, lw=5, solid_capstyle="butt", zorder=5)
     rect(ax, o["y"], o["z"], facecolor="none", edgecolor=OVERRIDE, lw=1.4, ls="--", zorder=6)
     ax.plot(m["y"], [m["z"], m["z"]], color=MONITOR, lw=2.4, zorder=7)
     handles(ax, m["y"], (m["z"], m["z"]), mpp)
-    arrow(ax, (0, t["z"][1] - 4), (0, -1), K_ARROW, mpp, 55)                 # k (its z part)
-    arrow(ax, (0, t["z"][1] - 4), (1, 0), E_ARROW, mpp, 45)                  # E along +y
+    arrow(ax, (0, t["z"]), (0, -1), K_ARROW, mpp, 55)                        # k (its z part)
+    arrow(ax, (0, t["z"]), (1, 0), E_ARROW, mpp, 45)                         # E along +y
     return to_image(fig)
 
 
@@ -202,11 +208,14 @@ def draw_persp(G):
     # arrows show THROUGH structures instead of being depth-sorted behind the
     # rail (matplotlib sorts whole collections, which hid the override + k/E)
     ax.computed_zorder = False
-    s, t, m, o = G["sim"], G["tfsf"], G["mon"], G["ov"]
+    s, t, m, o = G["sim"], G["src"], G["mon"], G["ov"]
     ax.add_collection3d(Line3DCollection(box_edges(s["x"], s["y"], s["z"]),
                                          colors=[REGION], linewidths=1.6, zorder=2))
-    ax.add_collection3d(Line3DCollection(box_edges(t["x"], t["y"], t["z"]),
-                                         colors=[SOURCE], linewidths=1.0, zorder=3))
+    zs = t["z"]
+    ax.add_collection3d(Poly3DCollection(
+        [[(t["x"][0], t["y"][0], zs), (t["x"][1], t["y"][0], zs),
+          (t["x"][1], t["y"][1], zs), (t["x"][0], t["y"][1], zs)]],
+        facecolors=[(*SOURCE, 0.30)], edgecolors=[SOURCE], linewidths=1.2, zorder=3))
     ax.add_collection3d(Line3DCollection(box_edges(o["x"], o["y"], o["z"]),
                                          colors=[OVERRIDE], linewidths=1.2, linestyles="--",
                                          zorder=4))
@@ -233,7 +242,7 @@ def draw_persp(G):
           (m["x"][1], m["y"][1], mz), (m["x"][0], m["y"][1], mz)]],
         facecolors=[(*MONITOR, 0.22)], edgecolors=[MONITOR], linewidths=1.4, zorder=5))
     th = np.radians(G["theta"])
-    p = np.array([t["x"][1] - 5, 0.0, t["z"][1] - 3])
+    p = np.array([t["x"][1] - 15, 0.0, t["z"]])
     d = np.array([-np.sin(th), 0.0, -np.cos(th)]) * 45
     ax.quiver(*p, *d, color=K_ARROW, linewidth=2.4, arrow_length_ratio=0.25, zorder=6)
     ax.quiver(*p, 0, 30, 0, color=E_ARROW, linewidth=2.2, arrow_length_ratio=0.3, zorder=6)
@@ -244,7 +253,7 @@ def draw_persp(G):
     # legend, drawn in pixel space so it stays legible at pane size
     d = ImageDraw.Draw(img)
     f = _font(12)
-    items = [("FDTD region / PML", REGION), ("TFSF source (s-pol, 55 deg)", (1, 1, 1)),
+    items = [("FDTD region / PML", REGION), ("horn Import source, z = 15 mm", SOURCE),
              ("z = 30 mm monitor", MONITOR), ("mesh override (lambda/20)", OVERRIDE),
              ("rail, PEC (STL)", RAIL), ("k", K_ARROW), ("E (along y)", E_ARROW)]
     x, y = w - 205, h - 16 * len(items) - 8
@@ -283,7 +292,7 @@ def objects_tree(shot: Image.Image):
     d.rectangle([44, 305, 140, 620], fill=(230, 230, 230))
     f = _font(15)
     rows = [("model", 0, icons["model"], None), ("FDTD", 1, icons["FDTD"], None),
-            ("rail", 1, None, RAIL), ("TFSF", 1, icons["source"], None),
+            ("rail", 1, None, RAIL), ("horn", 1, icons["source"], None),
             ("mesh", 1, None, OVERRIDE), ("mon30", 1, None, MONITOR)]
     for i, (name, lvl, icon, col) in enumerate(rows):
         y = 307 + 23 * i
@@ -302,7 +311,7 @@ def title_bar(shot: Image.Image):
     d = ImageDraw.Draw(shot)
     d.rectangle([24, 0, 1150, 21], fill=(243, 243, 243))
     f, fb = _font(15), _font(15, bold=True)
-    base = "Ansys Lumerical 2025 R1 Finite Difference IDE - rail3D_rung2_intact.fsp   "
+    base = "Ansys Lumerical 2025 R1 Finite Difference IDE - rail3D_rung2_horn.fsp   "
     d.text((27, 1), base, fill=(0, 0, 0), font=f)
     d.text((27 + d.textlength(base, font=f), 1),
            "[TARGET SETUP - illustration, not a completed run]", fill=(200, 0, 0), font=fb)
@@ -327,8 +336,8 @@ def main() -> int:
               f"the setup in the wrong place.")
         return 1
     G = setup_geometry()
-    print(f"region {G['sim']}\nTFSF   {G['tfsf']}\nmonitor {G['mon']}\noverride {G['ov']}")
-    label = "TARGET SETUP (mockup) - rung 2 intact rail - LUMERICAL.md"
+    print(f"region {G['sim']}\nsource {G['src']}\nmonitor {G['mon']}\noverride {G['ov']}")
+    label = "TARGET SETUP (mockup) - rung 2, horn Import source - LUMERICAL.md"
     for pane, fn in (("xy", draw_xy), ("xz", draw_xz), ("yz", draw_yz), ("persp", draw_persp)):
         img = fn(G)
         tag(img, label)

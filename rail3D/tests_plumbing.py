@@ -21,11 +21,17 @@ run rather than here:
       "moved from init" number is only meaningful if that holds), writes a
       wrapped phase with |t| = 1, and does not change matplotlib's backend on
       import (the notebook plots inline).
-  P4  fdtd_agreement.py --external recovers rail3D's own field from a file
-      shaped like LUMERICAL.md 5's matlabsave: SI metres, a 4x finer FDTD-like
-      grid, CONJUGATED (exp(+jwt)), an arbitrary complex gain. The round trip
-      must score ~100% on both planes -- anything less is the tool, not physics,
-      and would otherwise first show up as "FDTD disagrees" on a real run.
+  P4  fdtd_agreement.py --external recovers rail3D's own field (horn, plate)
+      from a file shaped like LUMERICAL.md's matlabsave: SI metres, a 4x finer
+      FDTD-like grid, an arbitrary complex gain, and Lumerical's exp(-i w t)
+      convention -- so it must align AS-IS. A conjugated (HFSS/FEKO-style) copy
+      must still be detected. The round trip must score ~100% on both planes:
+      anything less is the tool, not physics.
+  P5  horn_source.py writes the Import-source file in the layout Lumerical's
+      own example uses (x, y column vectors in m, scalar z, (nx, ny) complex
+      E/H), with E_y equal to rail3D's windowed horn field, flux going DOWN,
+      and |E|/|H| = Z0 -- the three things that decide whether FDTD injects the
+      horn at all, and in the right direction.
 
 Every check runs the real code path on tiny synthetic inputs. Add one here
 whenever a run dies on something that was not physics.
@@ -260,7 +266,8 @@ def p4_fdtd_agreement_roundtrip() -> dict:
         gw = fa.window_geom(plan["monitor_mm"])
         dev = torch.device("cpu")
         ref = cw.solve(g=gw, section=sec, params=params, device=dev, chunk=512, seg=None,
-                       source="plane", shadow="raycast", min_t=config.SHADOW_MIN_T)
+                       source="horn", terms="psi12", shadow="raycast",
+                       min_t=config.SHADOW_MIN_T)
         X, Y = cw.plane_grid(gw, dev)
         xs, ys = X[0, :, 0].numpy(), Y[0, 0, :].numpy()
         # FDTD-like: 4x finer, one extra sample beyond each edge (a real monitor
@@ -277,7 +284,7 @@ def p4_fdtd_agreement_roundtrip() -> dict:
             for part, unit in (("real", 1), ("imag", 1j)))
         gain = 2.5e-3 * np.exp(1j * np.radians(30.0))
         mat = tmp / "plate_z30.mat"
-        savemat(str(mat), {"Ey": np.conj(fine) * gain,
+        savemat(str(mat), {"Ey": fine * gain,          # exp(-i w t): NOT conjugated
                            "x": (fx * 1e-3)[:, None], "y": (fy * 1e-3)[:, None]})
 
         _sys.argv = ["fdtd_agreement.py", "--sample", "plate", "--external", str(mat),
@@ -287,7 +294,10 @@ def p4_fdtd_agreement_roundtrip() -> dict:
         al, z30, ms = out["alignment"], out["z30"], out["ms_plane"]
         res = {
             "exit_ok": rc == 0,
-            "conjugation_detected": bool(al["conjugated"]),
+            "aligned_as_is": al["convention"] == "as-is",
+            # HFSS/FEKO fields arrive conjugated; that path must still be caught
+            "conjugate_still_detected": bool(cw.align_external(
+                torch.as_tensor(r).conj() * gain, torch.as_tensor(r))[1]["conjugated"]),
             "gain_recovered": abs(al["gain"] * 2.5e-3 - 1) < 0.01,
             "z30_corr": round(z30["complex_corr"], 6),
             "ms_corr": round(ms["complex_corr"], 6),
@@ -310,13 +320,54 @@ def mesh3d_arc(section) -> int:
 
 
 # ---------------------------------------------------------------------------
+def p5_horn_source() -> dict:
+    """The horn Import-source file: layout, E_y fidelity, direction, impedance."""
+    from scipy.io import loadmat
+    import horn_source as hs
+
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        dev = torch.device("cpu")
+        info = hs.build(tmp, dev, sample=1.0, check=False)       # coarse: seconds
+        m = loadmat(str(tmp / "horn_source.mat"))
+        nx, ny = info["grid"]
+        xs = np.arange(info["window_mm"]["x"][0], info["window_mm"]["x"][1] + 1e-9, 1.0)
+        ys = np.arange(info["window_mm"]["y"][0], info["window_mm"]["y"][1] + 1e-9, 1.0)
+        X, Y = np.meshgrid(xs, ys, indexing="ij")
+        want = hs.horn_field(xs, ys, hs.Z_SRC, dev) * hs.taper(X, *info["window_mm"]["x"]) \
+            * hs.taper(Y, *info["window_mm"]["y"])
+        lsf = (tmp / "load_horn_source.lsf").read_text(encoding="utf-8")
+        out = {
+            "x_column_m": m["x"].shape == (nx, 1) and abs(m["x"][0, 0] - xs[0] * 1e-3) < 1e-12,
+            "y_column_m": m["y"].shape == (ny, 1),
+            "z_scalar_m": m["z"].size == 1 and abs(float(m["z"].ravel()[0]) - hs.Z_SRC * 1e-3) < 1e-12,
+            "fields_nx_ny_complex": all(m[k].shape == (nx, ny) and np.iscomplexobj(m[k])
+                                        for k in ("Ex", "Ey", "Ez", "Hx", "Hy", "Hz")),
+            "ey_is_rail3d_horn": bool(np.allclose(m["Ey"], want, rtol=1e-5, atol=1e-9)),
+            "flux_down": info["flux_down_fraction"] > 0.999,
+            "impedance_is_Z0": abs(info["impedance_ohm"] / info["Z0_ohm"] - 1) < 0.01,
+            "lsf_uses_documented_calls": all(t in lsf for t in (
+                'rectilineardataset("EM fields", x, y, z)', 'addattribute("E"',
+                'addattribute("H"', "importdataset(EM)", '"wavelength span", 0',
+                '"direction", "Backward"')),
+            "flux_down_fraction": round(info["flux_down_fraction"], 6),
+            "impedance_ohm": round(info["impedance_ohm"], 2),
+        }
+        out["pass"] = all(v for v in out.values() if isinstance(v, bool))
+        return out
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
 def main() -> int:
     ok = True
     for name, fn in [("P0_stage_root", p0_stage_root),
                      ("P1_history_schema", p1_history_schema),
                      ("P2_zero_phase_is_baseline", p2_zero_phase_is_baseline),
                      ("P3_slm_profile", p3_slm_profile),
-                     ("P4_fdtd_agreement_roundtrip", p4_fdtd_agreement_roundtrip)]:
+                     ("P4_fdtd_agreement_roundtrip", p4_fdtd_agreement_roundtrip),
+                     ("P5_horn_source", p5_horn_source)]:
         t0 = time.time()
         try:
             res = fn()

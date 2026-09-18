@@ -74,6 +74,11 @@ Trainable metasurface + detector "barcode" system for rail defect detection.
   against the `n_det/130` floor without being asked. `rail3D_pipeline.ipynb`
   is the narrated route, and its section 9 reads results from a FRESH
   KERNEL — see its section 0 for which cells to run.
+- **Full-wave cross-check = Lumerical FDTD with rail3D's horn as an Import
+  source, no TFSF** (`rail3D/LUMERICAL.md`, README finding 28). Lumerical is
+  exp(−iωt) like rail3D, so its exports align AS-IS; the GPU solver has no TFSF
+  and needs 2025 R1.1+ for Import sources; STL imports as µm unless the length
+  unit is mm first. Rung 0 (empty box) gates everything after it.
 - **Interpreting a returned result set: `rail3D/READING_RESULTS.md`.** Pass rules
   for every gate, what each field means, how to tell which commit produced a
   report, and the specific ways each output has been misread. Read it before
@@ -397,7 +402,9 @@ plane), `inspect_dataset.py` (review a dataset), `analyze_results.py` (where it
 succeeds and fails, per defect parameter), `sweep_detectors.py` (final detector
 count / MS→detector distance), `slm_profile.py` (the trained mask: wrapped phase,
 |t| — exactly 1 for the phase-only SLM — incident light, change from init),
-`fdtd_agreement.py` (Lumerical vs rail3D at z = 30 and the MS plane; `--target`
+`horn_source.py` (rail3D's horn as a Lumerical Import source: E+H .mat + .lsf),
+`fdtd_agreement.py` (Lumerical vs rail3D at z = 30 and the MS plane, horn by default;
+`--injection` is rung 0; `--target`
 draws a labelled TARGET), `lumerical_mockup.py` (the target setup drawn into a
 Layout-window screenshot), `rail3D_pipeline.ipynb` (narrated end to end).
 

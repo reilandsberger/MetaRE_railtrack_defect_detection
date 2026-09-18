@@ -1,424 +1,433 @@
-# Validating rail3D against Ansys Lumerical FDTD
+# Validating rail3D against Ansys Lumerical FDTD — horn Import source
 
-*Last updated: 2026-09-18 · λ = 5 mm (59.9585 GHz) · written for Lumerical FDTD 2025 R1*
+*Last updated: 2026-09-18 · λ = 5 mm (59.9585 GHz) · written for Lumerical FDTD
+2025 R1 (modern UI). Rewritten for the horn Import-source design: no TFSF.*
 
-The question this answers: `field3d.py` is **physical optics** — scalar, PEC
-tangent-plane currents, single + double bounce. Crack widths are 2–5 mm =
-**0.4–1λ** at 60 GHz, which is exactly where the tangent-plane approximation is
-expected to break. V1–V3 only prove we solve *our own* integral correctly; V5
-compares against the 2D code, which shares the assumption. A full-wave run is
-the only way to measure what PO misses.
+**What this answers.** `field3d.py` is **physical optics**: scalar, PEC
+tangent-plane currents, single + double bounce. Crack lines are 1.5–3 mm wide =
+**0.3–0.6λ** at 60 GHz, exactly where the tangent-plane approximation is expected
+to break. V1–V3 prove we solve *our own* integral correctly; only a full-wave
+solver can measure what PO misses. Here that solver is Lumerical FDTD, driven by
+**rail3D's own horn wavefront** as an Import source.
 
-MoM (HFSS-IE / FEKO) would be the natural tool — see README finding 20 — but
-with only Lumerical available, FDTD works **if the box is scoped correctly**.
-That scoping is the whole design of this document, so read §1 before building
-anything.
-
----
-
-## 1. The one architectural decision: do NOT put the detector plane in the box
-
-The obvious setup — box the whole scene, monitor at `H_MS` = 150 mm — is wrong
-twice over.
-
-**It does not fit.** With the horn included the box is 387 Mcells at λ/20,
-~39 GB. Over a 32 GB GPU, and most of it is empty air.
-
-**It would not be trustworthy even if it fit.** FDTD waves travel slightly slow
-on the grid, and the error *accumulates with distance*. Computed for this exact
-geometry (`case.json` → `fdtd.mesh_options`):
-
-| mesh | cells | RAM | phase error to a monitor at z = 30 mm | …if propagated to H_MS = 150 mm |
-|---|---|---|---|---|
-| λ/10 (0.500 mm) | 28.8 M | 2.9 GB | 25° | **125°** |
-| λ/15 (0.333 mm) | 97.1 M | 9.7 GB | 11° | 54° |
-| λ/20 (0.250 mm) | 230 M | 23 GB | 6° | 30° |
-
-125° of numerical phase error would swamp every physical effect we are trying
-to measure.
-
-**So: record the near field at z = 30 mm (6λ above the crown) and propagate the
-rest analytically**, with rail3D's angular-spectrum propagator — which V3
-already checks against the Rayleigh–Sommerfeld path to 0.13%. FDTD then only
-has to do the part it is uniquely good at: the scattering off the surface,
-which is precisely the part PO approximates.
-
-This also shrinks the box to something comfortable: **28.8 Mcells at λ/10**.
-
-### What you will see at z = 30 that you do not see at 150
-
-The rig is **dark-field** by design: at H_MS the specular lobe lands at
-x = −214 mm, far outside the ±75 mm aperture. At z = 30 mm it lands at
-**x = −42.8 mm — inside the monitor**, and it will dominate the picture.
-
-That is useful, not a problem:
-
-- **Rungs 0–2** (setup, plate, intact rail) are *specular-dominated*. A bright,
-  well-placed lobe is an easy, unambiguous check that the source angle,
-  polarisation and units are right.
-- **Rung 3** compares the **difference** field (defect − intact), where the
-  specular lobe is common-mode and cancels — leaving the defect signature,
-  which is the actual physics question.
+Every Lumerical-specific statement below is cited to Ansys's documentation
+([Sources](#sources)). Where a step is an inference rather than documented, it
+says so, and rung 0 exists to check it.
 
 ---
 
-## 2. Before you build anything
+## 0. Before you start — three checks
 
-**Units.** Lumerical is SI internally; every length below is given in mm and
-every property field in the GUI has a unit dropdown — set it to `mm`. The one
-place this bites is the STL import, which must be told the file is in
-millimetres (STL carries no units).
+1. **Version.** File tab → *About*. Import sources run on the **GPU only from
+   2025 R1.1**: *"Lumerical FDTD can now run GPU simulations with single-frequency
+   import sources … the import source data must be single-frequency"* [R1.1 notes].
+   On the base 2025 R1 build, run on CPU, or install the latest R1.x patch.
+2. **GPU.** Lumerical's GPU solver needs CUDA 12, driver ≥ 527.41 on Windows and
+   compute capability ≥ 5.0 [GPU]. No 2025 R1.x note mentions the RTX 50-series
+   (Blackwell) explicitly, so **let the software decide**: FDTD tab → *Check* →
+   **GPU** runs the GPU memory/compatibility check [GPU, UI]. If it refuses, use
+   CPU. The setup below is identical on either.
+3. **Why no TFSF.** The horn is the source (your requirement), and TFSF could not
+   run on your GPU anyway: *"FDTD GPU does not support TFSF sources and an error is
+   shown if a TFSF source is present"* [GPU].
 
-**Frequency.** `59958491600` Hz exactly (= c / 5.000 mm). Do not round to
-60 GHz — that is a 0.07% wavelength shift, which over 30λ is 7° of phase.
-
-**Material.** `PEC (Perfect Electric Conductor)` from the material database.
-This matches the reflection coefficient −1 assumed in `scattered_fields`.
-
-**Polarisation — this one is physics, not bookkeeping.** rail3D is **scalar**.
-The only polarisation that maps cleanly onto it is **s-polarised (TE): E along
-ŷ**, perpendicular to the x–z plane of incidence. For s-pol on PEC the
-tangential-E reflection coefficient is −1, which is exactly the minus sign in
-`field3d.scattered_fields`. So: set the source polarisation angle to put E along
-y, and **export `E_y`**. Comparing a p-polarised run, or the field magnitude,
-against our scalar field is not a meaningful test.
-
-**Get the case bundles** (run from `rail3D/`):
+**Generate the case bundles** (from `rail3D/`, on either machine — ~15 s each):
 
 ```bash
-python compare_wavefronts.py --sample plate  --source plane --plane-z 30 --export-only --export-case data/generated/fdtd_plate
+python compare_wavefronts.py --sample intact --source horn --plane-z 30 --export-closed --export-only --export-case data/generated/fdtd_intact
 ```
 ```bash
-python compare_wavefronts.py --sample intact --source plane --plane-z 30 --export-closed --export-only --export-case data/generated/fdtd_intact
-```
-```bash
-python compare_wavefronts.py --sample crack  --source plane --plane-z 30 --export-closed --export-only --export-case data/generated/fdtd_crack
+python compare_wavefronts.py --sample crack --source horn --plane-z 30 --export-closed --export-only --export-case data/generated/fdtd_crack
 ```
 
-Each writes `rail_surface.stl` (import this), `rail_surface.obj`, a `README.md`,
-and `case.json` — whose `fdtd` block holds every number in §3, derived from the
-geometry actually exported, so it cannot drift from this document.
+Each folder holds:
+
+| file | what it is |
+|---|---|
+| `rail_surface.stl` | the rail, a **watertight closed** body in **mm** (crown at z = 0) |
+| `horn_source.mat` | the horn wavefront as plain arrays (SI) — input to the script below |
+| `load_horn_source.lsf` | builds the Lumerical dataset and the Import source |
+| `horn_source.json` | source plane, window, and the self-check numbers |
+| `case.json` → `fdtd` | **every number in §4**, derived from the exported geometry |
 
 ---
 
-## 3. Building the simulation (UI walkthrough)
+## 1. The design, and why each piece is where it is
 
-Menu labels are from FDTD 2025 R1. If a label differs slightly, the action is
-the thing to follow. Everything is on the **Objects Tree** (left) and the
-**property editor** you get by double-clicking an object.
+```
+ z (mm)
+  38 ┬─────────────────────────── FDTD region top (PML above)
+  30 ┤ ═══════ mon_z30 ═══════     monitor: records UP-going field only
+  15 ┤   ▓▓▓▓▓ horn Import source ▓▓▓▓▓▓▓▓   injects DOWN at 55°  ↙
+   0 ┤      ╭──crown──╮                     rail (PEC STL)
+ -80 ┤      └─ web ───┘
+ -93 ┴─────────────────────────── FDTD region bottom
+```
 
-### 3.1 Simulation region
+**Near field at z = 30 mm, not the metasurface plane.** FDTD waves travel
+slightly slow on the grid, and the error grows with distance. For this geometry
+(`case.json` → `fdtd.mesh_options`):
 
-**Simulation** toolbar dropdown → **Region**. Double-click the new `FDTD` object.
+| uniform mesh | phase error rail → z = 30 | …if FDTD itself went to H_MS = 150 |
+|---|---|---|
+| λ/10 (0.500 mm) | 25° | **125°** |
+| λ/15 (0.333 mm) | 11° | 54° |
+| λ/20 (0.250 mm) | 6° | 30° |
 
-*Geometry* tab — switch each unit dropdown to `mm`:
+So FDTD records at z = 30 and rail3D's angular-spectrum propagator (checked by V3
+to 0.13%) carries the field up to the metasurface.
 
-| field | value |
+**The horn enters as an Import source, not as geometry.** The horn's phase centre
+is 140 mm out at 55° — (x, z) = (115, 80) mm. Boxing it with the rail would be
+~390 Mcells. Lumerical's Import source instead *"allows the user to specify a
+custom spatial field profile for the source injection plane … from an analytic
+formula, … or from other simulation tools"* [Import]. `horn_source.py` computes
+rail3D's own horn field on a plane and writes it in Lumerical's format.
+
+**The source plane is at z = 15 mm, between the rail and the monitor.** It
+injects **down**. The monitor sits on the far side of it, so it sees only what
+comes **up**: the reflected and scattered field, every bounce included. No TFSF
+and no subtraction run are needed to separate incident from scattered light.
+
+**The source window covers only the rays that can reach the rail.** The horn is
+a 3.4λ × 2.7λ aperture, so its beam is wide: at crown height the −20 dB contour
+spans y = ±128 mm. `horn_source.py` projects every lit rail facet toward the phase
+centre onto z = 15, adds 6λ, and applies a 2λ raised-cosine edge taper. The
+result is x −28…102.5, y ±78.25 mm. Checked in free space against rail3D's full
+horn on the rail's footprint (`horn_source.json`):
+
+| plane | complex correlation with the full horn |
 |---|---|
-| x min / x max | **−88 / 88** mm |
-| y min / y max | **−78 / 78** mm |
-| z min / z max | **−92.9 / 38** mm |
-| dimension | 3D |
+| crown, z = 0 | 0.9989 |
+| z = −40 | 1.0000 |
+| z = −80 (web) | 0.9991 |
 
-*General* tab: **simulation time** `10e-9` s (10 ns). This is an upper bound —
-auto-shutoff will end it earlier. Leave **auto shutoff min** at `1e-5`.
+The window carries 72% of the horn's power. The other 28% never reaches the rail.
 
-*Mesh settings* tab: **mesh type** `auto non-uniform`, **mesh accuracy** `2` for
-the first runs. Tick **"conformal variant 1"** under mesh refinement if
-available — it substantially reduces staircasing on curved PEC and is the single
-best accuracy-per-cell setting for this problem.
+**E and H are both supplied.** Lumerical: without H, the source *"makes certain
+assumptions … These assumptions hold true for narrow sources such as Gaussian and
+plane wave sources, but may lead to significant errors for other sources … When
+defining complex beams, it is best to specify both E and H"* [Import].
+- **E_y** is rail3D's scalar field, unchanged: s-polarised, E along the rail.
+- **Each plane-wave component** carries ŷ projected transverse to its own k.
+- **H = (k × E)/(ωμ₀)**.
 
-> To force an exact λ/10 grid instead of the accuracy slider, set mesh type to
-> `uniform` and `dx = dy = dz = 0.5` mm. That reproduces the table in §1
-> exactly. The auto mesher is usually better per cell; use uniform when you want
-> the cell count to be predictable.
+Self-checks: 99.99% of the flux goes down, |E|/|H| = 376.4 Ω against Z₀ = 376.7 Ω,
+and cross-polarisation is Ex/Ey 0.17, Ez/Ey 0.14 rms.
 
-*Boundary conditions* tab: **PML on all six** faces. Leave layers at 8,
-profile `stabilized`.
+**Time convention — no conjugation expected.** Lumerical's documented transform is
+*"P(ω) = ∫ e^{iωt} P(t) dt"*, with J = −iωP [Force]. That is the exp(−iωt)
+convention, the same as rail3D, so exports align **as-is**. (HFSS and FEKO use
+exp(+jωt) and arrive conjugated. An earlier version of this document wrongly
+said Lumerical did too.)
 
-### 3.2 Source
-
-**Sources** dropdown → **TFSF** (total-field scattered-field).
-
-TFSF injects the plane wave *inside* its box; outside it, only the **scattered**
-field exists. That is exactly what `psi1` is, so the monitor reads a directly
-comparable quantity with no subtraction.
-
-*Geometry* tab:
-
-| field | value |
-|---|---|
-| x min / x max | **−44 / 43.9** mm |
-| y min / y max | **−65 / 65** mm |
-| z min / z max | **−84.9 / 10** mm |
-
-The box must fully enclose the rail (which spans x ±39, y ±60, z −80…0) with
-about 1λ of clearance, and its top must be **below the monitor** so the monitor
-sits in the scattered-field region.
-
-*General* tab:
-
-| field | value |
-|---|---|
-| injection axis | z |
-| direction | backward |
-| angle theta | **55** ° |
-| angle phi | **180** ° |
-| polarization angle | **90** ° (puts E along y — see §2) |
-| wavelength / frequency | set **frequency**, `59958491600` Hz, single point |
-
-> **Verify φ rather than trusting it.** Conventions for which way θ/φ tilt the
-> k-vector differ between tools. Run rung 0 (§4) and look at where the specular
-> lobe lands: it must be at **negative x**. If it comes out at positive x,
-> change `angle phi` to `0` and re-run. This is the cheapest possible check and
-> it is why rung 0 exists.
-
-### 3.3 Monitor
-
-**Monitors** dropdown → **Frequency-domain field and power**.
-
-*Geometry* tab:
-
-| field | value |
-|---|---|
-| monitor type | 2D Z-normal |
-| x min / x max | **−80 / 80** mm |
-| y min / y max | **−70 / 70** mm |
-| z | **30** mm |
-
-**Why y is ±70 and not ±42.5 (changed 2026-09-18).** This window is what gets
-carried up to the metasurface plane for the MS-plane comparison
-(`fdtd_agreement.py`). The rail runs y = ±60 mm, and light from its ends that
-reaches the metasurface passes z = 30 *outside* a ±42.5 mm window. Measured by
-propagating rail3D's own z = 30 field with the ASM and comparing it with rail3D
-solved directly at H_MS (intact rail, plane wave, production shadowing):
-
-| monitor window | reproduces the MS-plane field (complex corr) |
-|---|---|
-| ±80 × ±42.5 mm (the old setting) | 0.943 |
-| **±80 × ±70 mm** | **0.983** |
-| ±110 × ±80 mm | 0.989 |
-
-y is what matters: widening x barely helps. The rule `case.json` now applies is
-y = ±(rail half-length + 2λ). It costs ~7% more cells.
-
-The monitor is also wider than our z = 30 comparison plane, so resampling never
-has to extrapolate. If you shrink it, the tools report coverage below 100%
-rather than silently scoring zeros as disagreement.
-
-*General* tab: **override global monitor settings** ✓, **frequency points** `1`.
-Under *Data to record*, `E` is enough (untick H to save disk).
-
-### 3.4 Geometry
-
-**Structures** dropdown → **Import**. In the import dialog choose
-`rail_surface.stl` from the case bundle, and **set file units to millimetres**.
-Leave the x/y/z offsets at 0 — the STL is already in our coordinates, crown at
-z = 0.
-
-Then in the object's *Material* tab select **PEC (Perfect Electric Conductor)**.
-
-Check it landed right: in the CAD view the crown should sit at z = 0 with the
-rail hanging below, and the whole body inside the TFSF box.
-
-### 3.5 Defect refinement (rung 3 only)
-
-A 2 mm crack at a 0.5 mm global mesh is 4 cells across — too coarse to trust.
-Refine only where it matters: **Simulation** dropdown → **Mesh** (a mesh
-override region).
-
-For the exported `crack` sample (rev.3 defect model: three parallel box divots;
-sample 0 is transverse, 4.36 mm deep), `case.json` → `fdtd.defect_refinement`
-gives:
-
-| field | value |
-|---|---|
-| x min / x max | **−17.5 / 41.2** mm |
-| y min / y max | **−23.1 / 7.5** mm |
-| z min / z max | **−16.1 / 9.9** mm |
-| dx = dy = dz | **0.25** mm (λ/20) |
-
-That adds ~2.6 Mcells to a 28.8 Mcell run. Re-export after any defect-model
-change and take the numbers from `case.json`, which is regenerated from the
-geometry. The rev.2 box printed here previously is stale. **Use the identical override
-box in the intact run too**, even though there is no defect there — matched
-meshes are what make the difference field cancel numerical error.
+**The monitor is y ±70 mm, not ±42.5.** Its window is what gets carried to the
+metasurface plane, and cut-end light from the 120 mm rail crosses z = 30 outside
+±42.5 mm (README finding 27).
 
 ---
 
-## 4. The ladder — run these in order
+## 2. Finding your way around the 2025 R1 interface
 
-Each rung isolates one unknown. Skipping to rung 3 means a disagreement has four
-possible causes and you cannot tell which.
+2025 R1 introduced a tabbed toolstrip [UI]. What you see in the Layout window:
 
-### Rung 0 — setup sanity, no comparison to our code
+| area | what it is for |
+|---|---|
+| **Objects Tree** (left) | every object; **double-click one to open its property editor** (tabs: General / Geometry / Mesh settings / …) |
+| **XY / XZ / YZ / Perspective views** | the CAD panes; selected objects show red handles |
+| **Result View** (left, below) | results of the selected object after a run |
+| **Script Prompt / Script Workspace** (bottom) | type script commands, see variables. Show/hide under **View → Show** [UI] |
+| **Script File Editor** | open and run `.lsf` files (View → Show → Script File Editor) [UI] |
 
-Delete the imported rail; add a **Rectangle** structure, PEC, spanning
-x ±60, y ±60, z from −5 to 0 mm. Run.
+The toolstrip tabs you will use [UI]:
 
-Check three things, all from `Visualize → E` on the monitor:
+| tab → group → button | what it does |
+|---|---|
+| **File → Units → Length** | the default length unit. **Set to mm first** (§4 step 1) |
+| **File → Program → About / Working Directory** | software version; the folder scripts read and write |
+| **Design → Solvers → FDTD** | *"Add an FDTD solver simulation object"* — **the FDTD tab only appears after this** |
+| **Design → Import → STL** | import the rail |
+| **Design → Structures → Rectangle** | the rung-1 plate |
+| **Design → Materials → Database** | material list (PEC lives here) |
+| **FDTD → Sources → Import** | *"Import custom source"* — the horn |
+| **FDTD → Monitors → Frequency-Domain** | *"Add frequency-domain field profile monitor"* |
+| **FDTD → Misc. → Mesh** | *"Add mesh control region"* — the crack override |
+| **FDTD → Settings → Global Source / Global Monitor** | frequency and frequency points for all sources / monitors |
+| **FDTD → Check → CPU / GPU** | memory + compatibility check before running |
+| **FDTD → Run Simulation** | CPU/GPU toggle, resource drop-down, **Run** |
 
-1. The specular lobe is at **negative x**, near x ≈ −43 mm. If not, fix
-   `angle phi` (§3.2).
-2. |E| is smooth, with no bright fringe hugging the box walls — a bright edge
-   means the PML is too close or the structure touches it.
-3. Auto-shutoff fired (check the log) rather than the run hitting 10 ns. If it
-   hit the limit, something is resonating; check for PEC touching PML.
-
-Nothing here involves rail3D. If rung 0 misbehaves, no comparison downstream is
-worth running.
-
-### Rung 1 — flat plate, first true code-to-code comparison
-
-Import `fdtd_plate/rail_surface.stl` (a 75 × 75 mm PEC square in the z = 0
-plane), or keep the rectangle from rung 0 but resize it to x ±37.5, y ±37.5.
-
-Both solvers model this exactly, so **a disagreement here is a setup error, not
-physics** — units, angle, polarisation, phase reference, or the monitor grid.
-
-Do not proceed until `complex_corr` is high (≳0.95). Getting rung 1 to agree is
-the bulk of the work; rungs 2 and 3 are then mostly re-runs.
-
-> The plate is a *finite* sheet and both solvers see the same finite sheet, so
-> its edge diffraction is part of the agreed problem — unlike the rail, where a
-> truncation the real object does not have would be a confound (§6).
-
-### Rung 2 — intact rail
-
-Import `fdtd_intact/rail_surface.stl`. Same box, same mesh, same source.
-
-Now the curved PEC surface is in play. This tests PO currents on curvature —
-still specular-dominated at z = 30, so expect good agreement. A drop from
-rung 1 localises the problem to the surface model.
-
-### Rung 3 — cracked rail, and the difference field
-
-Import `fdtd_crack/rail_surface.stl`, add the mesh override from §3.5, and
-**re-run rung 2 with that same override** so the two runs are numerically
-matched.
-
-This is the measurement. Compare:
-
-- **absolute fields** — expect them to agree about as well as rung 2, since both
-  are specular-dominated
-- **the difference field** `E_crack − E_intact` against
-  `psi1_crack − psi1_intact` — **this is the real result.** It isolates the
-  defect signature, cancels the specular lobe and most of the common-mode
-  numerical error, and is the quantity the detector barcodes actually respond to.
-
-A large disagreement *here* while rungs 1–2 agree is exactly the finding worth
-having: it is PO failing on a sub-wavelength feature, which is what we set out
-to measure. Report it, do not tune it away.
+Your blank-project screenshot shows only File / View / Design for exactly this
+reason: step 2 below adds the FDTD solver, and the FDTD tab appears.
 
 ---
 
-## 5. Getting the data back out
+## 3. Preparing each piece (outside Lumerical)
 
-In Lumerical's **Script Prompt** (bottom of the window) or a `.lsf` file:
+**3.1 The rail — `rail_surface.stl`.** Written by the export command in §0 from
+the same mesh rail3D scatters from, capped into a closed body (`--export-closed`,
+`case.json` → `mesh.watertight: true`). FDTD needs a closed solid; an open shell
+has no inside to fill with PEC. The file is in **millimetres**, and **STL carries
+no unit**: *"a 30 (mm) … cube … created in a CAD with a length unit set to mm will
+be recognized as 30 (um) … by default"* [STL]. That is why §4 step 1 exists.
+
+**3.2 The horn wavefront — `horn_source.mat` + `load_horn_source.lsf`.** Written
+by the same export (or standalone: `python horn_source.py --out <dir>`). The
+`.mat` uses the exact layout of Lumerical's own example `usr_custom_source.lsf`
+[Equation]:
+- x and y as column vectors in metres, z as a scalar
+- Ex…Hz as (nx, ny) complex matrices, x varying first
+- sampled at λ/20 (0.25 mm), so interpolating the 55° phase ramp onto the FDTD
+  mesh costs < 1% amplitude
+
+The `.lsf` turns those arrays into a Lumerical dataset with the documented calls,
+`rectilineardataset("EM fields", x, y, z)` and `addattribute("E"…)` /
+`addattribute("H"…)` [Import], then loads it with `importdataset` [Equation]. The
+GUI's *Import Source* button needs a `.mat` holding a Lumerical **dataset**, not
+plain arrays [Import]. That is why the script, not the raw `.mat`, comes first.
+
+**3.3 The plate (rung 1).** Built natively in Lumerical, not from STL. rail3D's
+plate is a zero-thickness sheet, which has no volume to import.
+
+---
+
+## 4. Building the simulation — step by step
+
+Each step names the ribbon path, then the property-editor fields. All lengths in
+mm once step 1 is done. The numbers are rung 2 (intact rail); rungs 0, 1 and 3
+reuse this file with the changes listed in §5.
+
+**Step 1 — units.** File → Units → **Length: mm** (also Frequency: GHz if you
+like). *"It is recommended that you choose the right length unit in the layout
+editor prior to importing STL files"* [STL].
+
+**Step 2 — the FDTD region.** Design → Solvers → **FDTD**, then double-click
+`FDTD` in the Objects Tree.
+
+| tab | field | value |
+|---|---|---|
+| General | dimension | 3D |
+| General | simulation time | 10 ns — an upper bound; *"the actual simulation may be shorter if the autoshutoff criteria are satisfied"* [FDTD] |
+| General | auto shutoff min | leave 1e-5 (default) [FDTD] |
+| Geometry | x min / max | **−88 / 110.5** |
+| Geometry | y min / max | **−86.2 / 86.2** |
+| Geometry | z min / max | **−92.9 / 38** |
+| Mesh settings | mesh type | **uniform**, dx = dy = dz = **0.5** (λ/10) for rungs 0–2 |
+| Mesh settings | mesh refinement | **conformal variant 1** — variant 0 (the default) *"is not applied to interfaces involving metals or PEC"*; variant 1 *"applies the conformal mesh algorithm to the PEC"* [Conformal] |
+| Boundary conditions | all six | **PML**, profile stabilized; raise layers if rung 0 shows leakage |
+
+A uniform mesh keeps the cell count predictable (35.9 M at λ/10). It also means
+adding or removing the rail does not re-mesh the air, so runs stay directly
+comparable. (The auto non-uniform mesher is Lumerical's default and is fine for
+exploring; for the comparison runs, use uniform.)
+
+**Step 3 — the rail.** Design → Import → **STL** → `rail_surface.stl`. Then
+double-click the new object:
+
+| tab | field | value |
+|---|---|---|
+| Material | material | **PEC (Perfect Electrical Conductor)** — the exact database name [Materials] |
+
+Check it landed: Geometry tab ≈ x −39…39, y −60…60, z −80…0 (crown at z = 0). If
+it reads 1000× too small, step 1 was skipped. Script alternative, independent of
+the GUI unit: `stlimport("rail_surface.stl", 1e-3);` — the scaling factor
+defaults to 1e-6, micrometres [stlimport].
+
+**Step 4 — the horn.** Set the working directory to the bundle folder (File →
+Program → Working Directory). Open `load_horn_source.lsf` in the Script File
+Editor and **Run**. It:
+
+1. loads `horn_source.mat` (`matlabload` [matlabload]),
+2. builds the EM dataset (E **and** H), and saves `horn_EM_dataset.mat`,
+3. adds an Import source named `horn_source`, `importdataset(EM)`, sets
+   **Direction = Backward** (−z, toward the rail) and a **single wavelength**
+   (`"wavelength span", 0`, per Lumerical's example [Equation]).
+
+GUI route instead of step 3: FDTD → Sources → **Import** → double-click it →
+General tab → **Import Source** button → `horn_EM_dataset.mat` (written by the
+script with `CREATE_SOURCE = 0`). Then set **Direction: Backward**. *Injection
+axis* is set automatically from the data (z) [Import].
+
+Verify: the source's Geometry tab should show x −28…102.5, y −78.25…78.25,
+z = 15 (the span *"will be automatically set based on the imported field data"*
+[Import]). In the XZ view it is a grey bar at z = 15 with the arrow pointing
+**down and to −x**.
+
+> *Inference, checked by rung 0:* the property name `"direction"` in the script
+> follows Lumerical's source conventions [Import] but is not spelled out for
+> Import sources. If that line errors, set Direction in the GUI.
+
+**Step 5 — frequency, once for everything.** FDTD → Settings → **Global
+Source**: frequency **59.9584916 GHz** = 59958491600 Hz, span 0. Do not round to
+60 GHz, which is 7° of phase over 30λ. Then FDTD → Settings → **Global Monitor**:
+frequency points **1**, use source limits.
+
+**Step 6 — the monitor.** FDTD → Monitors → **Frequency-Domain**; rename it
+`mon_z30`.
+
+| tab | field | value |
+|---|---|---|
+| Geometry | monitor type | 2D Z-normal |
+| Geometry | x min / max | **−80 / 80** |
+| Geometry | y min / max | **−70 / 70** |
+| Geometry | z | **30** |
+| Data to record | E | ✓ (H can be unticked) |
+
+**Step 7 — check, then run.** FDTD → Check → **GPU** (or CPU). It reports memory
+and flags unsupported objects [GPU]. Then Run Simulation: toggle **GPU**, pick
+*Local Host*, **Run**.
+
+**Step 8 — export.** In the Script Prompt:
 
 ```
-mon = "monitor";                              # your monitor's name
-E   = getresult(mon, "E");
-Ey  = pinch(E.E(:,:,:,:,2));                  # component 2 = y  -> (nx, ny)
-x   = E.x;
-y   = E.y;
-matlabsave("crack_z30.mat", Ey, x, y);
+E = getresult("mon_z30", "E");
+Ey = pinch(E.Ey);
+x = E.x;  y = E.y;
+matlabsave("intact_z30.mat", Ey, x, y);
 ```
 
-`pinch` drops the singleton z/frequency axes. Component index 2 is `E_y` — the
-s-polarised component from §2. Save `x` and `y`; they are what lets the
-comparison resample the monitor grid onto ours.
-
-Then, back in `rail3D/`. **The agreement report** is both planes, with pixel-level
-residuals, % agreement and pass/fail against stated criteria:
+`getresult` returns a dataset *"E vs x, y, z, lambda/f"* [getresult], and
+`E.Ey` is its y component [Datasets]. `pinch` drops the singleton z and
+frequency axes. E_y is the s-polarised component rail3D models. Then, in
+`rail3D/`:
 
 ```bash
 python fdtd_agreement.py --sample intact --external intact_z30.mat
 ```
 
-It records nothing FDTD did not measure. It compares at z = 30, then carries
-**both** fields to the metasurface plane with the same ASM, so the MS-plane row
-shows the near-field disagreement as the metasurface would see it. Run it with
-`--target` (no Lumerical file) to see what a passing run looks like. That
-figure is titled TARGET and footnoted as synthesized.
+---
 
-The variant-by-variant comparison is still available:
+## 5. The ladder — run these in order
+
+Each rung isolates one unknown. Skipping ahead means a disagreement has several
+possible causes and you cannot tell which.
+
+**Rung 0 — empty box: is the horn injected correctly?** Same file as §4, but with
+the rail **disabled** (right-click → disable). Add a second Frequency-Domain
+monitor `mon_z0`: 2D Z-normal, x −60…60, y −70…70, **z = 0**. Run, then export
+**both** monitors (`empty_z0.mat` from `mon_z0`, `empty_z30.mat` from `mon_z30`):
 
 ```bash
-python compare_wavefronts.py --sample crack --source plane --plane-z 30 --external crack_z30.mat
+python fdtd_agreement.py --injection empty_z0.mat --leak empty_z30.mat
 ```
 
-Both tools score against rail3D with **production shadowing** (`min_t` 0.05,
-offset 0.3). Before 2026-09-18 `compare_wavefronts` scored full-wave runs
-against the *no-shadow* field, which charged rail3D's own switched-off physics
-to the comparison.
+It passes when:
+- FDTD's field at crown height matches rail3D's horn field over the rail
+  footprint at complex correlation ≥ 0.98, **as-is**
+- the beam centroid is within 5 mm of rail3D's
+- `mon_z30` (with nothing to reflect off) reads < 1% of the injected peak
 
-It reports, before any metric:
+The last number is the noise floor under every later rung. This is Lumerical's own
+advice for TFSF, applied here: *"temporarily disable the particle or defect, run
+your simulation … determine the noise floor"* [TFSF tips]. It is also what
+Lumerical recommends for custom sources: *"compare the field profile recorded by
+a monitor just in front of the source with the original"* [Equation].
 
+**Rung 1 — flat plate.** Disable the rail. Design → Structures → **Rectangle**:
+x −37.5…37.5, y −37.5…37.5, **z −1…0**, PEC. Delete `mon_z0`.
+
+```bash
+python fdtd_agreement.py --sample plate --external plate_z30.mat
 ```
-crack_z30.mat: resampled (321, 171) (m) -> (60,30), coverage 100.0%
-aligned EXT crack_z30: conjugated (corr as-is 0.08 / conj 0.99), gain 1.2e-3, phase -14.0 deg
-```
 
-- **resampled / coverage** — the monitor grid was interpolated onto ours;
-  coverage below 100% means the monitor was too small and the shortfall is being
-  scored as disagreement.
-- **conjugated / as-is** — rail3D uses `exp(−iωt)`, so outgoing waves carry
-  `exp(+ik₀R)`. If Lumerical's convention differs, its fields arrive conjugated.
-  The tool *detects and reports* which matched rather than silently fixing it,
-  so you know what you are looking at. Conjugating the wrong one turns a perfect
-  match into an apparent total failure.
-- **gain / phase** — one complex scale fitted over the whole plane, absorbing
-  source normalisation and V/m-versus-scalar units. Because of this,
-  **`complex_corr` is the number to quote**, not `rel_l2`: the residual after
-  the fit is `sqrt(1 − complex_corr²)` by construction.
+Both solvers model a plate essentially exactly, so a disagreement here is a
+**setup** error — units, source, monitor — not physics. Do not proceed until
+agreement is ≥ 98%. (FDTD's plate is 1 mm thick, rail3D's has zero thickness.
+Only the edges differ.)
 
-If it prints `! both conventions score alike -- ambiguous`, the two fields are
-essentially uncorrelated. Do not read the alignment as confirmation of anything;
-go back to rung 1.
+**Rung 2 — intact rail.** Delete the plate, re-enable the rail. This is §4
+exactly. It tests PO currents on a curved surface, under the horn.
+
+**Rung 3 — cracked rail, and the difference field.** Replace the STL with
+`data/generated/fdtd_crack/rail_surface.stl` (same PEC material). Add FDTD →
+Misc. → **Mesh**:
+
+| field | value |
+|---|---|
+| x min / max | **−17.5 / 41.2** |
+| y min / max | **−23.1 / 7.5** |
+| z min / max | **−16.1 / 9.9** |
+| dx = dy = dz | **0.25** (λ/20) |
+
+Crack lines are 1.5–3 mm wide, i.e. 3–6 cells at λ/10: too coarse to trust. Then
+**re-run rung 2 with the identical override**, so the two runs share one mesh and
+their common-mode numerical error cancels in the difference.
+
+- **Absolute fields:** `fdtd_agreement.py --sample crack --external crack_z30.mat`.
+  Expect roughly rung-2 agreement.
+- **The difference field** (crack − intact) against rail3D's is **the real
+  result**. It is where the crack signature lives, and README finding 27 /
+  READING_RESULTS §9b explain why the absolute field alone is not enough for
+  cracks. The difference-field scorer is not built yet. It is the next addition
+  to `fdtd_agreement.py`.
+
+A disagreement **here**, while rungs 0–2 agree, is exactly the finding worth
+having: PO failing on a sub-wavelength feature. Report it; do not tune it away.
 
 ---
 
-## 6. Things that will look like physics and are not
+## 6. Things that look like physics and are not
 
 | symptom | cause |
 |---|---|
-| Total disagreement, `corr` ≈ 0 either way | wrong component exported (magnitude, or E_x/E_z), or the monitor is in the total-field region — it must be **outside** the TFSF box |
-| Good amplitude, scrambled phase | frequency rounded to 60 GHz; or the mesh is too coarse for the path (see §1) |
-| Specular lobe on the wrong side | `angle phi` — flip 180° ↔ 0° |
-| Agreement falls off toward the plane edges | monitor too small; coverage < 100% |
-| Rungs 1–2 fine, rung 3 disagrees only near the defect | **this is the actual result**, not a bug |
-| Disagreement that grows with segment length | cut-end edge diffraction. Our PO model has *no* edge diffraction; a full-wave solver has plenty. `case.json` → `truncation` measures how brightly lit the cut ends are — 0.08× mid-span at the production 120 mm segment, but **0.80× at 30 mm**, so do not shorten the rail to save cells. Compare the difference field, where it cancels. |
+| Rail is tiny, or huge | STL has no units; set File → Units → Length = mm **before** importing, or `stlimport(..., 1e-3)` [STL, stlimport] |
+| Script error on the material | name is **PEC (Perfect Electrical Conductor)**, not "Electric" [Materials] |
+| Rung 0 matches only when conjugated | check Direction = **Backward** first. If it is, rebuild with `python horn_source.py --out DIR --conjugate`: Lumerical conjugates *beam* profiles internally for backward injection [Rotations], and this undoes that if it also applies to imports |
+| Rung 0 beam lands in the wrong place | Direction wrong, or the source was imported without H |
+| `mon_z30` sees a strong field in the empty box | monitor below the source plane, source injecting both ways (no H), or PML reflection — raise PML layers |
+| GPU run refused | a TFSF source is present; build < 2025 R1.1 with an Import source; or Check → GPU names the object [GPU, R1.1] |
+| Good amplitude, scrambled phase | frequency rounded to 60 GHz, or the mesh too coarse for the path (§1) |
+| Coverage < 100% reported by the scorer | the monitor is smaller than §4 step 6 |
+| Disagreement concentrated at the rail ends | cut-end edge diffraction, which PO does not model. Compare the difference field, where it cancels |
 
-Polarisation coupling is the one thing our scalar model cannot represent at all.
-If s-polarised runs agree and the physics you care about involves depolarisation
-in a crack, that is a limitation of the model, not something the comparison can
-fix.
+Polarisation coupling is the one thing the scalar model cannot represent. If
+s-polarised runs agree and the crack depolarises, that is a limit of the model,
+not something this comparison can fix.
 
 ---
 
-## 7. Cost summary
+## 7. Cost
 
-| run | mesh | cells | RAM | notes |
-|---|---|---|---|---|
-| rung 0–1 (plate) | λ/10 | ~29 M | ~3 GB | minutes |
-| rung 2 (intact) | λ/10 | ~29 M | ~3 GB | |
-| rung 3 (crack + override) | λ/10 + λ/20 local | ~31 M | ~3 GB | run intact again with the same override |
-| production comparison | λ/15 | ~97 M | ~10 GB | 11° phase error to the monitor |
+From `case.json` → `fdtd.mesh_options` (uniform mesh; RAM ≈ 100 B/cell):
 
-All well inside a 5090's 32 GB. Lumerical's GPU solver supports a subset of
-features — if it refuses the setup, the CPU solver at this size is still
-tractable; the constraint here was never total cells, it was the 30λ of empty
-air we removed in §1.
+| run | mesh | cells | RAM |
+|---|---|---|---|
+| rungs 0–2 | λ/10 | 35.9 M | 3.6 GB |
+| rung 3 (+ λ/20 override) | λ/10 + local λ/20 | ~38.5 M | ~3.9 GB |
+| production check | λ/15 | 121 M | 12.1 GB |
+| convergence ceiling | λ/20 | 287 M | 28.7 GB (near a 32 GB GPU's limit) |
 
 ---
 
 ## 8. What this cannot tell you
 
-- It validates the **surface scattering**, not the propagation to `H_MS` — that
-  is V3's job, and V3 already passes at 0.13%.
-- It is a **single-frequency, single-polarisation** check. rail3D is scalar and
-  monochromatic; that is the model, and this measures the model's error, not its
-  scope.
-- It says nothing about the metasurface or detector training. Those sit
-  downstream of the plane field and are governed by V5–V8.
+- It validates the **surface scattering under the horn**, not the propagation to
+  H_MS. That is V3's job, which already passes at 0.13%.
+- It is **single-frequency and single-polarisation**. That is the model, and this
+  measures the model's error, not its scope.
+- It says nothing about the metasurface or detector training, which sit downstream
+  and are governed by V5–V8.
+- The horn itself is rail3D's aperture model in both codes. FDTD checks what happens
+  **after** the horn's field leaves the source plane, not whether the aperture
+  model matches a physical horn.
+
+---
+
+## Sources
+
+- [UI] Ansys Lumerical FDTD Modern User Interface — https://optics.ansys.com/hc/en-us/articles/36952912384403-Ansys-Lumerical-FDTD-Modern-User-Interface
+- [Import] Import source – Simulation object — https://optics.ansys.com/hc/en-us/articles/360034383014-Import-source-Simulation-object
+- [Equation] Using an equation to define the spatial field profile of a source in FDTD (and its `usr_custom_source.lsf`) — https://optics.ansys.com/hc/en-us/articles/360034383054-Using-an-equation-to-define-the-spatial-field-profile-of-a-source-in-FDTD
+- [GPU] Getting started with running FDTD on GPU — https://optics.ansys.com/hc/en-us/articles/17518942465811-Getting-started-with-running-FDTD-on-GPU
+- [R1.1] 2025 R1.1 Release Notes — https://optics.ansys.com/hc/en-us/articles/38462847569043-2025-R1-1-Release-Notes
+- [Force] Methodology for optical force calculations (sign convention) — https://optics.ansys.com/hc/en-us/articles/360042214594-Methodology-for-optical-force-calculations
+- [Units] Units and normalization conventions in Lumerical solvers — https://optics.ansys.com/hc/en-us/articles/360034397034-Units-and-normalization-conventions-in-Lumerical-solvers
+- [STL] STL import – Simulation object — https://optics.ansys.com/hc/en-us/articles/360034901953-STL-import-Simulation-object
+- [stlimport] stlimport – Script command — https://optics.ansys.com/hc/en-us/articles/360034924733-stlimport-Script-command
+- [FDTD] FDTD solver – Simulation Object — https://optics.ansys.com/hc/en-us/articles/360034382534-FDTD-solver-Simulation-Object
+- [Conformal] Selecting the best mesh refinement option in the FDTD simulation object — https://optics.ansys.com/hc/en-us/articles/360034382614-Selecting-the-best-mesh-refinement-option-in-the-FDTD-simulation-object
+- [getresult] getresult – Script command — https://optics.ansys.com/hc/en-us/articles/360034409854-getresult-Script-command
+- [Datasets] Introduction to Lumerical datasets — https://optics.ansys.com/hc/en-us/articles/360034409554-Introduction-to-Lumerical-datasets
+- [matlabload] matlabload – Script command — https://optics.ansys.com/hc/en-us/articles/360034408034-matlabload-Script-command
+- [Materials] Material database in the Lumerical FDTD and MODE products — https://optics.ansys.com/hc/en-us/articles/360034394614-Material-database-in-the-Lumerical-FDTD-and-MODE-products
+- [TFSF tips] Tips and best practices when using the FDTD TFSF source — https://optics.ansys.com/hc/en-us/articles/360034382934-Tips-and-best-practices-when-using-the-FDTD-TFSF-source
+- [Rotations] Source Rotations in 3D FDTD — https://optics.ansys.com/hc/en-us/articles/1500002383802-Source-Rotations-in-3D-FDTD

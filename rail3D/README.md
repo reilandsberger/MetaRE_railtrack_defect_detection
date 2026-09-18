@@ -713,6 +713,37 @@ first) · or everything at once with `python lab_report.py`.
     would have charged our own switched-off physics to the solver comparison.
     Both tools now use production shadowing.
 
+28. **The FDTD cross-check uses rail3D's own horn as a Lumerical Import source —
+    no TFSF — and four things about Lumerical were wrong in the earlier plan.**
+    (2026-09-18, researched against the Ansys Optics knowledge base; sources in
+    LUMERICAL.md.)
+
+    *Design.* `horn_source.py` writes the horn field on a z = 15 mm plane as an
+    Import source (E **and** H, as Lumerical advises for non-Gaussian beams),
+    injecting down; the z = 30 monitor above it records only the up-going field,
+    so incident and scattered separate without TFSF. The horn beam is far wider
+    than the rail (−20 dB at y = ±128 mm at crown height), so the plane covers
+    the rays that can reach the rail + 6λ with a 2λ taper; propagated in free
+    space it reproduces the full horn on the rail footprint at 0.9989 / 1.0000 /
+    0.9991 (z = 0 / −40 / −80) with 72% of the power. Vector completion matters:
+    forcing E_x = 0 gave Ez/Ey = 0.35 rms for this steep, wide beam; projecting
+    ŷ transverse to each component's k gives 0.17 / 0.14 — the least
+    cross-polarisation consistent with Maxwell, and closest to the scalar model.
+    Region 198 × 172 × 131 mm: 35.9 M cells at λ/10.
+
+    *Corrections.* (1) **Lumerical is exp(−iωt), like rail3D** ("P(ω) = ∫
+    e^{iωt} P(t) dt"): exports align as-is. The earlier docs, `align_external`,
+    `case.json` and the target figure all said Lumerical arrives conjugated. (2)
+    **The GPU solver does not support TFSF** at all, and runs single-frequency
+    Import sources only from **2025 R1.1**. (3) **STL is read as µm** unless the
+    layout unit is set to mm first (or `stlimport(file, 1e-3)`). (4) The material
+    is **"PEC (Perfect Electrical Conductor)"**. Also: the old rung-0 plate
+    (x ±60) cut through its TFSF box, which Lumerical's TFSF rules forbid.
+
+    Rung 0 (`fdtd_agreement.py --injection`) checks the injected horn in an
+    empty box before any rail — the one place a direction or convention mistake
+    in the Import source would show up cleanly.
+
 
 ## 6b. Objective & metrics (rev. 2)
 
