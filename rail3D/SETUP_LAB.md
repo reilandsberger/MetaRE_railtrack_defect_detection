@@ -1,6 +1,6 @@
 # rail3D — Lab Workstation Setup (RTX 5090)
 
-*Last updated: 2026-09-13 · λ = 5 mm (60 GHz), V0–V8 measured on the 5090 — bump this line in any
+*Last updated: 2026-09-18 · λ = 5 mm (60 GHz), V0–V8 measured on the 5090 — bump this line in any
 commit that changes behaviour this file describes. Timings are now MEASURED
 at λ=5 on the lab 5090 (2026-09-04), not extrapolated.*
 
@@ -544,6 +544,27 @@ Read `auc` (detection, the system's job), not `score` — a run can win on
 `score = auc + class_acc` while losing the thing the system exists to do. Any
 SLM row still below the `none` row means the optimizer, not the surface, is the
 blocker.
+
+---
+
+## 7d. Looking at the trained metasurface
+
+```bash
+python slm_profile.py --stage prelim --delta
+python slm_profile.py --run-name abl_slm_shipped_<tag> abl_slm_flat_<tag> --delta   # compare
+```
+
+About 10 s on the CPU. Nothing trains. It writes `data/figures/slm_profile_<run>.png` with
+four panels per layer: **wrapped phase**, **amplitude** |t|, the **incident light**
+on the metasurface (intact RMS |ψ|, peak = 1), and, with `--delta`, the **change
+from the epoch-0 phase**. It also writes `data/generated/slm_profile_<run>_L0.npz`
+(x, y, wrapped phase, amplitude) for a full-wave solver or fabrication. The
+notebook runs the same thing in section 9.
+
+`surface="slm"` is **phase-only**, so the amplitude panel is exactly 1.0 by
+construction. A structured amplitude map needs the meta-atom model, which is
+blocked at λ=5. Send the PNG back together with the printed `moved … rad RMS from
+init` line.
 
 ---
 

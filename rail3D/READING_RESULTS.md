@@ -1,6 +1,6 @@
 # Reading rail3D's validation output
 
-*Last updated: 2026-09-13 · λ = 5 mm (60 GHz) — bump this line in any commit that
+*Last updated: 2026-09-18 · λ = 5 mm (60 GHz) — bump this line in any commit that
 changes a gate, a threshold, or what a field means.*
 
 What every file the lab run produces actually contains, what its pass rule is in
@@ -347,6 +347,32 @@ detected time convention, the fitted gain and phase, and the resampling coverage
   kill-and-resume bit-identity claim.
 
 ---
+
+## 10b. `slm_profile_<run>.png` — the trained metasurface
+
+**The amplitude panel says nothing about training.** `surface="slm"` applies
+`exp(1j·phase)` and nothing else, so |t| = 1 everywhere by construction. Do not
+describe it as "uniform transmission achieved".
+
+**Read the phase through the incident panel.** Phase in a pixel with no light
+has no effect on anything downstream. A noisy-looking phase in a dark region is
+irrelevant; structure where the incident panel is bright is the part the
+optimizer actually shaped.
+
+**The number that matters is `moved … rad RMS from init`**, and especially its
+"where lit" variant, which is weighted by incident intensity. The epoch-0 phase
+is rebuilt exactly from the run's seed and `slm_init_std` (P3 asserts
+bit-equality), so this measures what training did and nothing else. For scale,
+the π/2 diffuser has a circular spread of about 1.5 rad. A trained mask that moved
+much less than that is still mostly the random diffuser it started as, and that
+is the concrete picture behind README finding 24. Adam moves each pixel by at
+most `lr` per step (5e-4 rad; measured on short runs: the largest pixel move is
+87–98% of `lr × steps`), so that product is the ceiling. At prelim scale it
+is ~27 steps/epoch × best epoch.
+
+**A random-looking phase is not by itself a failure.** Scattering-based
+encoders often look like speckle. Judge the mask by the detection numbers, and
+use this figure to explain them, not to replace them.
 
 ## 11. Triage order for a returned result set
 

@@ -16,6 +16,11 @@ run rather than here:
   P2  SLM2D at zero phase reproduces surface="none" EXACTLY. This is the
       premise of README finding 24 -- if it ever stops holding, the claim that
       the baseline is inside the SLM's hypothesis space stops holding with it.
+  P3  slm_profile.py reads a REAL trained checkpoint and a dataset root in the
+      generator's exact shard format, rebuilds the epoch-0 phase EXACTLY (its
+      "moved from init" number is only meaningful if that holds), writes a
+      wrapped phase with |t| = 1, and does not change matplotlib's backend on
+      import (the notebook plots inline).
 
 Every check runs the real code path on tiny synthetic inputs. Add one here
 whenever a run dies on something that was not physics.
@@ -80,10 +85,8 @@ def p0_stage_root() -> dict:
 
 
 # ---------------------------------------------------------------------------
-def p1_history_schema() -> dict:
-    """Drive the real train() loop and read it the way the reports do."""
-    import ablate_surface
-
+def _synthetic_loader():
+    """A stand-in for train3d.load_all_data: tiny random fields, real layout."""
     gen = torch.Generator().manual_seed(0)
 
     def fake_data(cfg, device, verbose=True):
@@ -96,15 +99,27 @@ def p1_history_schema() -> dict:
                 "train": idx[:40].to(device), "val": idx[40:56].to(device),
                 "test": idx[56:].to(device), "i_train": i0[:16].to(device),
                 "i_val": i0[16:20].to(device), "i_test": i0[20:].to(device)}
+    return fake_data
+
+
+def _tiny_cfg(run_name: str, **kw) -> train3d.TrainConfig:
+    """A few-second training run that still exercises pruning and selection."""
+    return train3d.TrainConfig(
+        run_name=run_name, surface="slm", n_epoch=14, batch_size=32, b0=8,
+        det_grid=(4, 3), n_det_final=8, tau_anneal_end=4,
+        prune_start=2, prune_end=8, prune_every=2, checkpoint_every=4, **kw)
+
+
+# ---------------------------------------------------------------------------
+def p1_history_schema() -> dict:
+    """Drive the real train() loop and read it the way the reports do."""
+    import ablate_surface
 
     tmp = Path(tempfile.mkdtemp())
     orig_load, orig_ckpt = train3d.load_all_data, config.CHECKPOINT_DIR
-    train3d.load_all_data, config.CHECKPOINT_DIR = fake_data, tmp
+    train3d.load_all_data, config.CHECKPOINT_DIR = _synthetic_loader(), tmp
     try:
-        cfg = train3d.TrainConfig(
-            run_name="p1", surface="slm", n_epoch=14, batch_size=32, b0=8,
-            det_grid=(4, 3), n_det_final=8, tau_anneal_end=4,
-            prune_start=2, prune_end=8, prune_every=2, checkpoint_every=4)
+        cfg = _tiny_cfg("p1")
         hist = train3d.train(cfg, device=torch.device("cpu"), verbose=False)
         best = ablate_surface.best_val_of(hist)
         tr = (hist.get("train") or [{}])[-1]
@@ -158,11 +173,73 @@ def p2_zero_phase_is_baseline() -> dict:
 
 
 # ---------------------------------------------------------------------------
+def p3_slm_profile() -> dict:
+    """The metasurface figure reads what training actually writes."""
+    import matplotlib
+    backend = matplotlib.get_backend()
+    import slm_profile
+    backend_kept = matplotlib.get_backend() == backend
+
+    tmp = Path(tempfile.mkdtemp())
+    root = tmp / "root"
+    root.mkdir()
+    saved = (train3d.load_all_data, config.CHECKPOINT_DIR,
+             config.FIGURE_DIR, config.GENERATED_DIR)
+    train3d.load_all_data = _synthetic_loader()
+    config.CHECKPOINT_DIR, config.FIGURE_DIR, config.GENERATED_DIR = tmp, tmp, tmp
+    try:
+        # the epoch-0 rebuild must be exact, including checkpoints that predate
+        # the slm_init_std field (they were trained from the pi/2 diffuser)
+        exact = True
+        for std in (float(np.pi / 2), 0.0, 0.3):
+            c0 = train3d.TrainConfig(slm_init_std=std)
+            m0 = train3d.build_model(c0, torch.device("cpu"))
+            exact &= torch.equal(slm_profile.initial_phase(
+                {"config": {"slm_init_std": std}}, c0, 0), m0.layers[0].phase.detach())
+        m_def = train3d.build_model(train3d.TrainConfig(), torch.device("cpu"))
+        exact &= torch.equal(slm_profile.initial_phase({"config": {}}, train3d.TrainConfig(), 0),
+                             m_def.layers[0].phase.detach())
+
+        train3d.train(_tiny_cfg("p3"), device=torch.device("cpu"), verbose=False)
+
+        # an intact shard in generate_dataset_3d.py's exact on-disk layout
+        gen = torch.Generator().manual_seed(1)
+        data3d.atomic_save({"psi": torch.randn(8, NX, NY, 2, generator=gen) * 0.05,
+                            "meta": [{"class": "intact"}] * 8},
+                           data3d.shard_path("intact", 0, root=root))
+        X, _ = config.plane_grid("cpu")
+        torch.save(torch.exp(-(X[0] / 40.0) ** 2).to(torch.complex64),
+                   data3d.psi0_path(root=root))
+        (root / "dataset_config.json").write_text("{}")
+
+        png = slm_profile.plot_slm_profile(["p3"], data_root=root, delta=True)
+        npz = np.load(tmp / "slm_profile_p3_L0.npz")
+        ph = npz["phase_wrapped"]
+        out = {
+            "backend_untouched_by_import": backend_kept,
+            "epoch0_rebuild_exact": bool(exact),
+            "figure_written": png.exists() and png.stat().st_size > 20_000,
+            "phase_shape_ok": ph.shape == (NX, NY),
+            "phase_wrapped": bool((ph > -np.pi - 1e-6).all() and (ph <= np.pi + 1e-6).all()),
+            "amplitude_is_one": bool(np.allclose(npz["amplitude"], 1.0)),
+            "x_axis_ok": npz["x_mm"].shape == (NX,)
+                         and bool(np.isclose(npz["x_mm"][-1] - npz["x_mm"][0], (NX - 1) * config.DX)),
+        }
+        out["pass"] = all(out.values())
+        return out
+    finally:
+        (train3d.load_all_data, config.CHECKPOINT_DIR,
+         config.FIGURE_DIR, config.GENERATED_DIR) = saved
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
 def main() -> int:
     ok = True
     for name, fn in [("P0_stage_root", p0_stage_root),
                      ("P1_history_schema", p1_history_schema),
-                     ("P2_zero_phase_is_baseline", p2_zero_phase_is_baseline)]:
+                     ("P2_zero_phase_is_baseline", p2_zero_phase_is_baseline),
+                     ("P3_slm_profile", p3_slm_profile)]:
         t0 = time.time()
         try:
             res = fn()

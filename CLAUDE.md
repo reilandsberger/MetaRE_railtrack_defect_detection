@@ -1,6 +1,6 @@
 # CLAUDE.md — MetaRE railtrack defect detection
 
-*Last updated: 2026-09-13 · λ = 5 mm (60 GHz) · rev.3 defect model · prelim run
+*Last updated: 2026-09-18 · λ = 5 mm (60 GHz) · rev.3 defect model · prelim run
 2026-09-11 on L5_prelim_9d5878 — see README findings 24 (the baseline beats the
 metasurface: an optimization failure), 25 (s0 is the dominant variable) and
 26 (stale gate blocks). Shadow guard settled 2026-09-11 (min_t 0.05, offset 0.3).*
@@ -395,7 +395,9 @@ Lab entry points (SETUP_LAB §A/§B): `lab_report.py` (whole chain → markdown)
 [--name X]`, `v8_smoke_test.py`, `scan_geometry.py` (measure the observation
 plane), `inspect_dataset.py` (review a dataset), `analyze_results.py` (where it
 succeeds and fails, per defect parameter), `sweep_detectors.py` (final detector
-count / MS→detector distance), `rail3D_pipeline.ipynb` (narrated end to end).
+count / MS→detector distance), `slm_profile.py` (the trained mask: wrapped phase,
+|t| — exactly 1 for the phase-only SLM — incident light, change from init),
+`rail3D_pipeline.ipynb` (narrated end to end).
 
 ## Dataset hygiene (2026-08-17)
 
