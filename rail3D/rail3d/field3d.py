@@ -8,10 +8,19 @@
   3. the face-independent direct term psi0 (horn -> plane) is computed once
      by ``horn_to_plane`` instead of once per sample.
 
-The Rayleigh-Sommerfeld kernel, the horn aperture model, the visibility
-masks, and the psi1/psi2 reflection signs are copied verbatim; visibility is
-applied as a 0/1 multiplier instead of fancy indexing (numerically
-identical), which is what makes batching possible.
+The Rayleigh-Sommerfeld kernel, the visibility masks, and the psi1/psi2
+reflection signs are copied verbatim; visibility is applied as a 0/1
+multiplier instead of fancy indexing (numerically identical), which is what
+makes batching possible.
+
+The horn aperture model is Face3D's with two textbook corrections, each
+switchable back to the verbatim original (README finding 29):
+``flare_k="k0"`` uses free-space k in the aperture's quadratic phase
+(Nikolova L18 eq. 18.8/18.38; Face3D used the FEED's guided beta, which is
+0.75k for a WR-15 feed at 60 GHz), and ``sampling="midpoint"`` samples cell
+centres with weight AB/n^2 (Face3D's linspace put full weight on the edge
+rows, +2.5% amplitude). ``flare_k="beta_wvg", sampling="linspace"`` is
+Face3D bit-for-bit; V1 pins exactly that.
 """
 
 from __future__ import annotations
@@ -59,35 +68,100 @@ def plane_wave_incident(X, Y, H, wvl, theta_inc) -> torch.Tensor:
     return torch.exp(1j * k0 * phase).to(torch.complex64)
 
 
-def aperture_field(size_ant, dist_ant, resol_ant, theta_inc, wvl, k0):
-    """Horn / open-aperture source field (verbatim Face3D ``_aperture_field``)."""
-    if len(size_ant) > 3:
-        a_aptr, b_aptr = size_ant[:2]
-        a_wvg, b_wvg = size_ant[2:4]
-        l_horn = size_ant[-1]
-        r_e = a_aptr * l_horn / (a_aptr - a_wvg)
-        r_h = b_aptr * l_horn / (b_aptr - b_wvg)
-        xz_ant, y_ant = torch.meshgrid(
-            torch.linspace(-a_aptr / 2, a_aptr / 2, resol_ant),
-            torch.linspace(-b_aptr / 2, b_aptr / 2, resol_ant),
-            indexing="ij",
-        )
-        z_ant = dist_ant * np.cos(theta_inc) + xz_ant * np.sin(theta_inc)
-        x_ant = dist_ant * np.sin(theta_inc) - xz_ant * np.cos(theta_inc)
-        beta_wvg = k0 * np.sqrt(1 - (wvl / (2 * a_wvg)) ** 2)
-        amplitude = torch.cos(np.pi * xz_ant / a_aptr)
-        psi_at_ant = amplitude * torch.exp(0.5j * beta_wvg * (xz_ant**2 / r_e + y_ant**2 / r_h))
-    else:
-        a_aptr, b_aptr = size_ant
-        xz_ant, y_ant = torch.meshgrid(
-            torch.linspace(-a_aptr / 2, a_aptr / 2, resol_ant),
-            torch.linspace(-b_aptr / 2, b_aptr / 2, resol_ant),
-            indexing="ij",
-        )
-        z_ant = dist_ant * np.cos(theta_inc) + xz_ant * np.sin(theta_inc)
-        x_ant = dist_ant * np.sin(theta_inc) - xz_ant * np.cos(theta_inc)
-        psi_at_ant = torch.cos(2 * np.pi * xz_ant / (2 * a_aptr))
+FLARE_K_OPTIONS = ("k0", "beta_wvg")
+SAMPLING_OPTIONS = ("midpoint", "linspace")
 
+
+def horn_options(flare_k=None, sampling=None) -> tuple[str, str]:
+    """Resolve the horn-model options: explicit argument, else rail3d.config.
+
+    Imported lazily so this module stays importable without the project config
+    (it is the fully parametric one; every physical length is an argument).
+    """
+    if flare_k is None or sampling is None:
+        from rail3d import config
+        flare_k = config.HORN_FLARE_K if flare_k is None else flare_k
+        sampling = config.HORN_SAMPLING if sampling is None else sampling
+    if flare_k not in FLARE_K_OPTIONS:
+        raise ValueError(f"flare_k must be one of {FLARE_K_OPTIONS}, got {flare_k!r}")
+    if sampling not in SAMPLING_OPTIONS:
+        raise ValueError(f"sampling must be one of {SAMPLING_OPTIONS}, got {sampling!r}")
+    return flare_k, sampling
+
+
+def aperture_axis(width: float, n: int, sampling: str | None = None) -> torch.Tensor:
+    """Sample positions across one aperture dimension (centred on 0)."""
+    _, sampling = horn_options("k0", sampling)
+    if sampling == "linspace":                  # Face3D: nodes incl. both edges
+        return torch.linspace(-width / 2, width / 2, n)
+    return (torch.arange(n, dtype=torch.float32) + 0.5) * (width / n) - width / 2
+
+
+def aperture_distribution(u, v, size_ant, wvl: float, flare_k: str | None = None):
+    """The horn's aperture field at local aperture coordinates (u, v), in mm.
+
+    THE formula -- aperture_field, the FDTD horn check (rung -1) and anything
+    else that needs the aperture field call this, so it cannot drift:
+        psi = cos(pi u / A) exp(+j (kk/2) (u^2/rho_h + v^2/rho_e)),
+        rho_h = A L / (A - a),  rho_e = B L / (B - b)   (Nikolova L18 18.38)
+    u runs along A (TE10 cosine, H-plane), v along B (E-plane; E is along v).
+    Points outside the aperture are NOT masked: callers that need the
+    "zero outside the aperture" assumption apply it themselves.
+    Works on torch tensors or numpy arrays.
+    """
+    flare_k, _ = horn_options(flare_k, "midpoint")
+    xp = torch if isinstance(u, torch.Tensor) else np
+    k0 = 2 * np.pi / wvl
+    if len(size_ant) > 3:
+        a_aptr, b_aptr, a_wvg, b_wvg, l_horn = size_ant
+        # A-plane (u, H-plane) and B-plane (v, E-plane) apex distances. Face3D
+        # named these r_e / r_h -- swapped labels, though paired correctly.
+        rho_h = a_aptr * l_horn / (a_aptr - a_wvg)
+        rho_e = b_aptr * l_horn / (b_aptr - b_wvg)
+        kk = (k0 if flare_k == "k0"
+              else k0 * np.sqrt(1 - (wvl / (2 * a_wvg)) ** 2))
+        return xp.cos(np.pi * u / a_aptr) * xp.exp(0.5j * kk * (u**2 / rho_h + v**2 / rho_e))
+    a_aptr = size_ant[0]
+    return xp.cos(2 * np.pi * u / (2 * a_aptr)) + 0j * v
+
+
+def aperture_weight(a_aptr: float, b_aptr: float, resol_ant: int,
+                    sampling: str | None = None) -> float:
+    """Quadrature weight dS of one aperture sample -- THE one place it lives.
+
+    Callers used to write a*b/(n-1)**2 inline, which is right only for
+    linspace sampling. Midpoint cells have area a*b/n**2.
+    """
+    _, sampling = horn_options("k0", sampling)
+    n = resol_ant if sampling == "midpoint" else resol_ant - 1
+    return a_aptr * b_aptr / n ** 2
+
+
+def aperture_field(size_ant, dist_ant, resol_ant, theta_inc, wvl, k0,
+                   flare_k: str | None = None, sampling: str | None = None):
+    """Pyramidal-horn aperture field (Face3D ``_aperture_field`` + fixes).
+
+    size_ant = (A, B, a, b, L): aperture A (along the plane of incidence,
+    the H-plane: TE10 cosine), aperture B (along y, the E-plane; E is along y),
+    feed waveguide a x b, axial flare length L. Apex-to-aperture distances by
+    similar triangles (Nikolova L18 eq. 18.43-18.44):
+        rho_h = A L / (A - a),   rho_e = B L / (B - b)
+    Aperture field (eq. 18.38, sign flipped for rail3D's exp(-i w t)):
+        psi = cos(pi u / A) exp(+j (kk/2) (u^2/rho_h + v^2/rho_e))
+    with kk = k0 (textbook) or the feed's guided beta (Face3D, flare_k=
+    "beta_wvg"). Returns (psi, x, y, z, A, B); weight each sample by
+    ``aperture_weight(A, B, resol_ant, sampling)``.
+    """
+    flare_k, sampling = horn_options(flare_k, sampling)
+    a_aptr, b_aptr = size_ant[:2]
+    xz_ant, y_ant = torch.meshgrid(
+        aperture_axis(a_aptr, resol_ant, sampling),
+        aperture_axis(b_aptr, resol_ant, sampling),
+        indexing="ij",
+    )
+    z_ant = dist_ant * np.cos(theta_inc) + xz_ant * np.sin(theta_inc)
+    x_ant = dist_ant * np.sin(theta_inc) - xz_ant * np.cos(theta_inc)
+    psi_at_ant = aperture_distribution(xz_ant, y_ant, size_ant, wvl, flare_k)
     return psi_at_ant, x_ant, y_ant, z_ant, a_aptr, b_aptr
 
 
@@ -103,14 +177,16 @@ def rs_kernel(R: torch.Tensor, cos_term: torch.Tensor, wvl: float, k0: float) ->
 # ---------------------------------------------------------------------------
 # Direct horn -> plane term (face independent — compute once, cache)
 # ---------------------------------------------------------------------------
-def horn_to_plane(X, Y, H, wvl, theta_inc, size_ant, dist_ant, resol_ant) -> torch.Tensor:
-    """psi0 on the observation plane; identical to Face3D's psi0_ms term."""
+def horn_to_plane(X, Y, H, wvl, theta_inc, size_ant, dist_ant, resol_ant,
+                  flare_k: str | None = None, sampling: str | None = None) -> torch.Tensor:
+    """psi0 on the observation plane (Face3D's psi0_ms term; see aperture_field)."""
     k0 = 2 * np.pi / wvl
     device = X.device
     d = incident_direction(theta_inc).to(device)
+    flare_k, sampling = horn_options(flare_k, sampling)
 
     psi0_ant, x_ant, y_ant, z_ant, a_aptr, b_aptr = aperture_field(
-        size_ant, dist_ant, resol_ant, theta_inc, wvl, k0
+        size_ant, dist_ant, resol_ant, theta_inc, wvl, k0, flare_k, sampling
     )
     psi0_ant = psi0_ant.to(device)
     x_ant, y_ant, z_ant = x_ant.to(device), y_ant.to(device), z_ant.to(device)
@@ -128,7 +204,7 @@ def horn_to_plane(X, Y, H, wvl, theta_inc, size_ant, dist_ant, resol_ant) -> tor
     point2plane = point2plane * (point2plane > 0)
     kernel = rs_kernel(R, point2plane, wvl, k0)
 
-    dS_ant = a_aptr * b_aptr / (resol_ant - 1) ** 2
+    dS_ant = aperture_weight(a_aptr, b_aptr, resol_ant, sampling)
     return (psi0_ant.reshape(r, r, 1, 1) * dS_ant * kernel).sum(dim=(0, 1))
 
 
@@ -260,6 +336,8 @@ def scattered_fields(
     shadow_normal_offset: float | None = None,
     compute_psi2: bool = True,
     source: str = "horn",
+    flare_k: str | None = None,
+    sampling: str | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """psi1 (single bounce) and psi2 (double bounce) on the observation plane.
 
@@ -328,12 +406,13 @@ def scattered_fields(
     elif shadow != "none":
         raise ValueError(f"Unknown shadow mode: {shadow}")
 
+    flare_k, sampling = horn_options(flare_k, sampling)
     psi0_ant, x_ant, y_ant, z_ant, a_aptr, b_aptr = aperture_field(
-        size_ant, dist_ant, resol_ant, theta_inc, wvl, k0
+        size_ant, dist_ant, resol_ant, theta_inc, wvl, k0, flare_k, sampling
     )
     psi0_ant = psi0_ant.to(device)
     x_ant, y_ant, z_ant = x_ant.to(device), y_ant.to(device), z_ant.to(device)
-    dS_ant = a_aptr * b_aptr / (resol_ant - 1) ** 2
+    dS_ant = aperture_weight(a_aptr, b_aptr, resol_ant, sampling)
 
     Xa = x_ant.reshape(1, 1, r, r)
     Ya = y_ant.reshape(1, 1, r, r)

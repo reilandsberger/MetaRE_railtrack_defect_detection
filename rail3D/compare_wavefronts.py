@@ -80,7 +80,8 @@ FIG = config.FIGURE_DIR
 GEN = config.GENERATED_DIR
 
 # The pre-migration geometry, written out explicitly so this script can solve
-# it without touching config (field3d takes every physical quantity as an
+# it without touching config. Its horn is Face3D's lambda=8 Ka-band horn -- the
+# lambda=8 REFERENCE, deliberately not the physical 60 GHz horn in config (field3d takes every physical quantity as an
 # argument -- it is the one fully wavelength-parametric module).
 LAM8 = dict(wvl=8.0, dx=4.0, nx=60, ny=30, h_ms=240.0, dist_ant=28 * 8.0,
             size_ant=(27.4, 21.9, 9.3, 6.2, 27.0), mesh_ds=1.0, occ_ds=4.0,
@@ -882,7 +883,7 @@ def cut_end_illumination(v: np.ndarray, f: np.ndarray, g: dict) -> dict:
     psi0_ant, xa, ya, za, a_ap, b_ap = field3d.aperture_field(
         g["size_ant"], g["dist_ant"], config.RESOL_ANT, config.THETA_INC,
         g["wvl"], k0)
-    dS = a_ap * b_ap / (config.RESOL_ANT - 1) ** 2
+    dS = field3d.aperture_weight(a_ap, b_ap, config.RESOL_ANT)
 
     idx = torch.nonzero((nrm @ d) > 0).squeeze(1)          # faces the horn sees
     amp = torch.zeros(len(c))
@@ -990,13 +991,15 @@ def export_case(section, params, g, out: Path, seg, source="horn", closed=False,
             "type": "pyramidal horn",
             "aperture_A_B_mm": [g["size_ant"][0], g["size_ant"][1]],
             "waveguide_a_b_mm": [g["size_ant"][2], g["size_ant"][3]],
-            "horn_length_mm": g["size_ant"][4],
+            "axial_flare_length_mm": g["size_ant"][4],
             "distance_from_origin_mm": g["dist_ant"],
             "incidence_deg_from_z_in_xz": float(np.degrees(config.THETA_INC)),
             "center_xyz_mm": [float(g["dist_ant"] * np.sin(config.THETA_INC)), 0.0,
                               float(g["dist_ant"] * np.cos(config.THETA_INC))],
-            "aperture_field": ("cosine taper along A x quadratic phase "
-                               "exp(i*beta*(s^2)/(2*R_E)); scalar, single TE10 mode"),
+            "aperture_field": ("cos(pi u/A) exp(+i (k/2)(u^2/rho_h + v^2/rho_e)), "
+                               "rho_h = A L/(A-a), rho_e = B L/(B-b); scalar, TE10 "
+                               "(Nikolova L18 eq. 18.38; field3d.aperture_field)"),
+            "flare_k": config.HORN_FLARE_K, "sampling": config.HORN_SAMPLING,
         }
     spec = {
         "units": "mm",

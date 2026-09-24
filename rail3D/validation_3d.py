@@ -56,9 +56,13 @@ def field_2d_reference(section: torch.Tensor) -> tuple[torch.Tensor, torch.Tenso
     theta = config.THETA_INC
 
     # horn aperture, central (y=0) cut of the 3D horn: A-axis in the x-z plane
+    # Same flare model as the 3D horn (field3d.aperture_field): the A-plane
+    # apex distance rho_h, and the phase wavenumber from config.HORN_FLARE_K,
+    # so the 2D-vs-3D comparison is like for like (README finding 29).
     A_aptr, _, a_wvg, _, l_horn = config.SIZE_ANT
-    R_E = A_aptr * l_horn / (A_aptr - a_wvg)
-    beta_wvg = k0 * np.sqrt(1 - (wvl / (2 * a_wvg)) ** 2)
+    rho_h = A_aptr * l_horn / (A_aptr - a_wvg)
+    kk = (k0 if config.HORN_FLARE_K == "k0"
+          else k0 * np.sqrt(1 - (wvl / (2 * a_wvg)) ** 2))
     n_src = 50
     dx_src = A_aptr / n_src
     s = torch.arange(-A_aptr / 2, A_aptr / 2, dx_src) + dx_src / 2
@@ -67,7 +71,7 @@ def field_2d_reference(section: torch.Tensor) -> tuple[torch.Tensor, torch.Tenso
     cy = config.RAIL_HEIGHT + config.DIST_ANT * np.cos(theta)
     v_src = torch.stack([cx - s * np.cos(theta), cy + s * np.sin(theta)], dim=1)
     norm_vec_src = torch.tensor([[-np.sin(theta), -np.cos(theta)]], dtype=torch.float32)
-    psi_src = torch.cos(np.pi * s / A_aptr) * torch.exp(0.5j * beta_wvg * (s**2 / R_E))
+    psi_src = torch.cos(np.pi * s / A_aptr) * torch.exp(0.5j * kk * (s**2 / rho_h))
 
     # metasurface line
     x_ms = torch.arange(-config.WX / 2 + config.DX / 2, config.WX / 2, config.DX)

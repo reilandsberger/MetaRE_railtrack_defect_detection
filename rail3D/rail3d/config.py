@@ -119,17 +119,35 @@ H_MS = 30 * WVL                 # 150 mm at λ=5 (was 240 at λ=8)
 PLANE_X_CENTER = 0.0
 LAYER_DISTANCES = (20 * WVL,)   # MS -> detector plane: 100 mm at λ=5 (160 at λ=8)
 
-# Horn antenna (pyramidal): Face3D config-55 scaled by WVL/LIBRARY_WVL. The
-# λ-scaling keeps the feeding waveguide single-mode-identical (a/λ fixed, so
-# the same TE10-only modal content the validated aperture model assumes) and
-# preserves the far-field ratio 2A²/(λ·DIST_ANT) — an unscaled 27.4 mm horn at
-# 60 GHz would put the rail deep in its radiating near field.
-SIZE_ANT = tuple(v * WVL / LIBRARY_WVL
-                 for v in (27.4, 21.9, 9.3, 6.2, 27.0))
-                                # A, B aperture; a, b waveguide; horn length
+# Horn antenna (pyramidal): the PHYSICAL RFspin H-A75-W20 (50-75 GHz, WR-15,
+# 19-21 dBi, NRL-4433 standard gain horn) -- README finding 29. In mm, NOT
+# λ-scaled: this is the hardware, so it does not follow WVL.
+#   feed  a x b = 3.7592 x 1.8796 mm (WR-15, confirmed from RFspin's 3D model);
+#         single-mode at 60 GHz (TE10 cutoff 39.9 GHz, TE20/TE01 79.7 GHz)
+#   A, B  22.8 x 16.8 mm INNER aperture: RFspin publish only the outer shell
+#         (23.8 x 17.8 mm); 0.5 mm walls fit the "19-21 dBi over 50-75 GHz"
+#         spec to 19.07 / 20.09 / 21.01 dBi at 50 / 60 / 75 GHz (V9 checks it)
+#   L     28.0 mm axial flare length (same fit)
+# Uncertainty: walls 0.3-1.0 mm and L 26-31 mm move the rail illumination by
+# < 0.3% (complex corr >= 0.997), vs 2.3% for switching away from the old
+# horn. Confirm against RFspin's drawing or with calipers when available.
+# The previous horn was Face3D's Ka-band horn (27.4 x 21.9 aperture, 9.3 x 6.2
+# feed, L 27) scaled by 5/8 -- 18.8 dBi, and its feed was OVERMODED at 60 GHz
+# (TE10, TE01, TE11/TM11 and TE20 all propagate); an earlier comment here
+# calling that scaling "single-mode-identical" was wrong.
+SIZE_ANT = (22.8, 16.8, 3.7592, 1.8796, 28.0)
+                                # A, B aperture; a, b waveguide; axial flare length
+HORN_SPEC = {"part": "RFspin H-A75-W20", "band_GHz": (50.0, 75.0),
+             "gain_dBi": (19.0, 21.0)}   # what V9 holds the model to
+# Aperture-model options (field3d.aperture_field). "k0" is the textbook flare
+# phase (Nikolova L18 eq. 18.8); "beta_wvg" is Face3D's guided-beta variant,
+# 0.75k with a WR-15 feed at 60 GHz -- a 25% phase underestimate. "midpoint"
+# samples cell centres; "linspace" is Face3D's edge-inclusive grid.
+HORN_FLARE_K = "k0"
+HORN_SAMPLING = "midpoint"
 DIST_ANT = 28 * WVL             # 140 mm from the crown origin at λ=5
 THETA_INC = 55 * np.pi / 180    # incidence angle in the x-z plane
-RESOL_ANT = 20                  # 20x20 aperture samples
+RESOL_ANT = 20                  # 20x20 aperture samples (V9 checks convergence)
 
 # Rail geometry
 RAIL_HEIGHT = 180.0             # cross-section normalized height (mm)

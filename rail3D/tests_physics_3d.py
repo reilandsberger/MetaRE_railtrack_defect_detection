@@ -63,8 +63,11 @@ def farfield_from_antenna_2nd_reference(v, f, X, Y, H, wvl, theta_inc, size_ant,
     Y_obj = centerpoint[:, 1].reshape(-1, 1, 1)
     Z_obj = centerpoint[:, 2].reshape(-1, 1, 1)
 
+    # Face3D's aperture model exactly: guided-beta flare phase, edge-inclusive
+    # linspace grid (the reference below also weights by A*B/(n-1)^2)
     psi0_ant, x_ant, y_ant, z_ant, A_aptr, B_aptr = field3d.aperture_field(
-        size_ant, dist_ant, resol_ant, theta_inc, wvl, k0
+        size_ant, dist_ant, resol_ant, theta_inc, wvl, k0,
+        flare_k="beta_wvg", sampling="linspace"
     )
     X_ant = x_ant.reshape(-1, resol_ant, resol_ant)
     Y_ant = y_ant.reshape(-1, resol_ant, resol_ant)
@@ -385,11 +388,15 @@ def test_v1_solver_equivalence() -> dict:
     args = (X, Y, config.H_MS, config.WVL, config.THETA_INC,
             config.SIZE_ANT, config.DIST_ANT, config.RESOL_ANT)
 
+    # V1 is SOLVER equivalence against verbatim Face3D, so it pins Face3D's
+    # aperture model; the project defaults (k0, midpoint) are checked by V9.
+    legacy = dict(flare_k="beta_wvg", sampling="linspace")
     psi0_ref, psi1_ref, psi2_ref = farfield_from_antenna_2nd_reference(v, f, *args)
-    psi0_new = field3d.horn_to_plane(*args)
-    psi1_new, psi2_new = field3d.scattered_fields(v, f, *args, chunk_faces=256)
-    psi1_big, psi2_big = field3d.scattered_fields(v, f, *args, chunk_faces=4096)
-    psi1_b, psi2_b = field3d.scattered_fields(torch.stack([v, v]), f, *args, chunk_faces=256)
+    psi0_new = field3d.horn_to_plane(*args, **legacy)
+    psi1_new, psi2_new = field3d.scattered_fields(v, f, *args, chunk_faces=256, **legacy)
+    psi1_big, psi2_big = field3d.scattered_fields(v, f, *args, chunk_faces=4096, **legacy)
+    psi1_b, psi2_b = field3d.scattered_fields(torch.stack([v, v]), f, *args,
+                                              chunk_faces=256, **legacy)
 
     res = {
         "psi0": rel_l2(psi0_new, psi0_ref),
@@ -507,10 +514,96 @@ def test_v4_sanity() -> dict:
 
 
 # ---------------------------------------------------------------------------
+# V9 — the horn: textbook directivity, the part's gain spec, sampling, feed
+# ---------------------------------------------------------------------------
+def horn_directivity_dbi(wvl: float, size_ant=None, n: int = 301,
+                         flare_k: str | None = None) -> float:
+    """Broadside directivity of rail3D's aperture field, by direct integration:
+    D = (4 pi / lam^2) |sum psi dS|^2 / sum |psi|^2 dS  (Nikolova L18 eq. 18.21)."""
+    size_ant = config.SIZE_ANT if size_ant is None else size_ant
+    k0 = 2 * np.pi / wvl
+    psi, *_, a, b = field3d.aperture_field(size_ant, config.DIST_ANT, n, config.THETA_INC,
+                                           wvl, k0, flare_k=flare_k, sampling="midpoint")
+    dS = field3d.aperture_weight(a, b, n, "midpoint")
+    psi = psi.to(torch.complex128)            # .double() would DROP the imaginary part
+    D = 4 * np.pi / wvl**2 * float(psi.sum().abs() ** 2) * dS / float((psi.abs() ** 2).sum())
+    return 10 * np.log10(D)
+
+
+def horn_directivity_closed_form_dbi(wvl: float, size_ant=None) -> float:
+    """Nikolova L18 eq. (18.39): D = (4 pi / lam^2) A B eps_t eps_ph^E eps_ph^H,
+    with the Fresnel-integral phase efficiencies of eqs. (18.23) and (18.36).
+    Exact for the quadratic-phase cosine aperture -- the model's own field."""
+    from scipy.special import fresnel           # returns (S, C), argument pi/2 convention
+    A, B, a, b, L = config.SIZE_ANT if size_ant is None else size_ant
+    rho_h, rho_e = A * L / (A - a), B * L / (B - b)
+    t = (A / wvl) ** 2 / (8 * rho_h / wvl)
+    p1 = 2 * np.sqrt(t) * (1 + 1 / (8 * t))
+    p2 = 2 * np.sqrt(t) * (-1 + 1 / (8 * t))
+    S1, C1 = fresnel(p1)
+    S2, C2 = fresnel(p2)
+    eps_h = np.pi ** 2 / (64 * t) * ((C1 - C2) ** 2 + (S1 - S2) ** 2)
+    q = B / np.sqrt(2 * wvl * rho_e)
+    Sq, Cq = fresnel(q)
+    eps_e = (Cq ** 2 + Sq ** 2) / q ** 2
+    eps_t = 8 / np.pi ** 2
+    return 10 * np.log10(4 * np.pi / wvl ** 2 * A * B * eps_t * eps_e * eps_h)
+
+
+def test_v9_horn() -> dict:
+    """The horn model is what the textbook says, and what the part is.
+
+    (a) the aperture-integral directivity equals the closed form (18.39);
+    (b) across the part's band the model's gain sits inside the datasheet spec
+        (a lossless standard-gain horn: G ~= D);
+    (c) RESOL_ANT is converged on the rail footprint against an 80x80 grid;
+    (d) the feed is single-mode at WVL (lam/2 < a < lam, b < lam/2).
+    Also records the Face3D guided-beta variant's error at 60 GHz, the reason
+    HORN_FLARE_K defaults to "k0" (README finding 29).
+    """
+    res = {}
+    wvl = config.WVL
+    d_num = horn_directivity_dbi(wvl)
+    d_cf = horn_directivity_closed_form_dbi(wvl)
+    res["directivity_dBi"] = round(d_num, 3)
+    res["closed_form_dBi"] = round(d_cf, 3)
+    res["directivity_ok"] = abs(d_num - d_cf) < 0.2
+
+    lo, hi = config.HORN_SPEC["gain_dBi"]
+    f_lo, f_hi = config.HORN_SPEC["band_GHz"]
+    c_mm_ghz = 299.792458
+    band = {f: horn_directivity_dbi(c_mm_ghz / f) for f in (f_lo, c_mm_ghz / wvl, f_hi)}
+    res["gain_across_band_dBi"] = {f"{f:.1f}GHz": round(g, 2) for f, g in band.items()}
+    res["band_spec_ok"] = all(lo - 0.3 <= g <= hi + 0.3 for g in band.values())
+    res["beta_wvg_variant_dBi"] = round(horn_directivity_dbi(wvl, flare_k="beta_wvg"), 2)
+
+    gx, gy = torch.meshgrid(torch.arange(-40.0, 40.01, 2.0), torch.arange(-60.0, 60.01, 2.0),
+                            indexing="ij")
+    X, Y = gx.reshape(1, *gx.shape), gy.reshape(1, *gy.shape)
+    args = (X, Y, 0.0, wvl, config.THETA_INC, config.SIZE_ANT, config.DIST_ANT)
+    f_n = field3d.horn_to_plane(*args, config.RESOL_ANT)
+    f_ref = field3d.horn_to_plane(*args, 80)
+    corr = float(torch.vdot(f_n.reshape(-1), f_ref.reshape(-1)).abs()
+                 / (f_n.norm() * f_ref.norm()))
+    res["rail_footprint_corr_vs_80"] = round(corr, 6)
+    res["rail_footprint_amp_ratio"] = round(float(f_n.norm() / f_ref.norm()), 4)
+    res["sampling_ok"] = corr >= 0.9995 and abs(res["rail_footprint_amp_ratio"] - 1) < 0.01
+
+    a, b = config.SIZE_ANT[2:4]
+    res["feed_a_over_lam"] = round(a / wvl, 3)
+    res["feed_b_over_lam"] = round(b / wvl, 3)
+    res["feed_single_mode"] = (0.5 < a / wvl < 1.0) and (b / wvl < 0.5)
+    res["part"] = config.HORN_SPEC["part"]
+    res["pass"] = bool(res["directivity_ok"] and res["band_spec_ok"]
+                       and res["sampling_ok"] and res["feed_single_mode"])
+    return res
+
+
+# ---------------------------------------------------------------------------
 def main() -> int:
     warnings.filterwarnings("ignore", message=".*torch.meshgrid.*")
     config.ensure_dirs()
-    print(f"[rail3d] V0-V4 running on {DEVICE}"
+    print(f"[rail3d] V0-V4 + V9 running on {DEVICE}"
           + ("  (CPU by design - set RAIL3D_TEST_DEVICE=cuda:0 to use the GPU)"
              if DEVICE.type == "cpu" else
              f"  ({torch.cuda.get_device_name(DEVICE.index or 0)})"))
@@ -527,6 +620,7 @@ def main() -> int:
         ("V2_propagator_equivalence", test_v2_propagator_equivalence),
         ("V3_asm_vs_rs", test_v3_asm_vs_rs),
         ("V4_sanity", test_v4_sanity),
+        ("V9_horn", test_v9_horn),
     ]:
         t0 = time.time()
         try:

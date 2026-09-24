@@ -1,5 +1,6 @@
 """Lumerical FDTD vs rail3D: how well do they agree, pixel by pixel?
 
+    python fdtd_agreement.py --horn horn_aperture.mat --horn-near horn_near.mat  # rung -1
     python fdtd_agreement.py --injection empty_z0.mat --leak empty_z30.mat   # rung 0
     python fdtd_agreement.py --sample plate --external plate_z30.mat        # rung 1
     python fdtd_agreement.py --external intact_z30.mat      # a REAL Lumerical run
@@ -367,8 +368,9 @@ def rung0(args, device) -> int:
           f"  [{al['convention']}: as-is {al['corr_as_is']:.3f} / conj "
           f"{al['corr_conjugated']:.3f}]")
     print(f"  beam centroid x at z=0: FDTD {cx_ext:+.1f} mm, rail3D {cx_ref:+.1f} mm")
-    ok = corr >= 0.98 and al["convention"] == "as-is" and abs(cx_ext - cx_ref) < 5
-    if al["convention"] != "as-is":
+    ok = (corr >= 0.98 and (al["convention"] == "as-is" or al["ambiguous"])
+          and abs(cx_ext - cx_ref) < 5)
+    if al["convention"] != "as-is" and not al["ambiguous"]:
         print("  ! matched only when CONJUGATED. Lumerical is exp(-i w t) like rail3D, "
               "so check the source Direction (must be Backward) before anything else.")
     if abs(cx_ext - cx_ref) >= 5:
@@ -391,6 +393,128 @@ def rung0(args, device) -> int:
     return 0 if ok else 1
 
 
+HORN_CRITERIA = {                  # rung -1, proposed -- revisit after the first real run
+    "aperture_corr": 0.95,         # the aperture method ignores edge currents and
+                                   # higher-order modes (Nikolova L18 p.15): not ~1
+    "near_corr": 0.98,             # 3 lambda out, which is what reaches the rail
+    "hpbw_deg": 1.5,               # |FDTD - model| in each principal plane
+    "directivity_dB": 0.5,         # |FDTD - model|
+}
+
+
+def horn_check(args, device) -> int:
+    """RUNG -1: the full-wave horn (horn_fdtd_case.py) vs rail3D's aperture model."""
+    import horn_fdtd_case as hf
+    lam = config.WVL
+    p = hf.plan()
+    out, rows = {"part": config.HORN_SPEC["part"], "criteria": HORN_CRITERIA}, []
+
+    def load(path, mon, dx):
+        m = p["monitors"][mon]
+        nx = int((m["x"][1] - m["x"][0]) / dx) // 2 * 2
+        ny = int((m["y"][1] - m["y"][0]) / dx) // 2 * 2
+        g = dict(cw.geom_now(), nx=nx, ny=ny, dx=dx, h_ms=m["z"])
+        arr, lab, info = cw.load_external(path, g)
+        X, Y = cw.plane_grid(g, torch.device("cpu"))
+        return arr, X[0, :, 0].numpy().astype(float), Y[0, 0, :].numpy().astype(float), info
+
+    # --- aperture plane: the aperture method's assumption, tested directly ---
+    ext, xs, ys, info = load(args.horn, "mon_aperture", lam / 20)
+    mod = hf.model_aperture(xs, ys)
+    al_ext, al = cw.align_external(torch.as_tensor(ext), torch.as_tensor(mod))
+    al_ext = al_ext.numpy()
+    ff_m, ff_x = hf.far_field_cuts(mod, xs, ys), hf.far_field_cuts(al_ext, xs, ys)
+    ap_row = {
+        "complex_corr": cw.complex_corr(torch.as_tensor(al_ext), torch.as_tensor(mod)),
+        "amplitude_corr": cw.amp_corr(torch.as_tensor(al_ext), torch.as_tensor(mod)),
+        "alignment": al, "coverage": info.get("plane_coverage", 1.0),
+        "model": {k: ff_m[k] for k in ("hpbw_E_deg", "hpbw_H_deg", "directivity_dBi")},
+        "fdtd": {k: ff_x[k] for k in ("hpbw_E_deg", "hpbw_H_deg", "directivity_dBi")},
+    }
+    lo, hi = config.HORN_SPEC["gain_dBi"]
+    ap_row["pass"] = {
+        "aperture_corr": ap_row["complex_corr"] >= HORN_CRITERIA["aperture_corr"],
+        "hpbw_E": abs(ff_x["hpbw_E_deg"] - ff_m["hpbw_E_deg"]) <= HORN_CRITERIA["hpbw_deg"],
+        "hpbw_H": abs(ff_x["hpbw_H_deg"] - ff_m["hpbw_H_deg"]) <= HORN_CRITERIA["hpbw_deg"],
+        "directivity": abs(ff_x["directivity_dBi"] - ff_m["directivity_dBi"]) <= HORN_CRITERIA["directivity_dB"],
+        "fdtd_gain_in_part_spec": lo - 0.3 <= ff_x["directivity_dBi"] <= hi + 0.3,
+    }
+    out["aperture"] = ap_row
+    rows.append(("aperture plane (z' = +0.5 mm)", xs, ys, mod, al_ext))
+    print(f"RUNG -1 aperture ({al['convention']}): complex corr {ap_row['complex_corr']:.4f}, "
+          f"amplitude corr {ap_row['amplitude_corr']:.4f}")
+    print(f"  model: D {ff_m['directivity_dBi']:.2f} dBi, HPBW E {ff_m['hpbw_E_deg']:.1f} / H "
+          f"{ff_m['hpbw_H_deg']:.1f} deg   FDTD: D {ff_x['directivity_dBi']:.2f} dBi, HPBW E "
+          f"{ff_x['hpbw_E_deg']:.1f} / H {ff_x['hpbw_H_deg']:.1f} deg   "
+          f"(part spec {lo:g}-{hi:g} dBi)")
+
+    # --- 3 lambda out: what actually travels towards the rail ----------------
+    if args.horn_near:
+        ext_n, xn, yn, info_n = load(args.horn_near, "mon_near", lam / 10)
+        mod_n = hf.model_plane(xn, yn, p["monitors"]["mon_near"]["z"])
+        al_n, aln = cw.align_external(torch.as_tensor(ext_n), torch.as_tensor(mod_n))
+        corr_n = cw.complex_corr(al_n, torch.as_tensor(mod_n))
+        out["near"] = {"complex_corr": corr_n, "alignment": aln,
+                       "coverage": info_n.get("plane_coverage", 1.0),
+                       "pass": {"near_corr": corr_n >= HORN_CRITERIA["near_corr"]}}
+        rows.append((f"z' = {p['monitors']['mon_near']['z']:g} mm (3 lambda out)",
+                     xn, yn, mod_n, al_n.numpy()))
+        print(f"  near plane ({aln['convention']}): complex corr {corr_n:.4f}")
+
+    checks = dict(out["aperture"]["pass"], **(out.get("near", {}).get("pass", {})))
+    out["pass"] = bool(all(checks.values()))
+    for k, v in checks.items():
+        if not v:
+            print(f"  ! {k} outside its criterion")
+    if al["convention"] != "as-is" and not al["ambiguous"]:
+        print("  ! matched only when CONJUGATED: Lumerical is exp(-i w t) like rail3D; check the "
+              "export used E (not its conjugate) and the Mode source direction (Forward).")
+
+    fig = plt.figure(figsize=(22, 5.2 * len(rows)), layout="constrained")
+    subs = np.atleast_1d(fig.subfigures(len(rows), 1))
+    for sub, (label, x, y, m, e) in zip(subs, rows):
+        axs = sub.subplots(1, 5)
+        vmax = float(np.abs(m).max())
+        lit = lambda z: np.where(np.abs(z) > 0.05 * np.abs(z).max(), np.angle(z), np.nan)  # noqa: E731
+        for ax, arr, cmap, lim, title in (
+                (axs[0], np.abs(m), "viridis", (0, vmax), "|E_y| rail3D aperture model"),
+                (axs[1], np.abs(e), "viridis", (0, vmax), "|E_y| FDTD (aligned)"),
+                (axs[2], lit(m), "twilight", (-np.pi, np.pi), "arg rail3D (|E| > 5%)"),
+                (axs[3], lit(e), "twilight", (-np.pi, np.pi), "arg FDTD (|E| > 5%)")):
+            cm = plt.get_cmap(cmap).copy()
+            cm.set_bad("#bdbdbd")
+            im = ax.pcolormesh(x, y, arr.T, cmap=cm, vmin=lim[0], vmax=lim[1], shading="nearest")
+            fig.colorbar(im, ax=ax, fraction=0.05, pad=0.02)
+            ax.set(title=title, xlabel="x' (mm, along A)", ylabel="y' (mm, along B, E)")
+            ax.set_aspect("equal")
+        ax = axs[4]
+        if label.startswith("aperture"):
+            for ff, ls, who in ((ff_m, "-", "model"), (ff_x, "--", "FDTD")):
+                ax.plot(ff["theta_deg"], 20 * np.log10(ff["E_plane"] + 1e-12), "C0" + ls, label=f"E-plane {who}")
+                ax.plot(ff["theta_deg"], 20 * np.log10(ff["H_plane"] + 1e-12), "C3" + ls, label=f"H-plane {who}")
+            ax.set(ylim=(-40, 1), xlabel="angle from boresight (deg)", ylabel="dB",
+                   title="far-field principal planes")
+        else:
+            jy = len(y) // 2
+            ax.plot(x, np.abs(m[:, jy]) / vmax, "k-", label="rail3D")
+            ax.plot(x, np.abs(e[:, jy]) / vmax, "C1--", label="FDTD")
+            ax.set(xlabel="x' (mm)", title="|E_y| cut at y' = 0")
+        ax.legend(fontsize=8)
+        ax.grid(alpha=0.3)
+        sub.suptitle(label, x=0.01, ha="left", fontsize=12)
+    fig.suptitle(f"Rung -1: {config.HORN_SPEC['part']} full-wave vs rail3D aperture model -- "
+                 f"{'PASS' if out['pass'] else 'FAIL'}", fontsize=14, fontweight="bold")
+    config.ensure_dirs()
+    fig_path = config.FIGURE_DIR / "fdtd_horn_agreement.png"
+    fig.savefig(fig_path, dpi=120)
+    plt.close(fig)
+    strip = lambda d: {k: v for k, v in d.items()}                       # noqa: E731
+    js = config.GENERATED_DIR / "fdtd_horn_agreement.json"
+    js.write_text(json.dumps(data3d.stamp(strip(out)), indent=2, default=str), encoding="utf-8")
+    print(f"  -> {'PASS' if out['pass'] else 'FAIL'}   ({fig_path.name}, {js.name})")
+    return 0 if out["pass"] else 1
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -403,6 +527,10 @@ def main() -> int:
                       help="Lumerical E_y export (.mat/.npz with x, y) at z = 30 mm")
     mode.add_argument("--injection", default=None,
                       help="RUNG 0: E_y at z = 0 from the EMPTY-box run")
+    mode.add_argument("--horn", default=None,
+                      help="RUNG -1: E_y on mon_aperture from the horn_fdtd_case.py run")
+    ap.add_argument("--horn-near", default=None,
+                    help="RUNG -1: E_y on mon_near (3 lambda out) from the same run")
     ap.add_argument("--leak", default=None,
                     help="RUNG 0: E_y at the z = 30 monitor from the EMPTY-box run")
     ap.add_argument("--source", default="horn", choices=("horn", "plane"),
@@ -412,6 +540,8 @@ def main() -> int:
     args = ap.parse_args()
 
     device = config.get_device(args.profile)
+    if args.horn:
+        return horn_check(args, device)
     if args.injection:
         return rung0(args, device)
     chunk = config.PROFILES[args.profile].chunk_faces

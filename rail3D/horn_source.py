@@ -3,9 +3,11 @@
     python horn_source.py --out data/generated/fdtd_horn          # build + self-check
     python horn_source.py --out DIR --sample 0.25 --z-src 15      # explicit settings
 
-rail3D's horn is Face3D's pyramidal-aperture model (field3d.aperture_field):
-17.1 x 13.7 mm aperture, TE10 cosine along the plane of incidence, so E is along
-y -- s-polarised -- with its phase centre 140 mm from the crown at 55 deg. FDTD
+rail3D's horn is the RFspin H-A75-W20 (config.SIZE_ANT: WR-15 feed, 22.8 x
+16.8 mm inner aperture, 28 mm flare; README finding 29) in the textbook
+aperture-field model (field3d.aperture_field): TE10 cosine along the plane of
+incidence, so E is along y -- s-polarised -- and a quadratic flare phase, with
+the aperture 140 mm from the crown at 55 deg. FDTD
 cannot hold the horn itself (the box would be ~390 Mcells), so the horn enters
 FDTD the way Lumerical documents for arbitrary beams: an **Import source**, a
 z-normal plane of E and H injected downward just above the rail.
@@ -28,13 +30,14 @@ Design decisions, each measured rather than assumed (README finding 28):
       the far side of the source from the rail and records ONLY the up-going
       reflected field -- the separation TFSF used to provide, obtained without it.
   WINDOW  the horn beam is far wider than the rail (at crown height its -20 dB
-      contour spans y = +/-128 mm), so the plane covers the rays that can REACH
-      the rail -- every lit facet projected toward the phase centre -- plus
-      6 lambda, with a 2 lambda raised-cosine edge taper. Checked by ASM-
-      propagating the windowed field down in free space and comparing it with
-      rail3D's own horn field on the rail footprint: complex corr 0.9989 at the
-      crown, 1.0000 at z = -40, 0.9991 at z = -80, while carrying 72% of the
-      horn's power (the rest misses the rail).
+      contour spans y = +/-108 mm for the H-A75-W20), so the plane covers the
+      rays that can REACH the rail -- every lit facet projected toward the
+      phase centre -- plus 6 lambda, with a 2 lambda raised-cosine edge taper.
+      The window depends on rail geometry only, not on the horn. Checked by
+      ASM-propagating the windowed field down in free space and comparing it
+      with rail3D's own horn field on the rail footprint: complex corr 0.9990
+      at the crown, 1.0000 at z = -40, 0.9991 at z = -80, while carrying 74% of
+      the horn's power (the rest misses the rail).
   H FIELD  supplied, not left to Lumerical. Its docs: without H the source
       "makes certain assumptions about the change of phase ... [that] may lead
       to significant errors for ... more complex field profiles". A 55 deg beam
@@ -228,8 +231,47 @@ if (CREATE_SOURCE == 1) {
 """
 
 
+def load_fdtd_aperture(path: str, sample: float | None = None) -> dict:
+    """A rung -1 aperture export, aligned to rail3D's aperture model.
+
+    Resampled onto a uniform grid over mon_aperture (horn_fdtd_case.plan) at
+    lambda/10, then one complex gain (and the time convention, reported) fitted
+    to the analytic aperture so the absolute scale and phase reference match
+    rail3D's horn -- only the SHAPE comes from FDTD.
+    """
+    import compare_wavefronts as cw
+    import horn_fdtd_case as hf
+    sample = config.WVL / 10 if sample is None else sample
+    m = hf.plan()["monitors"]["mon_aperture"]
+    nx = int((m["x"][1] - m["x"][0]) / sample) // 2 * 2
+    ny = int((m["y"][1] - m["y"][0]) / sample) // 2 * 2
+    g = dict(cw.geom_now(), nx=nx, ny=ny, dx=sample, h_ms=m["z"])
+    arr, lab, info = cw.load_external(path, g)
+    X, Y = cw.plane_grid(g, torch.device("cpu"))
+    xl, yl = X[0, :, 0].numpy().astype(float), Y[0, 0, :].numpy().astype(float)
+    al, align = cw.align_external(torch.as_tensor(arr), torch.as_tensor(hf.model_aperture(xl, yl)))
+    return {"field": al.numpy(), "x": xl, "y": yl, "dx": sample, "z_offset": m["z"],
+            "alignment": align, "coverage": info.get("plane_coverage", 1.0)}
+
+
+def horn_field_from_aperture(ap: dict, xs: np.ndarray, ys: np.ndarray, z: float,
+                             device, z_offset: float | None = None) -> np.ndarray:
+    """The horn field on a global z-plane, radiated (RS-I, the horn's own
+    kernel) from a full-wave aperture field placed where the monitor was:
+    ap["z_offset"] mm in front of the aperture, in the horn's local frame."""
+    import horn_fdtd_case as hf
+    zo = ap["z_offset"] if z_offset is None else z_offset
+    XL, YL = np.meshgrid(ap["x"], ap["y"], indexing="ij")
+    q, ez = hf.local_to_global(XL.ravel(), YL.ravel(), np.full(XL.size, zo))
+    X, Y = np.meshgrid(xs, ys, indexing="ij")
+    P = np.stack([X.ravel(), Y.ravel(), np.full(X.size, z)], 1)
+    return hf.radiate(ap["field"], q, ap["dx"] ** 2, ez, P, chunk=512,
+                      device=device).reshape(X.shape)
+
+
 def build(out: Path, device, z_src: float = Z_SRC, margin: float = MARGIN,
-          sample: float = SAMPLE, check: bool = True, conjugate: bool = False) -> dict:
+          sample: float = SAMPLE, check: bool = True, conjugate: bool = False,
+          aperture_from: str | None = None, aperture_offset: float | None = None) -> dict:
     from scipy.io import savemat
     out.mkdir(parents=True, exist_ok=True)
     bundle = ray_bundle(z_src)
@@ -237,7 +279,14 @@ def build(out: Path, device, z_src: float = Z_SRC, margin: float = MARGIN,
     xs = np.arange(win["x"][0], win["x"][1] + 1e-9, sample)
     ys = np.arange(win["y"][0], win["y"][1] + 1e-9, sample)
     X, Y = np.meshgrid(xs, ys, indexing="ij")
-    ey = horn_field(xs, ys, z_src, device) * taper(X, *win["x"]) * taper(Y, *win["y"])
+    ap = None
+    if aperture_from:
+        # the FULL-WAVE horn (rung -1) instead of the analytic aperture model
+        ap = load_fdtd_aperture(aperture_from)
+        raw = horn_field_from_aperture(ap, xs, ys, z_src, device, aperture_offset)
+    else:
+        raw = horn_field(xs, ys, z_src, device)
+    ey = raw * taper(X, *win["x"]) * taper(Y, *win["y"])
     E, H = vector_fields(ey, sample)
     if conjugate:
         # ONLY for the rung-0 case in LUMERICAL.md section 6: Lumerical documents
@@ -259,6 +308,9 @@ def build(out: Path, device, z_src: float = Z_SRC, margin: float = MARGIN,
         "plane_z_mm": z_src, "window_mm": win, "ray_bundle_mm": bundle,
         "margin_mm": margin, "taper_mm": TAPER, "sample_mm": sample,
         "grid": [len(xs), len(ys)], "frequency_Hz": f_hz, "conjugated": conjugate,
+        "horn": ("FULL-WAVE aperture from " + str(aperture_from)) if ap else
+                f"analytic aperture model ({config.HORN_SPEC['part']})",
+        "fdtd_aperture_alignment": ap["alignment"] if ap else None,
         "polarisation": "E along y (s-pol, TE10 of the horn)",
         "injection": "z-normal Import source, direction Backward (-z)",
         "flux_down_fraction": flux_down_fraction(E, H),
@@ -267,8 +319,13 @@ def build(out: Path, device, z_src: float = Z_SRC, margin: float = MARGIN,
         "ez_over_ey_rms": float(np.sqrt((np.abs(E[2]) ** 2).sum() / (np.abs(E[1]) ** 2).sum())),
         "files": ["horn_source.mat", "load_horn_source.lsf"],
     }
-    if check:
+    if check and not ap:
         info["illumination_fidelity"] = illumination_fidelity(win, z_src, device)
+    if ap:
+        # how different the full-wave horn's source plane is from the model's
+        ref = horn_field(xs, ys, z_src, device)
+        info["fdtd_vs_model_source_plane_corr"] = float(
+            abs(np.vdot(raw, ref)) / (np.linalg.norm(raw) * np.linalg.norm(ref)))
     (out / "horn_source.json").write_text(json.dumps(info, indent=2), encoding="utf-8")
     return info
 
@@ -282,12 +339,19 @@ def main() -> int:
     ap.add_argument("--sample", type=float, default=SAMPLE)
     ap.add_argument("--profile", default="laptop", choices=list(config.PROFILES))
     ap.add_argument("--no-check", action="store_true")
+    ap.add_argument("--aperture-from", default=None,
+                    help="rung -1 export (horn_aperture.mat): build the source from the "
+                         "FULL-WAVE horn instead of the analytic aperture model")
+    ap.add_argument("--aperture-offset", type=float, default=None,
+                    help="z' (mm, horn frame) the --aperture-from plane sits at; default "
+                         "is mon_aperture's own (0.5 mm in front of the opening)")
     ap.add_argument("--conjugate", action="store_true",
                     help="write conj(E), conj(H): ONLY if rung 0 matched conjugated "
                          "with Direction = Backward confirmed (LUMERICAL.md section 6)")
     args = ap.parse_args()
     info = build(Path(args.out), config.get_device(args.profile), args.z_src,
-                 args.margin, args.sample, check=not args.no_check, conjugate=args.conjugate)
+                 args.margin, args.sample, check=not args.no_check, conjugate=args.conjugate,
+                 aperture_from=args.aperture_from, aperture_offset=args.aperture_offset)
     w = info["window_mm"]
     print(f"horn Import source at z = {info['plane_z_mm']:g} mm: window x {w['x']} y {w['y']} "
           f"mm, {info['grid'][0]}x{info['grid'][1]} samples at {info['sample_mm']} mm")
@@ -299,6 +363,10 @@ def main() -> int:
         print("  rail illumination vs rail3D's full horn: " + "  ".join(
             f"{k} {v:.4f}" for k, v in fid.items() if k.startswith("z=")) +
             f"   (power on plane {fid['power_captured']*100:.0f}%)")
+    if info.get("fdtd_aperture_alignment"):
+        print(f"  horn: {info['horn']} ({info['fdtd_aperture_alignment']['convention']}); "
+              f"source plane vs the analytic model: corr "
+              f"{info['fdtd_vs_model_source_plane_corr']:.4f}")
     print(f"  -> {Path(args.out) / 'horn_source.mat'}  + load_horn_source.lsf")
     return 0
 
