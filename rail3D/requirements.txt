@@ -8,6 +8,7 @@
 torch>=2.7
 numpy>=1.26
 matplotlib>=3.8
+scipy>=1.11        # .mat read/write for Lumerical (horn_source, compare_wavefronts, fdtd_agreement), V9's Fresnel integrals
 pillow>=10.0
 tqdm>=4.66
 jupyter

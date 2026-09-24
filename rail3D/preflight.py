@@ -92,6 +92,12 @@ def check_git(r: Report) -> None:
 def check_env(r: Report, profile: str) -> None:
     print("\n--- environment ---")
     r.ok(f"torch {torch.__version__}")
+    import importlib.util
+    missing = [m for m in ("numpy", "scipy", "matplotlib", "PIL", "tqdm")
+               if importlib.util.find_spec(m) is None]
+    if missing:
+        r.bad(f"missing packages: {', '.join(missing)} (scipy: .mat files for Lumerical, V9)",
+              "pip install -r requirements.txt   (no -U: it would replace the cu128 torch)")
     if not torch.cuda.is_available():
         r.bad("CUDA unavailable", "reinstall torch per SETUP_LAB.md section 2")
         return
