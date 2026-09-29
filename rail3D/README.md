@@ -1,7 +1,8 @@
 # rail3D — 3D diffraction simulation + metasurface training for rail defect detection
 
-*Last updated: 2026-09-18 · λ = 5 mm (60 GHz), V0–V8 measured on the 5090 — bump this line in any
-commit that changes behaviour this file describes.*
+*Last updated: 2026-09-29 · λ = 5 mm (60 GHz) · horn = RFspin H-A75-W20 (finding 29) · V0–V8
+measured on the 5090 with the PREVIOUS horn; V0–V4, V9 and V5 re-run on the laptop with the new one
+— bump this line in any commit that changes behaviour this file describes.*
 
 **Handoff document.** This README is written so that a future session (any
 model, any context) can pick the project up cold. Read this first, then
@@ -20,7 +21,9 @@ Sommerfeld surface integral, horn antenna source, experimentally validated at
 λ = 8 mm). The scene is that validated λ=8 setup **scaled by 5/8** wherever
 Face3D chose lengths in wavelengths (distances, horn, detector windows —
 see finding 18), so its design conclusions transfer; the rail and its defects
-keep their physical sizes, growing 1.6× relative to λ.
+keep their physical sizes, growing 1.6× relative to λ. **The horn is the
+exception since 2026-09-24:** it is the physical RFspin H-A75-W20 60 GHz
+standard-gain horn, modelled with the textbook aperture method (finding 29).
 
 Task: a trainable metasurface + trainable detector placement so that raw
 detector powers ("barcode") both **detect** rail defects and **classify**
@@ -39,7 +42,7 @@ with the operating threshold *calibrated* on the validation intact spread
 swept 3D railhead mesh + per-point defect depth field d(s,y)
         │  mesh3d.py    (λ/8 facets = 0.625 mm, fixed topology → batchable)
         ▼
-physical-optics scattering: horn (140 mm @ 55°) → rail → 60×30 plane @ z=150 mm
+physical-optics scattering: horn (H-A75-W20, 140 mm @ 55°) → rail → 60×30 plane @ z=150 mm
         │  field3d.py   (exact RS-I kernel, chunked+batched, ray-cast shadow)
         ▼
 dataset shards: psi1, psi2 per sample + cached psi0    [generate_dataset_3d.py]
@@ -175,7 +178,7 @@ field, plus parameter histograms.
 | `preflight.py` | **run before anything**: code freshness, GPU, CSVs, active geometry, every dataset with λ/date/commit, shard consistency, checkpoint stamps |
 | `generate_dataset_3d.py` | CLI generator (`--profile lab`, `--name`, `--smoke [--smoke-n N]`, `--status`; resumable shards; refuses mixed-geometry roots) |
 | `inspect_dataset.py` | review a dataset before/after generation (re-derives geometry from seeds; warns on provenance mismatch) |
-| `tests_physics_3d.py` | V0, V0b, V0c, V1–V4 automated gates (CPU-safe) |
+| `tests_physics_3d.py` | V0, V0b, V0c, V1–V4 and **V9 (horn)** automated gates (CPU-safe) |
 | `validation_3d.py` | V5–V7 gates + figures (includes the 2D Hankel reference solver); `--min-t/--normal-offset` runs the V6b guard sweep, which is a study, not a gate |
 | `v8_smoke_test.py` | V8 end-to-end + kill-and-resume bit-identity + refusal/regression guards |
 | `lab_report.py` | the whole verification chain in one command → paste-able `data/generated/lab_report.md` |
@@ -184,6 +187,17 @@ field, plus parameter histograms.
 | `sweep_detectors.py` | final detector count / MS→detector distance sweep (training-time only) |
 | `analyze_results.py` | where it succeeds and fails, per defect parameter; failure montage |
 | `setup_diagram.py` | renders the annotated scene diagram |
+| `run_stage.py` | generate → gate → train → analyse as ONE resumable command (`--stage prelim/full`, `--with-baseline`, `--fresh`, `--bundle`); refuses short or mismatched datasets |
+| `ablate_surface.py` | 2×2 over SLM init × `w_capture` + the no-MS control (finding 24); resumable, writes `surface_ablation.json` |
+| `slm_profile.py` | the trained mask: wrapped phase, \|t\|, incident light, change from init |
+| `tests_plumbing.py` | P0–P5 non-physics plumbing tests (~25 s CPU): dataset-root resolution, history schema, zero-phase ≡ baseline, slm_profile, FDTD round trip, horn source |
+| `check_notebook.py` | fresh-kernel name-ordering check for `rail3D_pipeline.ipynb` (~1 s) |
+| `target_figures.py` | what a successful result would look like — labelled TARGET, never a measurement |
+| `horn_source.py` | rail3D's horn as a Lumerical **Import source** (E + H .mat + .lsf) on z = 15 mm; `--aperture-from` builds it from the full-wave horn (rung −1) instead |
+| `horn_fdtd_case.py` | Lumerical **rung −1**: watertight PEC STL of the H-A75-W20 + WR-15 feed, Mode-source/monitor plan (`horn_case.json`), `export_horn.lsf` |
+| `fdtd_agreement.py` | scores Lumerical exports: `--horn` (rung −1), `--injection` (rung 0), `--sample … --external` (rungs 1–3, z = 30 and MS plane), `--target` (synthetic target) |
+| `lumerical_mockup.py` | draws the target FDTD setup into a Layout-window screenshot, every box from `case.json` |
+| `presentation/` | `deck_figs.py` (horn/result figures computed from the code) + `update_deck.py` (the 2026-09-24 slides) for `data/generated/rail3D_overview.pptx` |
 | notebooks | `rail3D_pipeline` (the whole pipeline, narrated), `design_review_`, `validation_3d_`, `training_3d_ms_`, `training_3d_no_ms_` — all thin wrappers over the modules |
 | `rail3d/library_amp_fit.npy`, `library_phase_fit.npy` | Face3D meta-atom fits (8 mm band), copied byte-for-byte |
 
@@ -196,9 +210,13 @@ field, plus parameter histograms.
   with `meshgrid(..., indexing='ij')`. Metasurface plane z = H_MS = 30λ =
   150 mm; detector plane 20λ = 100 mm further (z = 250 mm). All of these are
   DERIVED in config.py — quote config, not this line, if they ever disagree.
-- Horn: Face3D "config 55" **scaled ∝λ** (17.1×13.7 mm aperture at 140 mm,
-  55° in x–z) — keeps the feeding waveguide single-mode and the far-field
-  ratio, see finding 18.
+- Horn: the **physical RFspin H-A75-W20** — `config.SIZE_ANT = (22.8, 16.8,
+  3.7592, 1.8796, 28.0)` mm = inner aperture A × B, WR-15 feed a × b, axial
+  flare length L — 140 mm from the crown at 55° in x–z, E along y (s-pol).
+  **Not λ-scaled**: it is hardware. Aperture model = textbook
+  (`HORN_FLARE_K="k0"`, `HORN_SAMPLING="midpoint"`); Face3D's variants
+  (`"beta_wvg"`, `"linspace"`) exist only so V1 can replay Face3D verbatim.
+  Finding 29. (Until 2026-09-24 this was Face3D's horn ×5/8 — overmoded.)
 - Splits: stratified 80/10/10, seed 0 (comparable to the 2D notebooks).
 - Label order: crack=0, dent=1, wear=2, **shell=3** (`config.CLASS_NAMES`).
   `shell` is parametric — it has no entry in `config.DATASET_DIRS`; code that
@@ -215,7 +233,11 @@ field, plus parameter histograms.
 
 Status at λ = 5 mm (the migration wavelength). **All gates now measured**:
 V0–V4 on the laptop CPU (2026-08-17) and re-confirmed on the 5090, V5–V8 on the
-lab 5090 (2026-09-04). `lab_report.py` runs them all in one command.
+lab 5090 (2026-09-04; V6/V7 re-measured 2026-09-11 with the settled shadow guard).
+`lab_report.py` runs them all in one command. **The horn changed on 2026-09-24**
+(finding 29): V0–V4, V9 and V5 (r = 0.958) re-ran green on the laptop with the
+new horn; V6–V8 on the 5090 are previous-horn numbers until the lab re-run
+(SETUP_LAB §7e).
 
 | gate | what it proves | status at λ=5 |
 |---|---|---|
@@ -227,12 +249,13 @@ lab 5090 (2026-09-04). `lab_report.py` runs them all in one command.
 | V3 | ASM vs RS-FFT 0.10% — **identical to 6 s.f. with the λ=8 value**, confirming the scaled replica | PASS (laptop CPU) |
 | V4 | specular centroid on axis, power conservation 0.9998, mesh orientation | PASS (laptop CPU) |
 | V5 | 3D PO vs 2D Hankel reference | PASS, **r = 0.958** (5090) — was 0.976 at λ=8; the figure shows envelope agreement with slight fringe offset, i.e. finite-segment vs infinite-extrusion registration, not solver disagreement |
-| V6 | ray-cast shadowing real-effect vs artifact bounds | PASS, artifact 0.0020 — but `crack_shadow_with_resolved_occluder = 0.0` and 7 of 8 samples are exactly 0.0: at `SHADOW_MIN_T = 3.0` the shadow test is **inert**, see finding 3 |
-| V6b | *(sweep, not a gate)* the guard's cost/benefit vs `min_t` | run 2026-09-04; **3.0 mm is the only artifact-safe value tested**, the 1.0–3.0 mm gap is unexplored (finding 3) |
-| V7 | λ/8 vs λ/16 mesh convergence at the barcode level | PASS, min cosine **0.9948**, mean 0.9982 across all six cases (5090) |
+| V6 | ray-cast shadowing real-effect vs artifact bounds | PASS at the shipped guard (`min_t` 0.05, `normal_offset` 0.3; 5090, 2026-09-11): `intact_augmented_artifact` **0.0**, `crack_shadow_omitted_by_coarse_occluder` **0.0113** (< 0.02). The earlier "inert at `min_t = 3.0`" reading is retracted — finding 3 |
+| V6b | *(sweep, not a gate)* the guard over `min_t` × `normal_offset` | settled 2026-09-11 (finding 3). Ignore V6b blocks without `_stamp`, and its `recommended` field (finding 26) |
+| V7 | λ/8 vs λ/16 mesh convergence at the barcode level | PASS, min cosine **0.9969**, mean 0.9988 with shadowing on (5090, 2026-09-11; 0.9948 / 0.9982 before the guard fix) |
 | V8 | end-to-end training: separation grows, 130→8 pruning, keep-index-verified detector movement, no collapse, capture ∈ (0,1], bit-identical resume, legacy objective + variance criterion + stale-checkpoint refusal | PASS — separation 0.0290→0.0562, min separation 6.13 mm, resume mismatch exactly 0.0 (5090) |
+| V9 | the horn: aperture-integral directivity (Nikolova eq. 18.21) = closed form (18.39) within 0.2 dB; gain inside `HORN_SPEC` 19–21 dBi (±0.3) at 50 / 60 / 75 GHz; `RESOL_ANT` converged on the rail footprint (corr ≥ 0.9995 and amplitude within 1% vs 80×80); feed single-mode | PASS (laptop CPU, 2026-09-24): 20.086 = 20.086 dBi; 19.07 / 20.09 / 21.01 dBi; corr 0.999998; WR-15 TE10-only. Broken on purpose: `beta_wvg` → 20.9 dBi fails, `linspace` fails amplitude (1.022), the previous horn fails band + feed |
 
-Run them: `python tests_physics_3d.py` (V0–V4, CPU) · `python validation_3d.py`
+Run them: `python tests_physics_3d.py` (V0–V4 + V9, CPU) · `python validation_3d.py`
 (V5–V7, GPU) · `python v8_smoke_test.py` (V8, needs `--smoke` generation
 first) · or everything at once with `python lab_report.py`.
 
@@ -413,7 +436,8 @@ first) · or everything at once with `python lab_report.py`.
     aperture/(g+1) pitch.
 18. **The λ migration is a scaled replica, and the guards enforce it.**
     Everything Face3D chose in wavelengths scales with λ (DX, aperture, H_MS =
-    30λ, MS→det = 20λ, DIST_ANT = 28λ, the horn SIZE_ANT, DET_SIZE); the rail,
+    30λ, MS→det = 20λ, DIST_ANT = 28λ, the horn SIZE_ANT until 2026-09-24 —
+    finding 29 — and DET_SIZE); the rail,
     defect ranges, SEG_LEN, mounting tolerances (DET_JITTER_MM, roll/jitter
     augmentation), raycast `min_t` and the 4 mm shell-roughness lattice are
     physical and do NOT scale. Consequence: every Fresnel number **of the rig**
@@ -745,6 +769,101 @@ first) · or everything at once with `python lab_report.py`.
     in the Import source would show up cleanly.
 
 
+29. **The horn is the physical RFspin H-A75-W20, modelled with the textbook
+    aperture method — and the old "λ-scaled Face3D horn" was neither a real
+    part nor single-mode.** (2026-09-24. Equation numbers are N. K. Nikolova,
+    *Lecture 18: Rectangular Horn Antennas*, McMaster Univ. —
+    https://www.ece.mcmaster.ca/faculty/nikolova/antenna_dload/current_lectures/L18_Horns.pdf ;
+    also Balanis, *Antenna Theory*, Ch. 13.)
+
+    *How the horn field is computed — an analytic field AND a grid of point
+    sources.* `field3d.aperture_distribution` is eq. 18.38, the pyramidal-horn
+    aperture field
+
+        ψ(u, v) = cos(πu/A) · exp[+j (k/2)(u²/R_H0 + v²/R_E0)]
+
+    — the feed's TE10 cosine stretched to the mouth (E along y: s-polarised),
+    times the quadratic phase lag of the flare's longer path to the edges
+    (eqs. 18.5–18.8). Nikolova writes e^{+jωt}, hence her −j; rail3D and
+    Lumerical are e^{−iωt}, so the code carries +j. Apex distances by similar
+    triangles (18.43–18.44): R_H0 = A·L/(A − a), R_E0 = B·L/(B − b), with one
+    axial flare length L = R_H = R_E for a realizable horn (18.42).
+    `aperture_field` samples ψ at N × N = 20 × 20 cell **midpoints** (weight
+    ΔS = AB/N², `aperture_weight`) on the tilted aperture 140 mm out at 55°,
+    and each sample radiates through the exact RS-I kernel (`rs_kernel`, the
+    same one the rail facets use) into ψ0 (plane), ψ0_face (rail) and ψ2.
+
+    *Which part.* 60 GHz must sit inside ONE part's single-mode band;
+    f_c(TE_mn) = (c/2)·√((m/a)² + (n/b)²):
+
+    | part | feed a × b (mm) | 60 GHz is … | verdict |
+    |---|---|---|---|
+    | previous: Face3D horn × 5/8 | 5.81 × 3.88 | above TE10 25.8, TE01 38.7, TE11 46.5, TE20 51.6 GHz — **4 modes** | overmoded, not a real part |
+    | RFspin H-A60-W20 (40–60 GHz) | WR-19 4.78 × 2.39 | 4% below TE20/TE01 (62.8 GHz) | band edge |
+    | **RFspin H-A75-W20 (50–75 GHz, 19–21 dBi)** | **WR-15 3.7592 × 1.8796** | **1.50 × TE10 cutoff (39.9 GHz); next modes 79.7 GHz** | **chosen** |
+    | RFspin H-A90-W20 (60–90 GHz) | WR-12 3.10 × 1.55 | 1.24 × cutoff, β/k = 0.59 | band edge, dispersive |
+
+    *Dimensions — a fit; confirm with RFspin's drawing or calipers.* RFspin
+    publish the band, 19–21 dBi, and a 3D model of the OUTER shell
+    (`47558_H-A75-W20_simplified-model_2023.glb`, https://www.rfspin.com/product/h-a75-w20/):
+    outer mouth 23.8 × 17.8 mm, the WR-15 mouth, a UG-385/U flange, 31 mm
+    flange-to-mouth. 0.5 mm walls give inner A × B = 22.8 × 16.8 mm, and
+    L = 28.0 mm makes the model's gain **19.07 / 20.09 / 21.01 dBi at 50 / 60 /
+    75 GHz** — the spec across the band. Independent checks: within ~0.6 mm of
+    the textbook optimum-gain design (18.51), and both planes sit near their
+    optimum phase errors (H: t = A²/(8λR_H0) = 0.388 vs 3/8, eq. 18.24;
+    E: B²/(8λR_E0) = 0.224 vs 1/4, eq. 18.37). Walls 0.3–1.0 mm and L 26–31 mm
+    move the rail illumination by < 0.3 % (complex corr ≥ 0.997).
+
+    Model at 60 GHz: R_H0 = 33.5, R_E0 = 31.5 mm; ε_t = 0.81, ε_ph^H = 0.78,
+    ε_ph^E = 0.84 → aperture efficiency 0.53 (optimum ≈ 0.51, eq. 18.41);
+    D = 20.09 dBi; HPBW 15.8° (E) / 17.2° (H) (previous horn 18.8 dBi,
+    ≈ 19° / 21°); edge phase error 140° (H) / 81° (E). The rail at 140 mm is
+    0.44 of 2D²/λ (D = the 28.3 mm aperture diagonal; was 0.73): radiating near
+    field — why the RS sum, not a catalogue pattern, is the right model.
+    E-plane = y′–z′ (contains E; uniform amplitude, narrower beam, higher
+    sidelobes); H-plane = x′–z′ (cosine taper, lower sidelobes) — hence A > B
+    for a near-round beam.
+
+    *Two fixes to Face3D's aperture model* (`config.HORN_FLARE_K`,
+    `config.HORN_SAMPLING`; both provenance keys):
+    1. **Flare phase uses free-space k (`"k0"`), not the feed's guided β_g
+       (`"beta_wvg"`, eq. 18.4).** Once the horn widens the wave is
+       free-space-like (Nikolova p. 3). With the old feed β_g = 0.903k —
+       harmless (rail corr 0.9997); with WR-15 at 60 GHz β_g = 0.747k, a 25 %
+       phase underestimate that inflates D to ≈ 20.9 dBi.
+    2. **Midpoint sampling (`"midpoint"`)**, weight AB/N². Face3D's
+       edge-inclusive linspace grid over-weighted the amplitude by 2.2 %.
+    V1 passes `flare_k="beta_wvg", sampling="linspace"` with Face3D's λ=8 horn
+    explicitly, so it still tests solver equivalence; `compare_wavefronts.LAM8`
+    keeps Face3D's horn as the λ=8 reference.
+
+    *The choices barely matter; the part does.* Rail illumination, complex
+    corr: RS-I cosθ vs Huygens (1+cosθ)/2 obliquity 0.99997; midpoint vs
+    linspace 0.9986; exact vs quadratic phase 2.8° max; **previous → new horn
+    0.977** (a 2.3 % change). On a flat plane at crown height the −3 dB
+    footprint along the rail narrows 42 → 36 mm and the rail ends (y = ±60)
+    brighten 0.28 → 0.32 of peak — so re-check the SEG_LEN = 120 mm
+    truncation criterion with the new beam (SETUP_LAB §7e).
+
+    *Limit, and how it is checked.* The aperture method is itself a PO
+    approximation: no reflections inside the horn, no rim diffraction
+    (Nikolova p. 15) — though it predicts measured gain well, which is why
+    horns are gain standards. **V9** holds the code to the textbook.
+    **Lumerical rung −1** (`horn_fdtd_case.py` → `fdtd_agreement.py --horn`,
+    LUMERICAL.md §5) measures what the method omits; `horn_source.py
+    --aperture-from` then carries the full-wave aperture into the rail runs
+    (fits one complex gain so only the SHAPE comes from FDTD; synthetic round
+    trip corr 0.99987).
+
+    *Consequences.* `SIZE_ANT`, `HORN_FLARE_K` and `HORN_SAMPLING` are
+    provenance keys: every dataset and checkpoint made with the previous horn
+    is refused, and the next prelim generates into a fresh auto-suffixed root
+    (finding 23; tag `ee8367` for this config). The prelim result of findings
+    24–25 was produced with the PREVIOUS horn. The config comment that called
+    the scaled horn "single-mode-identical" was wrong and is corrected.
+
+
 ## 6b. Objective & metrics (rev. 2)
 
 `TrainConfig(objective="rank", metric="cos", target_fpr=0.05)` is the default.
@@ -766,32 +885,51 @@ threshold, **balanced accuracy** at the swept optimum
 (`losses3d.best_threshold`, Face3D's argmin(FN+FP)), class accuracy, plus
 ROC / noise / alignment curves in `full_evaluation`.
 
-## 7. Current state / what remains
+## 7. Current state / what remains (2026-09-29)
 
-Done and committed on **`3D_railhead_upgrade`** (2026-08-17): all modules;
-the detector-lattice bug fix + training-hazard fixes; the λ=5 scaled-replica
-migration with its provenance/checkpoint/generator/metaunit guards; V0, V0b,
-V0c, V1–V4 green at λ=5 on the laptop. All λ=8 datasets and checkpoints on
-disk are *refused, not deleted* — they remain the record.
+**Picking this up cold: read `NEXT_SESSION.md` first** — the short handoff with
+the exact next commands.
 
-**Remaining (on the lab 5090, in order — the exact commands are SETUP_LAB.md
-§B "λ=5 bring-up runbook"):**
-1. `git pull` → `python preflight.py` — expect the λ=8 datasets to be flagged
-   stale (that is the guard working) and exit 1 until a λ=5 set exists.
-2. One guard demo: `generate_dataset_3d.py --smoke` against the old smoke root
-   must REFUSE; then delete that root.
-3. `python lab_report.py` — V0–V8 including the **pending** V5–V7 at λ=5 plus
-   a fresh smoke set with measured samples/s (~10–15 min).
-4. `python scan_geometry.py` — the H table in config.py was measured at λ=8;
-   the rig scaled but the defects did not, so confirm 30λ still wins.
-5. Send back `lab_report.md`, `verification_report.json`,
-   `geometry_scan.json`, the refusal logs and `setup_diagram.png` for review
-   **before** committing to the full generation.
-6. After sign-off: `generate_dataset_3d.py --profile lab --name L5_H150_v1`
-   (~1.5–2 h estimated at 2.56× the λ=8 face count; resumable) →
-   `inspect_dataset.py` → train (SLM + no-MS; metaunit is blocked until a
-   60 GHz library exists) → `analyze_results.py` → `sweep_detectors.py`.
-   Geometry exploration: `--smoke --smoke-n 60-80 --name <tag>` per candidate.
+Done and committed on **`3D_railhead_upgrade`**:
+- λ=5 migration verified end to end on the 5090 (V0–V8, 2026-09-04); H = 30λ
+  re-confirmed by `scan_geometry.py` at λ=5.
+- Shadow guard settled: `SHADOW_MIN_T = 0.05`, `SHADOW_NORMAL_OFFSET = 0.3`
+  (finding 3).
+- Defect model rev.3 (2026-09-12): 3-line box cracks 4–8 mm deep, 1.5–3 mm
+  wide; shells confined to the gauge corner.
+- First end-to-end prelim run (2026-09-11, `L5_prelim_9d5878`, PREVIOUS
+  horn): pipeline clean, optimiser not — the no-MS baseline beat the SLM
+  (findings 24–26).
+- Lumerical FDTD tooling: horn Import source (no TFSF), rung 0 and rail
+  scorers, target figures, Layout mockup (findings 27–28, LUMERICAL.md).
+- **Real horn (2026-09-24, finding 29):** RFspin H-A75-W20, textbook aperture
+  model, V9 gate, rung −1 full-wave horn case, `horn_source.py
+  --aperture-from`.
+- `scipy` declared in `requirements.txt` (the lab venv lacked it);
+  `preflight.py` names missing packages.
+- Overview deck updated with horn / FDTD / prelim slides
+  (`data/generated/rail3D_overview.pptx`, gitignored; builders in
+  `presentation/`).
+
+**Remaining, in order** (lab 5090 unless noted; commands in SETUP_LAB §7e):
+1. `git pull`, `pip install -r requirements.txt` (never `-U`), `preflight.py`,
+   `tests_plumbing.py`, `tests_physics_3d.py` (V9 included).
+2. `validation_3d.py` — V5–V7 under the new horn.
+3. SEG_LEN cut-end re-check with the new beam (not scripted yet).
+4. `run_stage.py --stage prelim --fresh --with-baseline --bundle` → fresh
+   auto-suffixed root.
+5. `ablate_surface.py --stage prelim --long` on that root — the
+   baseline-beats-SLM question (finding 24).
+6. Optional: `scan_geometry.py` (H = 30λ was chosen under the old beam).
+7. Lumerical: rung −1 (horn) → rung 0 (empty box) → plate → intact → crack
+   (LUMERICAL.md §5).
+8. Confirm the horn's inner dimensions (drawing / calipers). A 60 GHz
+   meta-atom library (`surface="metaunit"` is blocked at λ≠8).
+
+Not built yet: the rung-3 **difference-field** scorer in `fdtd_agreement.py`;
+plumbing test **P6** for `--horn` / `--aperture-from` (both verified only by
+scratch round trips: an ideal export passes and a flat-phase horn fails
+`--horn`; aperture-from reproduces the analytic source at corr 0.99987).
 
 ## 8. Simplifications & limitations (what this simulation is NOT)
 
@@ -807,9 +945,10 @@ discover them by surprise. Grouped by where they live:
 - **Single tone** — no bandwidth, dispersion or FMCW modelling. (60 GHz sits
   on the O₂ absorption line, ~15 dB/km — negligible at 0.4 m, noted for
   completeness.)
-- **Idealized horn**: single-mode cosine aperture field with quadratic phase;
-  no edge diffraction, no measured pattern. The λ-scaled SIZE_ANT keeps the
-  waveguide's modal content identical to the validated λ=8 model.
+- **Aperture-model horn**: the H-A75-W20's TE10 cosine aperture field with
+  quadratic phase (Nikolova eq. 18.38) — no internal reflections, no rim
+  diffraction, no measured pattern; inner dimensions fitted to the gain spec
+  (finding 29). Lumerical rung −1 measures what this omits.
 - **Binary face visibility, no receive-cosine** (finding 4) — faithful to the
   validated Face3D formulation, discontinuous at the terminator.
 
@@ -830,12 +969,10 @@ discover them by surprise. Grouped by where they live:
 **Shadowing**
 - **Source-side only** (rail→horn ray-cast); rail→plane occlusion is not
   tested — matches the shallow-defect regime.
-- Occluder mesh is λ/2. `config.SHADOW_MIN_T = 3.0 mm` is the only value the
-  V6b sweep found artifact-safe, and it costs ~5–6% of genuine crack
-  self-shadowing (~10% against a finer occluder): **self-shadowing of narrow
-  craters is effectively absent from the current datasets** (finding 3). This
-  is a known, measured omission, not an oversight — the 1.0–3.0 mm gap is
-  where a better trade may exist.
+- Occluder mesh is λ/2, with the shipped guard `SHADOW_MIN_T = 0.05`,
+  `SHADOW_NORMAL_OFFSET = 0.3` (finding 3): the intact self-shadow artifact is
+  exactly 0.0, and the λ/2 occluder captures 98% of what a λ/8 one sees on a
+  9.6 mm crack (`crack_shadow_omitted_by_coarse_occluder = 0.0113`).
 
 **Sensing & noise**
 - Detectors are **ideal rectangular power integrators**: unity quantum

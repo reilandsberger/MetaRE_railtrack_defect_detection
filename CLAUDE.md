@@ -1,9 +1,45 @@
 # CLAUDE.md — MetaRE railtrack defect detection
 
-*Last updated: 2026-09-18 · λ = 5 mm (60 GHz) · rev.3 defect model · prelim run
-2026-09-11 on L5_prelim_9d5878 — see README findings 24 (the baseline beats the
-metasurface: an optimization failure), 25 (s0 is the dominant variable) and
-26 (stale gate blocks). Shadow guard settled 2026-09-11 (min_t 0.05, offset 0.3).*
+*Last updated: 2026-09-29 · λ = 5 mm (60 GHz) · horn = physical RFspin H-A75-W20
+(README finding 29, 2026-09-24) · rev.3 defect model · prelim run 2026-09-11 on
+L5_prelim_9d5878 with the PREVIOUS horn — README findings 24 (the baseline beats
+the metasurface: an optimization failure), 25 (s0 is the dominant variable), 26
+(stale gate blocks) · Lumerical horn Import source + rung −1 — findings 27–29 ·
+shadow guard settled 2026-09-11 (min_t 0.05, offset 0.3).*
+
+## START HERE (cold start, 2026-09-29)
+
+**Read `rail3D/NEXT_SESSION.md` first** — the current handoff: state, the exact
+next lab commands, open items, landmines. Then this file, then
+`rail3D/README.md` (§4 conventions, §6 findings — 29 is the newest).
+
+## Horn change (2026-09-24) — the newest state
+
+- The horn is now the **physical RFspin H-A75-W20** (50–75 GHz, WR-15 feed,
+  19–21 dBi): `config.SIZE_ANT = (22.8, 16.8, 3.7592, 1.8796, 28.0)` mm (inner
+  A, B; feed a, b; axial flare L) — **not λ-scaled**. Inner dimensions are a
+  fit to RFspin's outer 3D model + gain spec: confirm with the drawing or
+  calipers. The old Face3D-horn×5/8 feed was OVERMODED at 60 GHz.
+- Aperture model = textbook (Nikolova L18 eq. 18.38): free-space k in the flare
+  phase (`HORN_FLARE_K="k0"`), midpoint sampling (`HORN_SAMPLING="midpoint"`).
+  V1 pins Face3D's variants explicitly, so it still replays Face3D.
+- New gate **V9** (`tests_physics_3d.py`, CPU, seconds): D 20.09 dBi numeric =
+  closed form; 19.07 / 20.09 / 21.01 dBi across 50 / 60 / 75 GHz; RESOL_ANT
+  converged; single-mode feed. Rail illumination vs the old horn: corr 0.977.
+- All three are provenance keys → old datasets/checkpoints refused; the next
+  prelim goes into a fresh auto-suffixed root (tag `ee8367`). **Lab re-run
+  pending: SETUP_LAB §7e.**
+- Lumerical **rung −1** (the horn alone, full-wave): `horn_fdtd_case.py --out
+  DIR` → Mode source TE10 (check neff 0.7468) → `export_horn.lsf` →
+  `fdtd_agreement.py --horn horn_aperture.mat --horn-near horn_near.mat`.
+  `horn_source.py --aperture-from horn_aperture.mat` builds the rail Import
+  source from the full-wave horn. LUMERICAL.md §5.
+- `scipy` is now in `requirements.txt` — the lab venv lacked it and
+  `compare_wavefronts.py --export-case` died in `horn_source.build`.
+  `preflight.py` names missing packages.
+- Overview deck: `rail3D/data/generated/rail3D_overview.pptx` (gitignored; the
+  2026-09-04 original is `rail3D_overview_2026-09-04.pptx`), figures in
+  `rail3D/data/figures/deck_2026-09-24/`, builders in `rail3D/presentation/`.
 
 ## Prelim result, rev.3 defect model (2026-09-11) — PIPELINE CLEAN, MODEL NOT
 
@@ -78,7 +114,8 @@ Trainable metasurface + detector "barcode" system for rail defect detection.
   source, no TFSF** (`rail3D/LUMERICAL.md`, README finding 28). Lumerical is
   exp(−iωt) like rail3D, so its exports align AS-IS; the GPU solver has no TFSF
   and needs 2025 R1.1+ for Import sources; STL imports as µm unless the length
-  unit is mm first. Rung 0 (empty box) gates everything after it.
+  unit is mm first. Rung −1 (the horn alone, `fdtd_agreement.py --horn`) and
+  rung 0 (empty box, `--injection`) gate everything after them.
 - **Interpreting a returned result set: `rail3D/READING_RESULTS.md`.** Pass rules
   for every gate, what each field means, how to tell which commit produced a
   report, and the specific ways each output has been misread. Read it before
@@ -149,10 +186,9 @@ crack is the limiting class and this is the direction that would matter.
 
 ## Previous state (2026-09-04 — λ=5 migration VERIFIED end to end on the 5090)
 
-> **Picking this up cold? Read `rail3D/NEXT_SESSION.md` first.** It is the
-> short handoff: the two unpushed commits, the ONE open technical question
-> (the shadow normal-offset anomaly) with the exact command to resolve it, and
-> the pending FDTD-solver decision. Delete it once both are closed.
+> *(Historical: the 2026-09-04 handoff's two questions — the shadow offset and
+> the FDTD solver — are both closed. `rail3D/NEXT_SESSION.md` has since been
+> rewritten as the current 2026-09-29 handoff; see START HERE at the top.)*
 
 ### Lab results (2026-09-04) — read this first
 
@@ -211,8 +247,9 @@ All eleven gates PASS at λ=5 on the RTX 5090. What the numbers say:
    cracks, so turning it off would NOT be bit-identical; it would delete that
    much field on deep cracks. The ~50% of generation time it costs buys real
    physics.
-3. **Which full-wave solver is licensed** (blocks the cross-check run, not the
-   code). The answer to "Zemax or Lumerical?" is **neither** — it is a MoM
+3. ~~**Which full-wave solver is licensed**~~ **RESOLVED: Lumerical FDTD** is
+   what is available (LUMERICAL.md, README findings 27–29); the MoM reasoning
+   below stands only if an IE licence ever appears. Original note: The answer to "Zemax or Lumerical?" is **neither** — it is a MoM
    problem: **Ansys HFSS-IE** (needs the Integral Equation licence, not just
    FEM) or **Altair FEKO**. Zemax's POP shares this code's scalar-Kirchhoff
    assumptions and would only confirm itself; full-scene FDTD is 387 Mcells /
@@ -229,8 +266,9 @@ Read the section top to bottom before changing physics, geometry or the objectiv
 
 - **`WVL = 5.0` (60 GHz), scaled replica**: everything Face3D chose in wavelengths
   scales ∝λ — `DX=2.5`, aperture 150×75 (grid stays 60×30), `H_MS = 30λ = 150`,
-  MS→det `= 20λ = 100`, `DIST_ANT = 28λ = 140`, horn `SIZE_ANT` ×5/8 (keeps the
-  waveguide single-mode), `DET_SIZE` ×5/8 = 11.375×7.0. The rail, `SEG_LEN=120`,
+  MS→det `= 20λ = 100`, `DIST_ANT = 28λ = 140`, horn `SIZE_ANT` ×5/8 (SUPERSEDED
+  2026-09-24: the horn is now the physical H-A75-W20, and the scaled feed was
+  in fact overmoded — README finding 29), `DET_SIZE` ×5/8 = 11.375×7.0. The rail, `SEG_LEN=120`,
   defect ranges, `DET_JITTER_MM=3`, augmentation, raycast `min_t` stay physical:
   defect/λ grows 1.6× — the migration's purpose. Every Fresnel number is
   preserved exactly (V3's error matches λ=8 to 6 significant figures).
@@ -391,7 +429,7 @@ trip there is a physics finding to report, not a bug.
 ```bash
 cd rail3D
 python preflight.py                              # ALWAYS first: code/GPU/CSV/dataset/ckpt
-python tests_physics_3d.py                       # V0,V0b,V0c,V1-V4 (~5 s, CPU)
+python tests_physics_3d.py                       # V0,V0b,V0c,V1-V4,V9 (seconds, CPU)
 python setup_diagram.py                          # review figures (CPU)
 ```
 
@@ -402,9 +440,11 @@ plane), `inspect_dataset.py` (review a dataset), `analyze_results.py` (where it
 succeeds and fails, per defect parameter), `sweep_detectors.py` (final detector
 count / MS→detector distance), `slm_profile.py` (the trained mask: wrapped phase,
 |t| — exactly 1 for the phase-only SLM — incident light, change from init),
-`horn_source.py` (rail3D's horn as a Lumerical Import source: E+H .mat + .lsf),
+`horn_source.py` (rail3D's horn as a Lumerical Import source: E+H .mat + .lsf;
+`--aperture-from` uses the rung −1 full-wave aperture), `horn_fdtd_case.py`
+(rung −1: the H-A75-W20 as a PEC STL + Mode-source plan + export script),
 `fdtd_agreement.py` (Lumerical vs rail3D at z = 30 and the MS plane, horn by default;
-`--injection` is rung 0; `--target`
+`--horn` is rung −1; `--injection` is rung 0; `--target`
 draws a labelled TARGET), `lumerical_mockup.py` (the target setup drawn into a
 Layout-window screenshot), `rail3D_pipeline.ipynb` (narrated end to end).
 

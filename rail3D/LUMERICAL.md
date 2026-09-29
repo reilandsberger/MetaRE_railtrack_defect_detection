@@ -1,7 +1,9 @@
 # Validating rail3D against Ansys Lumerical FDTD — horn Import source
 
-*Last updated: 2026-09-18 · λ = 5 mm (59.9585 GHz) · written for Lumerical FDTD
-2025 R1 (modern UI). Rewritten for the horn Import-source design: no TFSF.*
+*Last updated: 2026-09-29 · λ = 5 mm (59.9585 GHz) · written for Lumerical FDTD
+2025 R1 (modern UI). Horn Import-source design, no TFSF. The horn is now the
+physical RFspin H-A75-W20 (README finding 29), and rung −1 simulates it
+full-wave (§5).*
 
 **What this answers.** `field3d.py` is **physical optics**: scalar, PEC
 tangent-plane currents, single + double bounce. Crack lines are 1.5–3 mm wide =
@@ -31,7 +33,10 @@ says so, and rung 0 exists to check it.
    run on your GPU anyway: *"FDTD GPU does not support TFSF sources and an error is
    shown if a TFSF source is present"* [GPU].
 
-**Generate the case bundles** (from `rail3D/`, on either machine — ~15 s each):
+**Generate the case bundles** (from `rail3D/`, on either machine — ~15 s each).
+They need **scipy** (`pip install -r requirements.txt`, never `-U`): an
+environment set up before 2026-09-24 fails with `ModuleNotFoundError: No module
+named 'scipy'` inside `horn_source.build`.
 
 ```bash
 python compare_wavefronts.py --sample intact --source horn --plane-z 30 --export-closed --export-only --export-case data/generated/fdtd_intact
@@ -90,19 +95,19 @@ comes **up**: the reflected and scattered field, every bounce included. No TFSF
 and no subtraction run are needed to separate incident from scattered light.
 
 **The source window covers only the rays that can reach the rail.** The horn is
-a 3.4λ × 2.7λ aperture, so its beam is wide: at crown height the −20 dB contour
-spans y = ±128 mm. `horn_source.py` projects every lit rail facet toward the phase
+the H-A75-W20, a 4.6λ × 3.4λ aperture (22.8 × 16.8 mm), so its beam is wide: at
+crown height the −20 dB contour spans y = ±108 mm. `horn_source.py` projects every lit rail facet toward the phase
 centre onto z = 15, adds 6λ, and applies a 2λ raised-cosine edge taper. The
 result is x −28…102.5, y ±78.25 mm. Checked in free space against rail3D's full
 horn on the rail's footprint (`horn_source.json`):
 
 | plane | complex correlation with the full horn |
 |---|---|
-| crown, z = 0 | 0.9989 |
+| crown, z = 0 | 0.9990 |
 | z = −40 | 1.0000 |
 | z = −80 (web) | 0.9991 |
 
-The window carries 72% of the horn's power. The other 28% never reaches the rail.
+The window carries 74% of the horn's power. The other 26% never reaches the rail.
 
 **E and H are both supplied.** Lumerical: without H, the source *"makes certain
 assumptions … These assumptions hold true for narrow sources such as Gaussian and
@@ -112,8 +117,8 @@ defining complex beams, it is best to specify both E and H"* [Import].
 - **Each plane-wave component** carries ŷ projected transverse to its own k.
 - **H = (k × E)/(ωμ₀)**.
 
-Self-checks: 99.99% of the flux goes down, |E|/|H| = 376.4 Ω against Z₀ = 376.7 Ω,
-and cross-polarisation is Ex/Ey 0.17, Ez/Ey 0.14 rms.
+Self-checks: 99.998% of the flux goes down, |E|/|H| = 376.5 Ω against Z₀ = 376.7 Ω,
+and cross-polarisation is Ex/Ey 0.15, Ez/Ey 0.12 rms.
 
 **Time convention — no conjugation expected.** Lumerical's documented transform is
 *"P(ω) = ∫ e^{iωt} P(t) dt"*, with J = −iωP [Force]. That is the exp(−iωt)
@@ -301,6 +306,68 @@ python fdtd_agreement.py --sample intact --external intact_z30.mat
 Each rung isolates one unknown. Skipping ahead means a disagreement has several
 possible causes and you cannot tell which.
 
+**Rung −1 — the horn alone: is rail3D's aperture model the real horn?**
+(README finding 29.) Every later rung uses rail3D's *model* of the horn, so this
+is the one run that tests the model itself. Separate, small simulation, in the
+horn's **local frame**: aperture at z′ = 0, boresight +z′, x′ along A (the TE10
+cosine), E along y′. Build the case (seconds, either machine):
+
+```bash
+python horn_fdtd_case.py --out data/generated/fdtd_horn
+```
+
+It writes `horn_body.stl`, `horn_case.json` (every number below) and
+`export_horn.lsf`. In a NEW FDTD file:
+
+1. **File → Units → Length = mm, then import `horn_body.stl`**, material **PEC
+   (Perfect Electrical Conductor)**. It is a watertight hollow horn: a 16 mm
+   WR-15 section (3.7592 × 1.8796 mm inside) + the flare to 22.8 × 16.8 mm over
+   28 mm, 0.5 mm walls (checked: oriented, closed, volume 767.564 mm³).
+2. **FDTD region** x −39.4…39.4, y −36.4…36.4, z −38…23 mm; **PML on all six
+   faces** (the waveguide runs into the z-min PML, which absorbs it like a
+   matched load). Mesh: uniform **λ/20 = 0.25 mm** (the walls are 2 cells),
+   refinement *conformal variant 1* → ≈ 22.5 M cells, ≈ 2.3 GB. λ/15 (9.5 M,
+   0.9 GB) for a quick first look.
+3. **Source → Mode**: injection axis **z**, direction **Forward**, at
+   **z = −34 mm**, x −3.38…3.38, y −2.44…2.44 mm (the waveguide + 1.5 mm),
+   frequency **59.9585 GHz**, mode selection **fundamental mode**. Before
+   running, the mode solver must show **neff ≈ 0.7468** (= β_g/k, Nikolova eq.
+   18.4) and E along y′ with a cos(πx′/a) profile across the broad wall. WR-15
+   is single-mode at 60 GHz (TE10 cutoff 39.9 GHz, next modes 79.7 GHz), so
+   "fundamental" IS TE10 — no TE/TM naming question.
+4. **Two 2D Z-normal frequency-domain monitors**: `mon_aperture` at z = 0.5 mm,
+   x ±21.4, y ±18.4 (the mouth + 2λ); `mon_near` at z = 15 mm, x ±31.4,
+   y ±28.4 (3λ out + 4λ).
+5. Run, then run **`export_horn.lsf`** → `horn_aperture.mat`, `horn_near.mat`.
+
+```bash
+python fdtd_agreement.py --horn horn_aperture.mat --horn-near horn_near.mat
+```
+
+Passes (proposed `HORN_CRITERIA` — revisit after the first real run) when:
+- the aperture field's complex correlation with eq. 18.38 is ≥ 0.95 — not ≈ 1:
+  the aperture method omits rim currents and internal reflections (Nikolova
+  p. 15), which is exactly what this rung measures;
+- the field 3λ out (`mon_near`) correlates ≥ 0.98 with rail3D's;
+- far-field HPBW (E, H) within 1.5° of the model's 15.8° / 17.2°, directivity
+  within 0.5 dB of 20.09 dBi, **and** the FDTD gain inside the part's
+  19–21 dBi.
+
+It writes `data/figures/fdtd_horn_agreement.png` and a `_stamp`ed
+`data/generated/fdtd_horn_agreement.json`. Then, optionally, drive the rail rungs
+with the **full-wave** horn instead of the formula (overwrites that bundle's
+`horn_source.mat`; reports the source-plane correlation against the analytic horn):
+
+```bash
+python horn_source.py --out data/generated/fdtd_intact --aperture-from horn_aperture.mat
+```
+
+It resamples the aperture at λ/10, fits one complex gain to the model (so only
+the SHAPE comes from FDTD), and radiates it from z′ = 0.5 mm with the RS-I
+kernel. Verified on a synthetic round trip: the model's own aperture reproduces
+the analytic source at corr 0.99987; a horn with the flare phase removed drops
+to 0.909.
+
 **Rung 0 — empty box: is the horn injected correctly?** Same file as §4, but with
 the rail **disabled** (right-click → disable). Add a second Frequency-Domain
 monitor `mon_z0`: 2D Z-normal, x −60…60, y −70…70, **z = 0**. Run, then export
@@ -406,9 +473,10 @@ From `case.json` → `fdtd.mesh_options` (uniform mesh; RAM ≈ 100 B/cell):
   measures the model's error, not its scope.
 - It says nothing about the metasurface or detector training, which sit downstream
   and are governed by V5–V8.
-- The horn itself is rail3D's aperture model in both codes. FDTD checks what happens
-  **after** the horn's field leaves the source plane, not whether the aperture
-  model matches a physical horn.
+- Rungs 0–3 use rail3D's aperture-model horn in both codes: they check what
+  happens **after** the horn's field leaves the source plane. Whether that model
+  matches the physical horn is rung −1's question, and `--aperture-from` carries
+  rung −1's answer into the rail rungs.
 
 ---
 
@@ -431,3 +499,5 @@ From `case.json` → `fdtd.mesh_options` (uniform mesh; RAM ≈ 100 B/cell):
 - [Materials] Material database in the Lumerical FDTD and MODE products — https://optics.ansys.com/hc/en-us/articles/360034394614-Material-database-in-the-Lumerical-FDTD-and-MODE-products
 - [TFSF tips] Tips and best practices when using the FDTD TFSF source — https://optics.ansys.com/hc/en-us/articles/360034382934-Tips-and-best-practices-when-using-the-FDTD-TFSF-source
 - [Rotations] Source Rotations in 3D FDTD — https://optics.ansys.com/hc/en-us/articles/1500002383802-Source-Rotations-in-3D-FDTD
+- [Nikolova] N. K. Nikolova, Lecture 18: Rectangular Horn Antennas (McMaster Univ.) — https://www.ece.mcmaster.ca/faculty/nikolova/antenna_dload/current_lectures/L18_Horns.pdf
+- [RFspin] H-A75-W20 standard gain horn, 50–75 GHz — https://www.rfspin.com/product/h-a75-w20/

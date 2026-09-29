@@ -1,6 +1,7 @@
 # rail3D — Lab Workstation Setup (RTX 5090)
 
-*Last updated: 2026-09-18 · λ = 5 mm (60 GHz), V0–V8 measured on the 5090 — bump this line in any
+*Last updated: 2026-09-29 · λ = 5 mm (60 GHz), V0–V8 measured on the 5090 · horn changed to the
+RFspin H-A75-W20 on 2026-09-24 — re-run per §7e · bump this line in any
 commit that changes behaviour this file describes. Timings are now MEASURED
 at λ=5 on the lab 5090 (2026-09-04), not extrapolated.*
 
@@ -269,6 +270,10 @@ pip install torch --index-url https://download.pytorch.org/whl/cu128
 pip install -r requirements.txt
 ```
 
+`requirements.txt` includes **scipy** since 2026-09-24 (Lumerical `.mat` files,
+V9's Fresnel integrals). An environment built before then lacks it — `pip
+install scipy`, or re-run the line above. `preflight.py` names missing packages.
+
 **Never add `-U` / `--upgrade` to that second command.** `requirements.txt` only
 asks for `torch>=2.7`, which your cu128 build already satisfies; an upgrade would
 resolve against PyPI and replace it with a CPU-only wheel, silently killing CUDA.
@@ -508,7 +513,7 @@ next run into a fresh root instead of being refused by the generator, and the
 old dataset stays on disk as the record. Checkpoint names follow the root
 (`ms3d_slm_l5_prelim_9d5878`), so the checkpoint geometry stamp cannot refuse
 either. The banner says which root was chosen and why; `--name X` overrides.
-Only the 40 provenance keys move the tag — changing `n_epoch` does not, because
+Only the 42 provenance keys (`data3d.PROVENANCE_KEYS`) move the tag — changing `n_epoch` does not, because
 those datasets are still comparable.
 
 **Or run it from the notebook.** The `run_stage.py` cell in section 6 shells out
@@ -565,6 +570,65 @@ notebook runs the same thing in section 9.
 construction. A structured amplitude map needs the meta-atom model, which is
 blocked at λ=5. Send the PNG back together with the printed `moved … rad RMS from
 init` line.
+
+---
+
+## 7e. After the horn change (2026-09-24) — the lab re-run
+
+The horn is now the physical **RFspin H-A75-W20** (README finding 29).
+`SIZE_ANT`, `HORN_FLARE_K` and `HORN_SAMPLING` are provenance keys, so every
+dataset and checkpoint made before is **refused, by design**, and the next stage
+run generates into a fresh auto-suffixed root (`L5_prelim_<tag>`). In order:
+
+```bash
+cd ~/Documents/Rei/MetaRE_railtrack_defect_detection && git pull && pip install -r rail3D/requirements.txt
+```
+
+(Never `-U`. This is what brings in scipy — without it `compare_wavefronts.py
+--export-case` dies with `ModuleNotFoundError: No module named 'scipy'` inside
+`horn_source.build`.)
+
+```bash
+cd rail3D && python preflight.py && python tests_plumbing.py && python tests_physics_3d.py
+```
+
+**V9 must pass**: D 20.09 dBi numeric = closed form, 19.07 / 20.09 / 21.01 dBi at
+50 / 60 / 75 GHz, footprint corr ≥ 0.9995, feed single-mode.
+
+```bash
+python validation_3d.py 2>&1 | tee ../validation_newhorn.log
+```
+
+V5–V7 under the new illumination (V5 read 0.958 on the laptop with the new horn).
+
+**SEG_LEN check (not scripted yet).** The rail ends are now lit at 0.32 of peak
+(0.28 before). SEG_LEN = 120 mm was justified at λ=8 by a defect-signal cosine ≥
+0.997 against a 240 mm segment (config.py, "Measured truncation study"). Repeat
+that comparison with the new horn before the full generation — needs a small
+script; `compare_wavefronts.py --seg N` solves one sample at a given length.
+
+```bash
+python run_stage.py --stage prelim --fresh --with-baseline --bundle 2>&1 | tee ../prelim_newhorn.log
+```
+
+~0.6 h + ~6 min of training. The banner must name a NEW root (not
+`L5_prelim_9d5878`). Then the open optimiser question (§7c) on that root:
+
+```bash
+python ablate_surface.py --stage prelim --long 2>&1 | tee ../ablation_newhorn.log
+```
+
+Optional: `python scan_geometry.py` — H = 30λ was chosen under the old beam.
+Send back the stage bundle, `surface_ablation.json` and the two logs.
+
+**Lumerical** (LUMERICAL.md §5): rung −1 (`python horn_fdtd_case.py --out
+data/generated/fdtd_horn`, then `fdtd_agreement.py --horn …`) → rung 0 → plate →
+intact → crack. Re-export the rail bundles first — the old `fdtd_intact/`,
+`fdtd_crack/` carry the previous horn:
+
+```bash
+python compare_wavefronts.py --sample intact --source horn --plane-z 30 --export-closed --export-only --export-case data/generated/fdtd_intact
+```
 
 ---
 
@@ -774,7 +838,8 @@ Measured at **λ=5 on the lab 5090** (2026-09-04):
 > **With Lumerical FDTD (the licence actually available): follow
 > `LUMERICAL.md`** — rail3D's horn enters as an **Import source** (no TFSF;
 > `horn_source.py`, written into every `--source horn --export-case` bundle).
-> Rung 0 first: `python fdtd_agreement.py --injection empty_z0.mat --leak
+> Rung −1 first (the horn alone, `horn_fdtd_case.py` → `fdtd_agreement.py
+> --horn`), then rung 0: `python fdtd_agreement.py --injection empty_z0.mat --leak
 > empty_z30.mat`. Then score each run with `python fdtd_agreement.py --sample
 > intact --external intact_z30.mat` (both planes, % agreement, worst-pixel
 > residuals with locations, pass/fail). `--target` draws what passing looks like.

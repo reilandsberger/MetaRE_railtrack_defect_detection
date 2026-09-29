@@ -1,226 +1,179 @@
-# rail3D — session handoff, 2026-09-04
+# rail3D — session handoff, 2026-09-29
 
-## Context
+*Last updated: 2026-09-29. Rewritten for a cold start on a new Claude account: no
+chat history or auto-memory is assumed. Everything needed is in this repo, plus
+the external paths listed at the end.*
 
-The λ=8 → λ=5 mm (60 GHz) migration is complete and verified end to end on the
-lab RTX 5090. This note exists because the session ran out of usage mid-way
-through one open technical question and one pending decision. Everything below
-is committed on `3D_railhead_upgrade`.
+## Read in this order
 
-**Read first:** `CLAUDE.md` (current state), then `rail3D/README.md` §4
-(conventions), §6 (findings 3, 17, 18, 19 are the recent ones) and §8
-(limitations). All three carry a `Last updated` line — bump it with any change.
+1. **This file** — state, next commands, open items, landmines.
+2. `CLAUDE.md` (repo root) — ground rules and the dated state sections.
+3. `rail3D/README.md` — §4 conventions, §6 hard-won findings (**29 = the horn,
+   newest**; 24–26 = the prelim result; 27–28 = Lumerical), §7 current state,
+   §8 limitations.
+4. As needed: `rail3D/SETUP_LAB.md` (lab runbook — **§7e is the next run**),
+   `rail3D/LUMERICAL.md` (FDTD, rungs −1…3), `rail3D/READING_RESULTS.md` (what
+   every output field means, and how each has been misread).
 
-## FIRST ACTION: push
+Every doc has a `Last updated` line under its title — bump it in the same
+commit as any behaviour change it describes.
 
-Two commits are **unpushed**. The lab machine cannot see them:
+## Project in one paragraph
 
-```bash
-git push origin 3D_railhead_upgrade
-```
+Trainable metasurface + detector "barcode" system for rail-head defect
+detection. A 60 GHz (λ = 5 mm) horn at 55° lights the rail; physical-optics
+scattering (exact RS-I surface integral, ported from the experimentally
+validated Face3D code) reaches a 60×30 plane 150 mm up (dark-field: the
+specular lobe misses the aperture); a trainable phase mask (SLM) and 130→8
+trainable detector windows produce 8 numbers; a classifier gives
+defect / no-defect and crack / dent / wear / shell. All code is in `rail3D/` on
+branch **`3D_railhead_upgrade`** (the λ=12 mm 2D code at the repo root is
+legacy reference — do not modify).
 
-- `e171767` — lab V0–V8 results recorded; two of my earlier claims corrected
-- `f046554` — Plan A (shadow normal-offset fix) + V6b harness rebuild
+## Where things stand (2026-09-29)
 
-## Where things stand
+- **Pipeline verified at λ = 5** on the lab RTX 5090 (V0–V8, 2026-09-04),
+  shadow guard settled 2026-09-11 (`min_t` 0.05, `normal_offset` 0.3).
+- **First prelim run (2026-09-11, `L5_prelim_9d5878`, PREVIOUS horn):**
+  8400 samples in 0.57 h, all gates green — but the **no-metasurface baseline
+  beat the SLM** (val AUC 0.976 vs 0.880). Zero phase reproduces the baseline
+  exactly (0.000e+00), so it is an **optimisation failure**, not physics
+  (finding 24). Suspects: SLM init phase std π/2 (a random diffuser) and
+  `w_capture = 0.2` in a noiseless eval. Also: arc position `s0`, not depth,
+  dominates detection (crack 0.03 → 0.82 across s0 107 → 148 mm; finding 25);
+  read the confusion matrix before quoting `class_acc` (the classifier defaults
+  to "crack").
+- **Horn replaced (2026-09-24, finding 29):** the physical **RFspin
+  H-A75-W20** (50–75 GHz, WR-15, 19–21 dBi), `SIZE_ANT = (22.8, 16.8, 3.7592,
+  1.8796, 28.0)` mm, not λ-scaled; textbook aperture model (Nikolova L18 eq.
+  18.38: free-space k, midpoint sampling); new gate **V9** green on the laptop
+  (D 20.09 dBi = closed form; 19.07 / 20.09 / 21.01 dBi across the band).
+  Rail illumination vs the old horn: corr 0.977. The old scaled feed was
+  overmoded. **Inner dimensions are a fit — confirm with RFspin's drawing or
+  calipers.**
+- **Lumerical FDTD** is the full-wave solver (no MoM licence): rail3D's horn
+  enters as an **Import source** (no TFSF — the user's explicit requirement);
+  **rung −1** simulates the horn itself (`horn_fdtd_case.py`,
+  `fdtd_agreement.py --horn`); `horn_source.py --aperture-from` feeds the
+  full-wave horn into the rail runs. Nothing has been run in Lumerical yet.
+- **scipy** was missing from `requirements.txt`; the lab venv lacked it and
+  `compare_wavefronts.py --export-case` crashed in `horn_source.build`. Fixed
+  (commit 8c0c724); `preflight.py` now names missing packages.
+- Laptop gates green after the horn change: V0–V4, V9, V5 (r = 0.958),
+  P0–P5, `horn_source.py` self-check (rail fidelity 0.9990 / 1.0000 / 0.9991).
 
-All eleven gates PASS at λ=5 on the 5090 (`lab_report.py`). Highlights:
+## NEXT: the lab re-run (exact commands: SETUP_LAB §7e)
 
-- **V3 = 0.0010273 at both λ=8 and λ=5, on two machines** — the scaled replica
-  confirmed numerically to ~5 significant figures.
-- **H = 30λ = 150 mm confirmed** by a λ=5 `scan_geometry.py` re-run; the
-  dark-field structure reproduces (10λ collapses to 0.523 field AUC, near
-  chance, at 20× the energy).
-- V5 r = 0.958 (was 0.976 at λ=8) — envelope agreement with a fringe offset,
-  i.e. finite-segment vs infinite-extrusion registration, not solver error.
-- V7 min cosine 0.9948 — mesh converged at λ/8.
-- V8 all sub-gates pass; resume mismatch exactly 0.0.
-- Generation measures **4.62 h** (1.30 samples/s), not the 1.5–2 h I estimated.
-  The ray-cast is O(rays × triangles) with BOTH scaling ×2.56 = 6.6×.
+On the 5090, in order: `git pull` → `pip install -r rail3D/requirements.txt`
+(never `-U`) → `preflight.py` → `tests_plumbing.py` → `tests_physics_3d.py`
+(V9 must pass) → `validation_3d.py` (V5–V7 under the new horn) → SEG_LEN
+cut-end check (not scripted — see §7e) → `run_stage.py --stage prelim --fresh
+--with-baseline --bundle` (must choose a NEW root; old datasets are refused by
+design) → `ablate_surface.py --stage prelim --long` → optional
+`scan_geometry.py`. Re-export the Lumerical rail bundles (old ones carry the
+previous horn). Then Lumerical: rung −1 → rung 0 → plate → intact → crack.
 
-**No trained λ=5 result exists yet** — only the 30-epoch smoke run, whose
-validation split (8 defect / 3 intact) is noise.
+## Open items (not built / not decided)
 
-## THE open question — resolve this before generating
+- **Rung-3 difference-field scorer** (crack − intact) in `fdtd_agreement.py` —
+  the real FDTD result for cracks (LUMERICAL.md §5).
+- **Plumbing test P6** for `fdtd_agreement --horn` and `horn_source
+  --aperture-from`. Both were verified only by scratch round trips (ideal
+  export passes, flat-phase horn fails; aperture-from corr 0.99987 at offset 0,
+  0.99975 at 0.5 mm, flat phase 0.909) — worth folding into
+  `tests_plumbing.py`.
+- **SEG_LEN re-check script** (defect-signal cosine, 120 vs 240 mm) for the
+  new beam — rail ends now lit 0.32 vs 0.28 of peak.
+- **`HORN_CRITERIA`** (rung −1 thresholds) are proposed; revisit after the
+  first real run.
+- The optimiser question (finding 24) — `ablate_surface.py` answers it.
+- `surface="metaunit"` is blocked at λ≠8 until a 60 GHz meta-atom library
+  exists; SLM and "none" are the usable surfaces.
 
-`config.SHADOW_MIN_T = 3.0` makes ray-cast shadowing **inert** (V6's
-`crack_shadow_with_resolved_occluder = 0.0`; 7 of 8 samples exactly 0.0).
+## Presentation deck
 
-Plan A found and fixed the cause: `raycast_shadow_mask` nudged the ray origin
-1 µm *along the ray*, which has no perpendicular component at grazing
-incidence — the comment said "lift off the surface", the code lifted along it.
-New `config.SHADOW_NORMAL_OFFSET` (0.15 mm) lifts along the face **normal**.
+`rail3D/data/generated/rail3D_overview.pptx` (gitignored; 25 slides). The
+2026-09-04 original is kept as `rail3D_overview_2026-09-04.pptx`. Slides 6–9
+(horn: part choice + dimension drawing, formulas with Nikolova eq. numbers,
+aperture/beam, rail illumination), 22 (FDTD setup + rung table) and 23 (prelim
+result) were added 2026-09-24 with minimal layout QA. Figures + every quoted
+number (`horn_facts.json`): `rail3D/data/figures/deck_2026-09-24/`. Builders:
+`rail3D/presentation/deck_figs.py`, `update_deck.py` (needs `pip install
+python-pptx`; always rebuilds from the 09-04 backup).
 
-It works on the artifact side. Measured per augmentation (laptop, after
-reproducing the lab's 0.0020/0.0451 exactly):
+**Still stale in the deck (the user said they would clean these up):** slide
+19 card 3 still says shadowing is "inert" (retracted — finding 3); slide 12
+shows the old crack ranges (now 3 lines, 1.5–3 mm wide, 4–8 mm deep); slide 24
+status is from 09-04; slide 20's last paragraph conflicts with finding 25;
+slide 5 says "the next slide is the evidence" but the horn block now follows
+it (move slides 6–9 after slide 10, or reword).
 
-| augmentation | (3.0, off=0) | (0.05, off=0) | (0.05, off=0.15) |
-|---|---|---|---|
-| roll +2.0, jit (+4,−4) | 0.0000 | 0.0000 | **0.0000** |
-| roll −2.0, jit (−4,+4) | 0.0020 | 0.0451 | **0.0000** |
-| roll +1.0, jit (0,0) | 0.0000 | 0.0295 | **0.0000** |
+## Machines and environment
 
-The whole 0.0451 came from ONE augmentation (which is why the old max-of-3
-statistic was untrustworthy). The offset removes it entirely — better than
-min_t = 3.0, which still leaves 0.0020.
-
-**But the crack side is unexplained**, at (min_t 0.05, offset 0.15):
-
-| crack depth | production occluder (λ/2) | resolved occluder (λ/8) |
+| | laptop (this repo's author machine) | lab workstation |
 |---|---|---|
-| 2.72 mm | 0.0495 | **0.0000** |
-| 5.28 mm | 0.0615 | **0.0000** |
-| 9.42 mm | 0.0631 | 0.0617 |
+| repo | `C:\Users\Rei\Documents\MetaRE_railtrack_defect_detection` | `C:\Users\ct2443\Documents\Rei\MetaRE_railtrack_defect_detection` |
+| GPU | MX250 2 GB — **seconds-scale CPU gates only** | RTX 5090 (cuda:0) + RTX 4060 Ti (cuda:1) |
+| python | `C:\Users\Rei\Downloads\RailDefect\RailDefect\.venv\Scripts\python.exe` (torch 2.7.1+cu118) | repo `.venv` with a **cu128** torch (never `pip -U`) |
+| shell | PowerShell / Git Bash | **Git Bash (MINGW64)** |
+| defect CSVs | `RAILDEFECT_DATA_DIR` | `export RAILDEFECT_DATA_DIR='C:/Users/ct2443/Downloads/RailDefect/RailDefect'` per shell |
 
-A *finer* occluder should resolve more shadowing, not less. Two candidates
-with opposite conclusions:
+Outside the repo (read-only references):
+- Face3D (validated λ = 8 mm reference): `C:\Users\Rei\Downloads\Face3D_clean\Face3D_clean`
+- Nikolova, *Lecture 18: Rectangular Horn Antennas*: `C:\Users\Rei\Downloads\L18_Horns.pdf`
+  (source of every horn equation number)
+- Ye et al. 2018 / 2023 defect papers: PDFs in `C:\Users\Rei\Downloads\`
+- Prelim result bundle (2026-09-11): `C:\Users\Rei\Downloads\testing_check_files_Sept11\stage_prelim_bundle (1)\`
+- RFspin part pages: https://www.rfspin.com/product/h-a75-w20/ (chosen),
+  `/h-a60-w20/`, `/h-a90-w/`
 
-1. **Offset too large for shallow grooves** — 0.15 mm is ~7% of a 2 mm crack
-   width, so the lift may push origins through the near wall. Fix: smaller
-   offset; find the knee.
-2. **The 0.0495 is itself artifact** — the λ/2 occluder renders a 2 mm
-   hairline in 0.8 facets, a crude V that may create a spurious blocker. Then
-   the coarse-occluder "signal" was never real.
+## How the user works (preferences learned the hard way)
 
-**Run this to decide:**
+- **Heavy runs only on the lab 5090.** The laptop runs seconds-scale CPU gates.
+  The lab round trip is slow and one-directional: **execute every changed path
+  locally before handing over a lab command** (reproduce a reported failure
+  locally first). "Please double check code more often" — said twice after
+  lab tracebacks. Report measured numbers, never extrapolated estimates.
+- **But** for quick deliverables (slides, explanations) the user has asked to
+  minimise checking and go fast — match the request.
+- `python tests_plumbing.py` (~25 s) after touching anything that addresses,
+  reads back or compares results; `python check_notebook.py` (~1 s) after any
+  notebook edit.
+- Give shell commands one per fenced `bash` block (the user runs them from Git
+  Bash). Commit only on `3D_railhead_upgrade`; never commit `.pt` data.
+- Claude-side tooling quirk: a Bash heredoc can collapse backslashes. Write
+  patch scripts with the file-writing tool (or PowerShell here-strings) when
+  they contain `\`.
 
-```bash
-python validation_3d.py --min-t 0.05 --normal-offset 0 0.02 0.05 0.1 0.15 0.3 2>&1 | tee ../offset_sweep.txt
-```
-
-Crack effect at the *resolved* occluder rising as the offset shrinks → case 1,
-pick the knee. Staying 0.0000 at every offset → case 2.
-
-**Defaults are deliberately unchanged** (`SHADOW_MIN_T = 3.0`,
-`SHADOW_NORMAL_OFFSET = 0.15` ≈ current behaviour) until this resolves. Both
-are **provenance keys**: changing either refuses every existing dataset and
-requires regenerating into a new `--name` root.
-
-Fallback if it stays inert: `SHADOW_MODE = "none"` gives a **bit-identical**
-dataset (V6 proves the fields match at min_t=3.0) in roughly a third of the
-time — ~1.6 h instead of 4.62 h.
-
-## Full-wave comparison — solver chosen, exporter BUILT (2026-09-04)
-
-The user asked: is Ansys **Zemax OpticStudio** enough for a reflected-wavefront
-comparison, or does it need **Lumerical FDTD**? Answer: **neither** — it is a
-MoM problem. Numbers below are measured, not estimated.
-
-- **Zemax is not a valid reference.** Its Physical Optics Propagation is a
-  scalar Fresnel/Kirchhoff beam propagator — the *same approximation family* as
-  `field3d.py`. It would agree with us by construction and prove nothing. Its
-  non-sequential mode scatters incoherently (no phase), so it cannot return a
-  complex field on the plane at all.
-- **Lumerical FDTD is valid physics but the wrong shape.** Boxing the whole
-  scene out to the plane at z=150 is **387 Mcells at λ/20 ≈ 39 GB** — over a
-  32 GB GPU, and most of it is empty air we already trust (V3 checks that
-  propagation against ASM to 0.13%). Only sensible **scoped**: box the rail
-  alone (23 Mcells / 2.3 GB for a 30 mm segment, 85 Mcells / 8.5 GB for 120 mm),
-  near-field monitor, project analytically to the plane.
-- **MoM/MLFMM is the fit**: PEC surface, open region, mesh is 2-D only.
-  Measured on the exported **closed** body at the production 120 mm segment
-  (405 cm²): **562k RWG unknowns at λ/10**, 233k at the exported λ/8 density.
-  Dense matrix would be 5.05 TB, so MLFMM is mandatory, but 562k is routine for
-  it. → **Ansys HFSS-IE** (needs the *Integral Equation* solver licensed — an
-  HFSS FEM seat alone will not run it) or **Altair FEKO**.
-- **HFSS SBR+** is shooting-bounce-ray PO with PTD edge corrections: an upgrade
-  on our model, not an independent check. A useful third point, not the
-  validator.
-
-**STILL UNANSWERED: which solver the user actually has licensed.** Ask. The
-exporter is solver-agnostic, so this blocks the run, not the code.
-
-### What is now implemented (all four planned items, self-tested)
-
-`compare_wavefronts.py --export-case DIR [--source plane] [--export-closed]`
-
-- **STL export** (binary, alongside the OBJ) — the format HFSS/FEKO actually
-  import. Units are not carried by STL: import as **mm**.
-- **`--export-closed`** caps the swept shell into a watertight body
-  (verified: 0 boundary edges, Euler characteristic 2, outward normals, closed
-  volume 121,499 mm³ for a 30 mm segment). MoM puts current on **both** faces of
-  an open sheet, which is not what an opaque rail does.
-- **`--source plane`** (`field3d.scattered_fields(source="plane")`) illuminates
-  with a unit plane wave along the same −d direction, removing the horn aperture
-  model as a confound. It forces `compute_psi2=False` — psi2 is re-radiation off
-  the horn, and a plane wave has no horn. Measured complex corr(plane, horn) =
-  0.902 on an intact 20 mm segment: same scatterer, different illumination taper.
-  **The horn path is byte-identical** — V1 psi1 error still 1.1621e-07.
-- **`align_external()`** fits the two bookkeeping mismatches before any metric
-  or figure, and *reports* them rather than silently applying them:
-  (a) rail3D uses `exp(−iωt)` → `exp(+ik₀R)`; HFSS/FEKO/Lumerical use
-  `exp(+jωt)` → `exp(−jk₀R)`, so **external fields arrive conjugated**;
-  (b) one complex gain α = ⟨cand,ref⟩/⟨cand,cand⟩ absorbs source normalisation
-  and units. Round-trip verified to <5e-7 for conjugation + 137× gain + 55°
-  phase, and uncorrelated noise is flagged `ambiguous` rather than flattered.
-
-`case.json` now also carries mesh stats, MoM unknown counts, the cell-centred
-grid formula, and an explicit `conventions` block (time convention, amplitude,
-and the warning that rail3D is **scalar** — export one component, E_y/TE is the
-cleanest match).
-
-### Segment length is NOT free — measured, and it changed the plan
-
-**Use the production `SEG_LEN` = 120 mm — do NOT shorten the rail to save
-unknowns.** Measured on the exported mesh (`case.json` → `truncation`), the
-illuminated power per unit rail length within 1λ of the cut end, relative to
-mid-span, is **0.80x at 30 mm** and only **0.08x at 120 mm**. Our PO solver has
-**no edge diffraction at all**; a MoM or FDTD reference has plenty. A brightly
-lit cut end makes the reference diffract off a truncation the real rail does not
-have, and that disagreement gets misread as "PO fails on the defect". The
-120 mm truncation study that justified `SEG_LEN` measured the *defect signal*
-(a difference, where the common edge contribution cancels) — it does not license
-a short segment for an absolute-field comparison.
-
-**So compare the difference field.** Export `intact` and the defect at the same
-segment length, and compare `E_defect − E_intact` between solvers as the primary
-metric, with absolute fields secondary. That is also the quantity the detector
-barcodes actually respond to.
-
-The exporter measures this itself (`cut_end_illumination`, folded into
-`case.json` → `truncation` and printed on export), so it stays honest if the
-geometry or wavelength changes.
-
-Validation ladder (one unknown at a time), also written into the exported
-README: **flat PEC plate → intact rail → cracked rail, all plane-wave; real horn
-last.** Do not start at the bottom — if the flat plate disagrees, the setup is
-wrong, not the physics.
-
-Bundles already exported and ready to hand to a solver:
-`data/generated/mom_case_intact/` and `mom_case_crack/` (120 mm, closed,
-watertight, plane wave, STL + OBJ + case.json + README).
-
-Why this is worth doing at λ=5: PO assumes radii of curvature ≫ λ, and crack
-widths are 2–5 mm = **0.4–1λ** at 60 GHz. That is exactly where the tangent-plane
-approximation is expected to break, and it is the one thing the V-gates cannot
-test — V1–V3 verify we solve *our* integral correctly, and V5 compares against
-the 2D code, which shares the assumption.
-
-## Landmines for a new session
+## Landmines
 
 - **Never lay out detector centres outside `config.dense_detector_centers()`**
-  (README finding 17). Its predecessor emitted out-of-aperture centres that
-  silently collapsed 130 windows onto 54.
-- `surface="metaunit"` **raises by design** at λ≠8 — the meta-atom library is
-  an 8 mm fit and 3.8 mm pillars can't fit a 2.5 mm cell. SLM and "none" work.
-- The λ=8 full dataset (20,512 samples) is archived, not deleted, in
-  `data/generated/legacy_unverified/`. It is the "previous version" for the
-  presentation comparison — do not delete it.
-- Speckle scales as **λ¹, not λ²** (grain 8.0 → 5.0 mm, window/grain 2.27 at
-  both). I got this wrong once and corrected it in finding 18 — the horn
-  footprint scales with λ, so D is not fixed.
-- Two GPUs on the lab box: 5090 (cuda:0) and 4060 Ti (cuda:1). `RAIL3D_DEVICE=cuda:1`
-  can run a sweep alongside a generation.
-- The user works in **Git Bash** on Windows; `RAILDEFECT_DATA_DIR` must be
-  re-exported per shell with forward slashes.
+  (finding 17).
+- **Never hardcode `L5_<stage>`** — use `data3d.stage_root(stage)`; roots are
+  geometry-addressed and auto-suffix on a provenance change (finding 23).
+- **`verification_report.json` is merge-loaded**: check each block's `_stamp`;
+  an unstamped block was not re-run. Ignore V6b's `recommended` field
+  (finding 26).
+- **Lumerical is exp(−iωt), like rail3D** — exports compare as-is. STL imports
+  as µm unless the length unit is mm first. GPU solver: no TFSF; Import sources
+  need 2025 R1.1+. Material name: "PEC (Perfect Electrical Conductor)".
+- The laptop's `data/generated/fdtd_horn_agreement.json` is a **synthetic
+  self-test** (a deliberately failing flat-phase horn), not a Lumerical result.
+- `data/generated/legacy_unverified/` **on the lab machine** holds the λ=8 full
+  dataset (20,512 samples) — the "previous version" record. Do not delete it.
+- Speckle scales as λ¹, not λ² (finding 18). The horn stopped scaling with λ on
+  2026-09-24 (finding 29).
 
-## Verification
+## Verification (laptop)
 
 ```bash
-cd rail3D && python preflight.py          # always first
-python tests_physics_3d.py                # V0/V0b/V0c/V1-V4, ~5 s CPU
-python lab_report.py                      # whole chain, ~10-15 min on the 5090
+cd rail3D && python preflight.py
+```
+```bash
+python tests_physics_3d.py
+```
+```bash
+python tests_plumbing.py
 ```
 
-User preference: **run anything non-trivial on the lab 5090**, not the laptop
-(MX250, 2 GB). Laptop is for seconds-scale CPU gates only.
+`lab_report.py` runs the whole chain on the 5090 (~10–15 min).

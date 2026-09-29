@@ -1,7 +1,8 @@
 # Reading rail3D's validation output
 
-*Last updated: 2026-09-18 · λ = 5 mm (60 GHz) — bump this line in any commit that
-changes a gate, a threshold, or what a field means.*
+*Last updated: 2026-09-29 · λ = 5 mm (60 GHz) · horn = RFspin H-A75-W20 (V9 added,
+rung −1 scorer added) — bump this line in any commit that changes a gate, a
+threshold, or what a field means.*
 
 What every file the lab run produces actually contains, what its pass rule is in
 code, and the specific ways each one has been misread. Written so a cold session
@@ -153,6 +154,7 @@ Every entry carries `pass` and `seconds`. The pass rules, from the code:
 | **V6** | `artifact_worst < 0.03 ∧ omitted < 0.02` | ray-cast is injecting artifacts, or the coarse occluder misses too much |
 | **V7** | `mean_cosine > 0.95 ∧ min_cosine > 0.90` | the λ/8 generation mesh is not converged |
 | **V8** | 11 booleans ANDed, headed by `sep[-1] > sep[0] * 1.2` | training does not train |
+| **V9** | `directivity_ok ∧ band_spec_ok ∧ sampling_ok ∧ feed_single_mode` | the horn code is not the textbook horn, or not the part |
 
 ### Fields that mean something specific
 
@@ -181,6 +183,20 @@ infinite-extrusion registration, not solver error.
 cosine** (`barcode(defect) − barcode(intact)` at λ/8 vs λ/16), not raw field L2.
 Raw complex-field L2 never converges at these facet sizes because of PO glint
 speckle; the task consumes barcodes, so fidelity is judged there.
+
+**V9 `directivity_dBi` / `closed_form_dBi`** — the aperture-integral directivity
+(Nikolova eq. 18.21) of the field the code actually produces, against the
+closed form (18.39); within 0.2 dB (measured 20.086 vs 20.086). A gap means
+`aperture_distribution` no longer implements eq. 18.38.
+**V9 `gain_across_band_dBi`** — the same at 50 / 60 / 75 GHz, held to
+`config.HORN_SPEC` (19–21 dBi ± 0.3): 19.07 / 20.09 / 21.01. This is what ties
+`SIZE_ANT` to the physical part; it fails for the previous horn.
+**V9 `rail_footprint_corr_vs_80` / `rail_footprint_amp_ratio`** — `RESOL_ANT`
+convergence on the rail footprint (≥ 0.9995, amplitude within 1%).
+**V9 `beta_wvg_variant_dBi`** — informational: Face3D's guided-β flare phase
+would read ≈ 20.9 dBi, the reason `HORN_FLARE_K = "k0"` (README finding 29).
+**V9 `feed_a_over_lam` / `feed_b_over_lam`** — single-mode means λ/2 < a < λ
+and b < λ/2 (WR-15: 0.75, 0.38).
 
 **V6 `worst_rel_l2`** — a **max over 8 samples**, and in practice most are
 exactly 0. Read the `samples` list, not the headline. See §8.
@@ -371,6 +387,29 @@ every later comparison.
 **Which illumination?** The JSON's `source` is `horn` (the LUMERICAL.md setup:
 rail3D's psi1 + psi2 under its horn) or `plane` (the older plane-wave
 comparison). Files with `_plane` in the name are the latter.
+
+## 9c. `fdtd_horn_agreement.png/.json` — rung −1, the horn alone
+
+Written by `fdtd_agreement.py --horn` (LUMERICAL.md §5). **Check it is real**:
+the 2026-09-24 copy on the laptop came from a *synthetic* self-test (a
+flat-phase horn deliberately built to FAIL), not from Lumerical. A real run is
+`_stamp`ed after a Lumerical export.
+
+- `aperture.complex_corr` — FDTD aperture field vs eq. 18.38 after alignment.
+  Gated at **0.95**, not 0.98: the aperture method omits rim currents and
+  internal reflections, which is what this rung measures.
+- `aperture.model` / `aperture.fdtd` — far-field HPBW (E, H) and directivity
+  from the SAME Huygens far-field formula on both sides, so a gap is in the
+  field, not the post-processing. Model: 15.8° / 17.2°, 20.09 dBi.
+- `pass.fdtd_gain_in_part_spec` — the FDTD directivity inside 19–21 dBi (±0.3):
+  the full-wave horn is the part.
+- `near.complex_corr` — 3λ out, what travels to the rail; gated at **0.98**.
+- The alignment line: `as-is` expected (Lumerical is exp(−iωt)); a real-valued
+  or uncorrelated field reads `ambiguous`, and the conjugation warning is then
+  suppressed on purpose.
+
+The thresholds are `HORN_CRITERIA`, marked *proposed*: revisit them after the
+first real run rather than tuning a run to them.
 
 ## 10. V8 — what it does and does not claim
 
