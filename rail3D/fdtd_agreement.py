@@ -1,10 +1,13 @@
 """Lumerical FDTD vs rail3D: how well do they agree, pixel by pixel?
 
-    python fdtd_agreement.py --horn horn_aperture.mat --horn-near horn_near.mat  # rung -1
-    python fdtd_agreement.py --injection empty_z0.mat --leak empty_z30.mat   # rung 0
-    python fdtd_agreement.py --sample plate --external plate_z30.mat        # rung 1
-    python fdtd_agreement.py --external intact_z30.mat      # a REAL Lumerical run
+    python fdtd_agreement.py --horn data/generated/fdtd_horn/horn_aperture.mat --horn-near data/generated/fdtd_horn/horn_near.mat  # rung -1
+    python fdtd_agreement.py --injection data/generated/fdtd_intact/empty_z0.mat --leak data/generated/fdtd_intact/empty_z30.mat  # rung 0
+    python fdtd_agreement.py --sample plate --external data/generated/fdtd_intact/plate_z30.mat   # rung 1
+    python fdtd_agreement.py --external data/generated/fdtd_intact/intact_z30.mat   # a REAL Lumerical run
     python fdtd_agreement.py --target                       # the TARGET figure
+
+The .mat files come from Lumerical's matlabsavelegacy (LUMERICAL.md step 8);
+plain matlabsave writes v7.3, which scipy cannot read (README finding 30).
 
 Both modes run the SAME metrics and draw the SAME figure, so the target is a
 literal preview of what a passing Lumerical run will produce. Only the source of

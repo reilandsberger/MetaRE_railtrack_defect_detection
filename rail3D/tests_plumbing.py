@@ -26,12 +26,19 @@ run rather than here:
       FDTD-like grid, an arbitrary complex gain, and Lumerical's exp(-i w t)
       convention -- so it must align AS-IS. A conjugated (HFSS/FEKO-style) copy
       must still be detected. The round trip must score ~100% on both planes:
-      anything less is the tool, not physics.
+      anything less is the tool, not physics. A v7.3 (HDF5) .mat -- Lumerical's
+      plain matlabsave -- is refused with the fix, not a scipy traceback.
   P5  horn_source.py writes the Import-source file in the layout Lumerical's
       own example uses (x, y column vectors in m, scalar z, (nx, ny) complex
       E/H), with E_y equal to rail3D's windowed horn field, flux going DOWN,
       and |E|/|H| = Z0 -- the three things that decide whether FDTD injects the
-      horn at all, and in the right direction.
+      horn at all, and in the right direction. After the lab's "cannot be
+      opened ... MATLAB v7" error (README finding 30): the .lsf scripts find
+      their files by ABSOLUTE path, not Lumerical's working directory; the
+      text copy reads back equal to the .mat in readdata's layout; the load
+      check written into the script passes on both ways in and FAILS on a
+      conjugated, transposed or real-only load; export_horn saves with
+      matlabsavelegacy, which scipy can read.
 
 Every check runs the real code path on tiny synthetic inputs. Add one here
 whenever a run dies on something that was not physics.
@@ -307,6 +314,17 @@ def p4_fdtd_agreement_roundtrip() -> dict:
             "figure_written": (tmp / "fdtd_agreement_plate.png").exists(),
             "stamped": "_stamp" in out,
         }
+        # a v7.3 (HDF5) .mat -- Lumerical's plain matlabsave -- must be refused
+        # with the fix, not die in scipy (README finding 30). Header only: the
+        # version word 0x0200 at byte 124 is all scipy looks at.
+        v73 = tmp / "v73.mat"
+        v73.write_bytes(b"MATLAB 7.3 MAT-file, Platform: PCWIN64, HDF5 schema 1.00 .".ljust(116)
+                        + bytes(8) + b"\x00\x02IM" + bytes(384))
+        try:
+            cw.load_external(str(v73), gw)
+            res["v73_refused_with_fix"] = False
+        except SystemExit as exc:
+            res["v73_refused_with_fix"] = "matlabsavelegacy" in str(exc)
         res["pass"] = all(v for v in res.values() if isinstance(v, bool))
         return res
     finally:
@@ -338,7 +356,7 @@ def p5_horn_source() -> dict:
             * hs.taper(Y, *info["window_mm"]["y"])
         lsf = (tmp / "load_horn_source.lsf").read_text(encoding="utf-8")
         out = {
-            "x_column_m": m["x"].shape == (nx, 1) and abs(m["x"][0, 0] - xs[0] * 1e-3) < 1e-12,
+            "x_column_m": bool(m["x"].shape == (nx, 1) and abs(m["x"][0, 0] - xs[0] * 1e-3) < 1e-12),
             "y_column_m": m["y"].shape == (ny, 1),
             "z_scalar_m": m["z"].size == 1 and abs(float(m["z"].ravel()[0]) - hs.Z_SRC * 1e-3) < 1e-12,
             "fields_nx_ny_complex": all(m[k].shape == (nx, ny) and np.iscomplexobj(m[k])
@@ -350,13 +368,131 @@ def p5_horn_source() -> dict:
                 'rectilineardataset("EM fields", x, y, z)', 'addattribute("E"',
                 'addattribute("H"', "importdataset(EM)", '"wavelength span", 0',
                 '"direction", "Backward"')),
+            # the .mat is found by ABSOLUTE path, not Lumerical's working
+            # directory, and if matlabload cannot read it the text copy is
+            # loaded instead -- the lab's "cannot be opened ... MATLAB v7"
+            # error (2026-09-29) did not say which (README finding 30)
+            "lsf_absolute_bundle_path": f'BUNDLE = "{tmp.resolve().as_posix()}";' in lsf,
+            "lsf_no_placeholder_left": "@" not in lsf,
+            "lsf_searches_script_dir_then_workdir": all(t in lsf for t in (
+                "filedirectory(currentscriptname)", "src_dir = here;", "src_dir = pwd;",
+                'mat_file = src_dir + "/horn_source.mat";', "matlabload(mat_file);")),
+            "lsf_catches_unreadable_mat": "try {" in lsf and "catch(load_err);" in lsf,
+            "lsf_text_fallback_complete": all(
+                f'{k} = readdata(txt_dir + "{k}_re.txt") + 1i*readdata(txt_dir + "{k}_im.txt");' in lsf
+                for k in ("Ex", "Ey", "Ez", "Hx", "Hy", "Hz")) and all(
+                f'{k} = readdata(txt_dir + "{k}.txt");' in lsf for k in "xyzf"),
+            "lsf_verifies_both_ways": (lsf.count("CHECK FAILED: E, H power") == 2
+                                       and "verified (matlabload)" in lsf
+                                       and "verified (readdata, the text copy)" in lsf),
+            "lsf_source_only_if_verified": lsf.rindex("if (good == 1) {") < lsf.index("addimportedsource"),
+            "lsf_saves_beside_mat": ('out_file = src_dir + "/horn_EM_dataset.mat";' in lsf
+                                     and "matlabsave(out_file, EM);" in lsf),
+            "lsf_braces_balanced": lsf.count("{") == lsf.count("}") and lsf.count("(") == lsf.count(")"),
+            # MATLAB's default -v7 layout (miCOMPRESSED), which Ansys documents
+            # matlabload as reading
+            "mat_is_v7_compressed": _mat_top_level_types(tmp / "horn_source.mat") == {15},
+            "build_writes_text_copy": (tmp / hs.TXT_DIR / "Ey_re.txt").exists(),
             "flux_down_fraction": round(info["flux_down_fraction"], 6),
             "impedance_ohm": round(info["impedance_ohm"], 2),
         }
-        out["pass"] = all(v for v in out.values() if isinstance(v, bool))
+        res_txt, got = _p5_text_copy(tmp, m, nx, ny)
+        out.update(res_txt)
+        # the script's load check, run here in numpy: it must pass on what either
+        # way loads, and FAIL on a conjugated, transposed or real-only load
+        c = _lsf_constants(lsf)
+        mat_arrays = {k: np.asarray(m[k]) for k in ("x", "y", "Ex", "Ey", "Ez", "Hx", "Hy", "Hz")}
+        fld = ("Ex", "Ey", "Ez", "Hx", "Hy", "Hz")
+        out["lsf_check_passes_mat"] = _emulate_lsf_check(c, mat_arrays)
+        out["lsf_check_passes_txt"] = _emulate_lsf_check(c, got)
+        out["lsf_check_catches_bad_loads"] = not any(_emulate_lsf_check(c, bad) for bad in (
+            dict(mat_arrays, **{k: np.conj(mat_arrays[k]) for k in fld}),
+            dict(mat_arrays, **{k: mat_arrays[k].T for k in fld}),
+            dict(mat_arrays, **{k: mat_arrays[k].real for k in fld})))
+        # rung -1's export script has the same hazard in the WRITE direction,
+        # plus a format one: matlabsave writes v7.3, which scipy cannot read
+        import horn_fdtd_case as hf
+        case = tmp / "horn_case"
+        hf.build(case)
+        ex = (case / "export_horn.lsf").read_text(encoding="utf-8")
+        out["export_lsf_absolute"] = (f'BUNDLE = "{case.resolve().as_posix()}";' in ex
+                                      and "@BUNDLE@" not in ex
+                                      and "case_dir = here;" in ex and "case_dir = pwd;" in ex
+                                      and ex.count("{") == ex.count("}"))
+        out["export_lsf_scipy_readable"] = ("matlabsave(" not in ex and ex.count(
+            'matlabsavelegacy(case_dir + "/horn_') == 2)
+        # a rebuild must replace the text copy, never leave the previous one
+        (tmp / hs.TXT_DIR / "stale.txt").write_text("1\n")
+        hs.build(tmp, dev, sample=1.0, check=False)
+        out["rebuild_replaces_text_copy"] = (not (tmp / hs.TXT_DIR / "stale.txt").exists()
+                                             and (tmp / hs.TXT_DIR / "Ey_re.txt").exists())
+        # np.bool_ is not a bool: a numpy comparison left unwrapped used to drop
+        # out of this gate silently (x_column_m did, until 2026-09-29)
+        out["pass"] = all(v for v in out.values() if isinstance(v, (bool, np.bool_)))
         return out
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _lsf_constants(lsf: str) -> dict:
+    """The numbers render_lsf wrote into load_horn_source.lsf."""
+    import re
+    return {k: float(re.search(rf"\b{k} = ([-+0-9.eE]+);", lsf).group(1))
+            for k in ("NX", "NY", "P_E", "P_H", "IPK", "JPK", "EY_PK_RE", "EY_PK_IM")}
+
+
+def _emulate_lsf_check(c: dict, a: dict) -> bool:
+    """load_horn_source.lsf's load check, line for line (Lumerical indexes from 1)."""
+    ey = a["Ey"]
+    if ey.shape != (c["NX"], c["NY"]) or a["x"].size != c["NX"] or a["y"].size != c["NY"]:
+        return False
+    pe = sum((np.abs(a[k]) ** 2).sum() for k in ("Ex", "Ey", "Ez"))
+    ph = sum((np.abs(a[k]) ** 2).sum() for k in ("Hx", "Hy", "Hz"))
+    pk = ey[int(c["IPK"]) - 1, int(c["JPK"]) - 1]
+    want = c["EY_PK_RE"] + 1j * c["EY_PK_IM"]
+    return bool(abs(pe / c["P_E"] - 1) <= 1e-6 and abs(ph / c["P_H"] - 1) <= 1e-6
+                and abs(pk - want) <= 1e-6 * abs(want))
+
+
+def _p5_text_copy(tmp: Path, m: dict, nx: int, ny: int):
+    """The text copy: what Lumerical's readdata would load equals the .mat."""
+    import horn_source as hs
+    d = tmp / hs.TXT_DIR
+    got = {k: np.loadtxt(d / f"{k}.txt", ndmin=2) for k in "xyzf"}
+    for k in ("Ex", "Ey", "Ez", "Hx", "Hy", "Hz"):
+        got[k] = (np.loadtxt(d / f"{k}_re.txt", ndmin=2)
+                  + 1j * np.loadtxt(d / f"{k}_im.txt", ndmin=2))
+    # readdata skips any line starting with a letter, and wants equal columns;
+    # a doubled line ending (\r\r\n) shows up here as blank rows
+    lines_ok, cols_ok = True, True
+    for fp in d.glob("*.txt"):
+        rows = fp.read_bytes().decode("ascii").splitlines()
+        lines_ok &= all(r[:1].isdigit() or r[:1] == "-" for r in rows)
+        cols_ok &= len({len(r.split()) for r in rows}) == 1
+    return {
+        "txt_files_16": len(list(d.glob("*.txt"))) == 16,
+        "txt_layout_nx_by_ny": all(got[k].shape == (nx, ny) for k in ("Ex", "Ey", "Hz"))
+        and got["x"].shape == (nx, 1) and got["y"].shape == (ny, 1)
+        and got["z"].shape == (1, 1) and got["f"].shape == (1, 1),
+        "txt_equals_mat": all(np.allclose(got[k], m[k], rtol=1e-8, atol=0)
+                              for k in ("Ex", "Ey", "Ez", "Hx", "Hy", "Hz"))
+        and all(np.array_equal(got[k].ravel(), np.asarray(m[k], float).ravel()) for k in "xyzf"),
+        "txt_lines_readdata_safe": bool(lines_ok),
+        "txt_rows_equal_length": bool(cols_ok),
+    }, got
+
+
+def _mat_top_level_types(path) -> set:
+    """Top-level MAT v5 data-element types: 14 = miMATRIX, 15 = miCOMPRESSED."""
+    b = Path(path).read_bytes()
+    i, types = 128, set()
+    while i + 8 <= len(b):
+        t = int.from_bytes(b[i:i + 4], "little")
+        types.add(t)
+        i += 8 + int.from_bytes(b[i + 4:i + 8], "little")
+        if t != 15:
+            i += (-i) % 8                               # 64-bit alignment (not after miCOMPRESSED)
+    return types
 
 
 # ---------------------------------------------------------------------------

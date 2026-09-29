@@ -1,16 +1,17 @@
 # rail3D — session handoff, 2026-09-29
 
-*Last updated: 2026-09-29. Rewritten for a cold start on a new Claude account: no
-chat history or auto-memory is assumed. Everything needed is in this repo, plus
-the external paths listed at the end.*
+*Last updated: 2026-09-29 (evening: Lumerical file I/O, finding 30). Rewritten
+for a cold start on a new Claude account: no chat history or auto-memory is
+assumed. Everything needed is in this repo, plus the external paths listed at
+the end.*
 
 ## Read in this order
 
 1. **This file** — state, next commands, open items, landmines.
 2. `CLAUDE.md` (repo root) — ground rules and the dated state sections.
-3. `rail3D/README.md` — §4 conventions, §6 hard-won findings (**29 = the horn,
-   newest**; 24–26 = the prelim result; 27–28 = Lumerical), §7 current state,
-   §8 limitations.
+3. `rail3D/README.md` — §4 conventions, §6 hard-won findings (**30 =
+   Lumerical file I/O, newest**; 29 = the horn; 24–26 = the prelim result;
+   27–28 = Lumerical), §7 current state, §8 limitations.
 4. As needed: `rail3D/SETUP_LAB.md` (lab runbook — **§7e is the next run**),
    `rail3D/LUMERICAL.md` (FDTD, rungs −1…3), `rail3D/READING_RESULTS.md` (what
    every output field means, and how each has been misread).
@@ -56,6 +57,17 @@ legacy reference — do not modify).
   **rung −1** simulates the horn itself (`horn_fdtd_case.py`,
   `fdtd_agreement.py --horn`); `horn_source.py --aperture-from` feeds the
   full-wave horn into the rail runs. Nothing has been run in Lumerical yet.
+- **First Lumerical session (2026-09-29, finding 30):** `load_horn_source.lsf`
+  stopped at `matlabload` with "cannot be opened … MATLAB v7 or higher". That
+  message covers a missing file and an unreadable one; which it was is **not
+  established**. The loader now finds files by absolute path, falls back to a
+  plain-text copy (`horn_txt/`, always written, read with `readdata`), and
+  **checks what it loaded** (sizes, E/H power, peak E_y sample) before creating
+  the source. Every export Python reads uses **`matlabsavelegacy`** (plain
+  `matlabsave` is v7.3/HDF5, which scipy cannot read). When the user re-runs it,
+  **ask which line it printed**: `loaded and verified (matlabload)` settles
+  the file as readable; `(readdata, the text copy)` means `matlabload` cannot
+  read scipy's MAT v5 on their build.
 - **scipy** was missing from `requirements.txt`; the lab venv lacked it and
   `compare_wavefronts.py --export-case` crashed in `horn_source.build`. Fixed
   (commit 8c0c724); `preflight.py` now names missing packages.
@@ -70,7 +82,8 @@ On the 5090, in order: `git pull` → `pip install -r rail3D/requirements.txt`
 cut-end check (not scripted — see §7e) → `run_stage.py --stage prelim --fresh
 --with-baseline --bundle` (must choose a NEW root; old datasets are refused by
 design) → `ablate_surface.py --stage prelim --long` → optional
-`scan_geometry.py`. Re-export the Lumerical rail bundles (old ones carry the
+`scan_geometry.py`. Re-export the Lumerical bundles (`fdtd_intact`,
+`fdtd_crack`, `fdtd_horn`; older ones carry the old `.lsf` scripts and some the
 previous horn). Then Lumerical: rung −1 → rung 0 → plate → intact → crack.
 
 ## Open items (not built / not decided)
@@ -157,6 +170,12 @@ Outside the repo (read-only references):
 - **Lumerical is exp(−iωt), like rail3D** — exports compare as-is. STL imports
   as µm unless the length unit is mm first. GPU solver: no TFSF; Import sources
   need 2025 R1.1+. Material name: "PEC (Perfect Electrical Conductor)".
+- **Lumerical file I/O (finding 30):** export with `matlabsavelegacy`, never
+  `matlabsave` (v7.3, unreadable by scipy); `cd` into the bundle folder first, or
+  bake an absolute path into the script. `matlabload`'s "cannot be opened … v7"
+  does not say whether the file was missing or unreadable. Running a script
+  FILE sets the working directory to its folder (Ansys `cd` page), so do not
+  assume "wrong working directory" without evidence.
 - The laptop's `data/generated/fdtd_horn_agreement.json` is a **synthetic
   self-test** (a deliberately failing flat-phase horn), not a Lumerical result.
 - `data/generated/legacy_unverified/` **on the lab machine** holds the λ=8 full

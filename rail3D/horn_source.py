@@ -2,6 +2,7 @@
 
     python horn_source.py --out data/generated/fdtd_horn          # build + self-check
     python horn_source.py --out DIR --sample 0.25 --z-src 15      # explicit settings
+    python horn_source.py --txt DIR       # rewrite DIR/horn_txt/ only (the text copy)
 
 rail3D's horn is the RFspin H-A75-W20 (config.SIZE_ANT: WR-15 feed, 22.8 x
 16.8 mm inner aperture, 28 mm flare; README finding 29) in the textbook
@@ -17,10 +18,16 @@ What this writes (all SI, as Lumerical requires):
   horn_source.mat        x, y (column vectors, m), z (m), f (Hz), and
                          Ex, Ey, Ez, Hx, Hy, Hz as (nx, ny) complex matrices --
                          the layout of Lumerical's own usr_custom_source.lsf
-  load_horn_source.lsf   builds the rectilineardataset("EM fields", x, y, z),
-                         adds E and H, loads it into an Import source with
-                         importdataset(), sets a single wavelength, and saves
-                         horn_EM_dataset.mat for the GUI's "Import Source" button
+  horn_txt/              the same arrays as plain text (16 files, ~62 MB), for
+                         readdata: the loader's fallback if matlabload cannot
+                         read the .mat
+  load_horn_source.lsf   loads the .mat by absolute path (else the text copy),
+                         CHECKS the load against sizes, power and the peak
+                         sample recorded here, then builds the
+                         rectilineardataset("EM fields", x, y, z), adds E and H,
+                         loads it into an Import source with importdataset(),
+                         sets a single wavelength, and saves horn_EM_dataset.mat
+                         for the GUI's "Import Source" button (README finding 30)
   horn_source.json       the plane, window, sampling and every self-check number
 
 Design decisions, each measured rather than assumed (README finding 28):
@@ -57,6 +64,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 from pathlib import Path
 
 import numpy as np
@@ -199,36 +207,199 @@ def illumination_fidelity(win: dict, z_src: float, device, dx: float = 1.0,
     return out
 
 
+# Filled in at write time by render_lsf (str.replace, NOT str.format: Lumerical
+# if-blocks use braces). Every command used is in Ansys's script reference:
+# fileexists, filedirectory, currentscriptname, pwd, try/catch, matlabload,
+# readdata, size, length, sum, abs, !=, |, &.
 LSF = """# load_horn_source.lsf -- written by rail3D/horn_source.py. Do not edit the data.
 #
 # Builds Lumerical's EM dataset from horn_source.mat (SI units: m, Hz, V/m, A/m),
 # using exactly the format of Lumerical's own usr_custom_source.lsf example:
 #   rectilineardataset("EM fields", x, y, z) + addattribute("E"/"H").
-# Run it from the Script File Editor with this folder as the working directory
-# (File > Working Directory). It then either creates the Import source for you
-# (CREATE_SOURCE = 1) or only saves horn_EM_dataset.mat for the GUI button.
+# It then either creates the Import source for you (CREATE_SOURCE = 1) or only
+# saves horn_EM_dataset.mat for the GUI button.
+#
+# Two ways in, because matlabload stopped on the lab machine (2026-09-29) with
+# "cannot be opened ... MATLAB v7 or higher" -- a message it gives for a file
+# it cannot find AND for one it cannot read (README finding 30):
+#   1. horn_source.mat via matlabload, by ABSOLUTE path: BUNDLE (the folder
+#      horn_source.py wrote), else this script's folder, else the working
+#      directory;
+#   2. if that fails, the plain-text copy beside it (horn_txt/, the same
+#      numbers to 10 significant digits) via readdata.
+# Whatever loads is CHECKED against the numbers horn_source.py recorded below
+# (array sizes, E and H power, the peak E_y sample), and the source is created
+# only if they match.
 
 CREATE_SOURCE = 1;              # 0: just write horn_EM_dataset.mat
 SOURCE_NAME = "horn_source";
+VERIFY = 1;                     # 0: skip the load check (only if told to)
+BUNDLE = "@BUNDLE@";
 
-matlabload("horn_source.mat");  # x, y, z, f, Ex, Ey, Ez, Hx, Hy, Hz
-EM = rectilineardataset("EM fields", x, y, z);
-EM.addparameter("lambda", c/f, "f", f);
-EM.addattribute("E", Ex, Ey, Ez);
-EM.addattribute("H", Hx, Hy, Hz);
-matlabsave("horn_EM_dataset.mat", EM);
-?"wrote horn_EM_dataset.mat";
+# recorded by horn_source.py from the arrays it saved -- do not edit
+NX = @NX@;  NY = @NY@;
+P_E = @P_E@;  P_H = @P_H@;
+IPK = @IPK@;  JPK = @JPK@;
+EY_PK_RE = @EY_PK_RE@;  EY_PK_IM = @EY_PK_IM@;
 
-if (CREATE_SOURCE == 1) {
-    addimportedsource;
-    set("name", SOURCE_NAME);
-    importdataset(EM);
-    set("direction", "Backward");       # inject DOWN, toward the rail (-z)
-    set("center wavelength", c/f);
-    set("wavelength span", 0);          # single frequency
-    ?"created Import source '" + SOURCE_NAME + "' at z = " + num2str(z*1e3) + " mm";
+here = "";
+try {
+    here = filedirectory(currentscriptname);
+} catch(dir_err);
+
+src_dir = BUNDLE;
+if (fileexists(src_dir + "/horn_source.mat") == 0) {
+    src_dir = here;
+}
+if (fileexists(src_dir + "/horn_source.mat") == 0) {
+    src_dir = pwd;
+}
+mat_file = src_dir + "/horn_source.mat";
+txt_dir = src_dir + "/horn_txt/";
+good = 0;
+
+# --- way 1: the .mat, via matlabload
+if (fileexists(mat_file) == 1) {
+    ?"loading " + mat_file;
+    loaded = 0;
+    try {
+        matlabload(mat_file);  # x, y, z, f, Ex, Ey, Ez, Hx, Hy, Hz
+        loaded = 1;
+    } catch(load_err);
+    if (loaded == 1) {
+@CHECK_MAT@
+    } else {
+        ?"  matlabload could not read it:";
+        ?"    " + load_err;
+    }
+}
+
+# --- way 2: the plain-text copy, via readdata
+if ((good == 0) & (fileexists(txt_dir + "Ey_re.txt") == 1)) {
+    ?"loading the plain-text copy in " + txt_dir;
+    x = readdata(txt_dir + "x.txt");
+    y = readdata(txt_dir + "y.txt");
+    z = readdata(txt_dir + "z.txt");
+    f = readdata(txt_dir + "f.txt");
+    Ex = readdata(txt_dir + "Ex_re.txt") + 1i*readdata(txt_dir + "Ex_im.txt");
+    Ey = readdata(txt_dir + "Ey_re.txt") + 1i*readdata(txt_dir + "Ey_im.txt");
+    Ez = readdata(txt_dir + "Ez_re.txt") + 1i*readdata(txt_dir + "Ez_im.txt");
+    Hx = readdata(txt_dir + "Hx_re.txt") + 1i*readdata(txt_dir + "Hx_im.txt");
+    Hy = readdata(txt_dir + "Hy_re.txt") + 1i*readdata(txt_dir + "Hy_im.txt");
+    Hz = readdata(txt_dir + "Hz_re.txt") + 1i*readdata(txt_dir + "Hz_im.txt");
+@CHECK_TXT@
+}
+
+if (good == 0) {
+    ?"NO SOURCE CREATED. Looked for horn_source.mat and horn_txt/ in:";
+    ?"  " + BUNDLE + "   (where horn_source.py wrote them)";
+    ?"  " + here + "   (this script's folder)";
+    ?"  " + pwd + "   (the working directory)";
+    ?"Keep both in the same folder as this script. No horn_txt/ there? Write it (Git Bash, in rail3D/):";
+    ?"  python horn_source.py --txt '" + src_dir + "'";
+    ?"If both were found and still failed, send this output back.";
+}
+
+if (good == 1) {
+    out_file = src_dir + "/horn_EM_dataset.mat";
+    EM = rectilineardataset("EM fields", x, y, z);
+    EM.addparameter("lambda", c/f, "f", f);
+    EM.addattribute("E", Ex, Ey, Ez);
+    EM.addattribute("H", Hx, Hy, Hz);
+    matlabsave(out_file, EM);
+    ?"wrote " + out_file;
+
+    if (CREATE_SOURCE == 1) {
+        addimportedsource;
+        set("name", SOURCE_NAME);
+        importdataset(EM);
+        set("direction", "Backward");       # inject DOWN, toward the rail (-z)
+        set("center wavelength", c/f);
+        set("wavelength span", 0);          # single frequency
+        ?"created Import source '" + SOURCE_NAME + "' at z = " + num2str(z*1e3) + " mm";
+    }
 }
 """
+
+# Inserted after each way in: sizes first (a transposed or truncated load would
+# make the peak lookup below index out of range), then power and the peak
+# sample, whose phase catches a conjugation.
+LSF_CHECK = """        good = 1;
+        if (VERIFY == 1) {
+            if ((size(Ey, 1) != NX) | (size(Ey, 2) != NY) | (length(x) != NX) | (length(y) != NY)) {
+                good = 0;
+                ?"  CHECK FAILED: Ey is " + num2str(size(Ey, 1)) + " x " + num2str(size(Ey, 2)) + ", x " + num2str(length(x)) + ", y " + num2str(length(y)) + "; expected " + num2str(NX) + " x " + num2str(NY);
+            } else {
+                pe = sum(abs(Ex)^2 + abs(Ey)^2 + abs(Ez)^2);
+                ph = sum(abs(Hx)^2 + abs(Hy)^2 + abs(Hz)^2);
+                pk = Ey(IPK, JPK);
+                if ((abs(pe / P_E - 1) > 1e-6) | (abs(ph / P_H - 1) > 1e-6)) {
+                    good = 0;
+                    ?"  CHECK FAILED: E, H power " + num2str(pe) + ", " + num2str(ph) + "; expected " + num2str(P_E) + ", " + num2str(P_H);
+                }
+                if (abs(pk - (EY_PK_RE + 1i*EY_PK_IM)) > 1e-6 * abs(EY_PK_RE + 1i*EY_PK_IM)) {
+                    good = 0;
+                    ?"  CHECK FAILED: peak Ey " + num2str(real(pk)) + " + " + num2str(imag(pk)) + "i; expected " + num2str(EY_PK_RE) + " + " + num2str(EY_PK_IM) + "i";
+                }
+            }
+        }
+        if (good == 1) {
+            ?"  loaded and verified (@ROUTE@): " + num2str(NX) + " x " + num2str(NY) + ", E and H power and the peak Ey sample match horn_source.py";
+        }"""
+
+
+def load_checks(E, H) -> dict:
+    """What load_horn_source.lsf verifies its load against, from the arrays saved."""
+    ey = np.asarray(E[1])
+    i0, j0 = np.unravel_index(np.argmax(np.abs(ey)), ey.shape)
+    return {"NX": int(ey.shape[0]), "NY": int(ey.shape[1]),
+            "P_E": float(sum((np.abs(c) ** 2).sum() for c in E)),
+            "P_H": float(sum((np.abs(c) ** 2).sum() for c in H)),
+            "IPK": int(i0) + 1, "JPK": int(j0) + 1,              # Lumerical indexes from 1
+            "EY_PK_RE": float(ey[i0, j0].real), "EY_PK_IM": float(ey[i0, j0].imag)}
+
+
+def render_lsf(bundle: Path, checks: dict) -> str:
+    """load_horn_source.lsf for this bundle: absolute folder + recorded checks."""
+    s = (LSF.replace("@CHECK_MAT@", LSF_CHECK.replace("@ROUTE@", "matlabload"))
+         .replace("@CHECK_TXT@", LSF_CHECK.replace("@ROUTE@", "readdata, the text copy"))
+         .replace("@BUNDLE@", bundle.resolve().as_posix()))
+    for k, v in checks.items():
+        s = s.replace(f"@{k}@", repr(v))                  # repr: shortest exact float
+    if "@" in s:
+        raise RuntimeError(f"unfilled placeholder in load_horn_source.lsf near "
+                           f"{s[s.index('@') - 20:s.index('@') + 20]!r}")
+    return s
+
+
+TXT_DIR = "horn_txt"
+
+
+def write_txt(out: Path) -> Path:
+    """Plain-text copy of out/horn_source.mat for Lumerical's readdata.
+
+    What load_horn_source.lsf loads when matlabload cannot read the .mat (both
+    are written by every build). One file per real array: fields as nx lines of ny numbers
+    (readdata's row/column layout IS the .mat's (nx, ny)); x, y as one column;
+    z, f as one number. Every line starts with a digit or '-', because readdata
+    skips lines that start with a letter -- a nan/inf would vanish silently, so
+    they are refused here instead. Line endings are left to savetxt (it writes
+    in text mode, so the OS's own); passing newline=os.linesep doubled them to
+    \\r\\r\\n on Windows, a blank row after every data row.
+    """
+    from scipy.io import loadmat
+    m = loadmat(str(out / "horn_source.mat"))
+    d = out / TXT_DIR
+    d.mkdir(exist_ok=True)
+    for k in ("x", "y", "z", "f"):
+        np.savetxt(d / f"{k}.txt", np.asarray(m[k], dtype=float).reshape(-1, 1), fmt="%.17g")
+    for k in ("Ex", "Ey", "Ez", "Hx", "Hy", "Hz"):
+        a = np.asarray(m[k])
+        if not np.isfinite(a).all():
+            raise ValueError(f"{k} holds nan/inf; readdata would skip those lines")
+        for part in ("re", "im"):
+            np.savetxt(d / f"{k}_{part}.txt", a.real if part == "re" else a.imag, fmt="%.9e")
+    return d
 
 
 def load_fdtd_aperture(path: str, sample: float | None = None) -> dict:
@@ -296,11 +467,20 @@ def build(out: Path, device, z_src: float = Z_SRC, margin: float = MARGIN,
         E = tuple(np.conj(c) for c in E)
         H = tuple(np.conj(c) for c in H)
     f_hz = C0 / (config.WVL * 1e-3)
+    # the text copy belongs to the .mat it was made from: never let the
+    # loader's fallback read one left over from a previous source
+    shutil.rmtree(out / TXT_DIR, ignore_errors=True)
+    # Compressed MAT v5 = MATLAB's default "-v7" layout, the one Ansys documents
+    # matlabload as supporting ("versions 7 and greater").
     savemat(str(out / "horn_source.mat"),
             {"x": xs * 1e-3, "y": ys * 1e-3, "z": np.array(z_src * 1e-3), "f": np.array(f_hz),
              "Ex": E[0], "Ey": E[1], "Ez": E[2], "Hx": H[0], "Hy": H[1], "Hz": H[2]},
             oned_as="column", do_compression=True)
-    (out / "load_horn_source.lsf").write_text(LSF, encoding="utf-8")
+    # ...and always the text copy: whether matlabload reads scipy's .mat on the
+    # lab's build is not established (finding 30), and readdata needs no format
+    write_txt(out)
+    checks = load_checks(E, H)
+    (out / "load_horn_source.lsf").write_text(render_lsf(out, checks), encoding="utf-8")
 
     eh = float(np.sqrt((np.abs(E[0]) ** 2 + np.abs(E[1]) ** 2 + np.abs(E[2]) ** 2).sum()
                        / (np.abs(H[0]) ** 2 + np.abs(H[1]) ** 2 + np.abs(H[2]) ** 2).sum()))
@@ -317,7 +497,8 @@ def build(out: Path, device, z_src: float = Z_SRC, margin: float = MARGIN,
         "impedance_ohm": eh, "Z0_ohm": float(MU0 * C0),
         "ex_over_ey_rms": float(np.sqrt((np.abs(E[0]) ** 2).sum() / (np.abs(E[1]) ** 2).sum())),
         "ez_over_ey_rms": float(np.sqrt((np.abs(E[2]) ** 2).sum() / (np.abs(E[1]) ** 2).sum())),
-        "files": ["horn_source.mat", "load_horn_source.lsf"],
+        "files": ["horn_source.mat", "horn_txt/", "load_horn_source.lsf"],
+        "lsf_load_check": checks,
     }
     if check and not ap:
         info["illumination_fidelity"] = illumination_fidelity(win, z_src, device)
@@ -333,7 +514,11 @@ def build(out: Path, device, z_src: float = Z_SRC, margin: float = MARGIN,
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--out", required=True)
+    ap.add_argument("--out")
+    ap.add_argument("--txt", metavar="DIR", default=None,
+                    help="only (re)write DIR/horn_txt/, the plain-text copy of "
+                         "DIR/horn_source.mat that load_horn_source.lsf falls back to "
+                         "when matlabload cannot read the .mat (a build writes it too)")
     ap.add_argument("--z-src", type=float, default=Z_SRC)
     ap.add_argument("--margin", type=float, default=MARGIN)
     ap.add_argument("--sample", type=float, default=SAMPLE)
@@ -349,6 +534,13 @@ def main() -> int:
                     help="write conj(E), conj(H): ONLY if rung 0 matched conjugated "
                          "with Direction = Backward confirmed (LUMERICAL.md section 6)")
     args = ap.parse_args()
+    if args.txt:
+        d = write_txt(Path(args.txt))
+        print(f"wrote {len(list(d.glob('*.txt')))} text files -> {d}")
+        print("  now run load_horn_source.lsf again: it loads these when matlabload fails")
+        return 0
+    if not args.out:
+        ap.error("--out is required (or --txt DIR)")
     info = build(Path(args.out), config.get_device(args.profile), args.z_src,
                  args.margin, args.sample, check=not args.no_check, conjugate=args.conjugate,
                  aperture_from=args.aperture_from, aperture_offset=args.aperture_offset)
@@ -367,7 +559,7 @@ def main() -> int:
         print(f"  horn: {info['horn']} ({info['fdtd_aperture_alignment']['convention']}); "
               f"source plane vs the analytic model: corr "
               f"{info['fdtd_vs_model_source_plane_corr']:.4f}")
-    print(f"  -> {Path(args.out) / 'horn_source.mat'}  + load_horn_source.lsf")
+    print(f"  -> {Path(args.out) / 'horn_source.mat'}  + horn_txt/ + load_horn_source.lsf")
     return 0
 
 

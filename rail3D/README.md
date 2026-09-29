@@ -2,6 +2,7 @@
 
 *Last updated: 2026-09-29 · λ = 5 mm (60 GHz) · horn = RFspin H-A75-W20 (finding 29) · V0–V8
 measured on the 5090 with the PREVIOUS horn; V0–V4, V9 and V5 re-run on the laptop with the new one
+· Lumerical file I/O: absolute paths, text fallback, load check, `matlabsavelegacy` (finding 30)
 — bump this line in any commit that changes behaviour this file describes.*
 
 **Handoff document.** This README is written so that a future session (any
@@ -193,7 +194,7 @@ field, plus parameter histograms.
 | `tests_plumbing.py` | P0–P5 non-physics plumbing tests (~25 s CPU): dataset-root resolution, history schema, zero-phase ≡ baseline, slm_profile, FDTD round trip, horn source |
 | `check_notebook.py` | fresh-kernel name-ordering check for `rail3D_pipeline.ipynb` (~1 s) |
 | `target_figures.py` | what a successful result would look like — labelled TARGET, never a measurement |
-| `horn_source.py` | rail3D's horn as a Lumerical **Import source** (E + H .mat + .lsf) on z = 15 mm; `--aperture-from` builds it from the full-wave horn (rung −1) instead |
+| `horn_source.py` | rail3D's horn as a Lumerical **Import source** (E + H as .mat and as text, + a self-checking .lsf) on z = 15 mm; `--aperture-from` builds it from the full-wave horn (rung −1) instead; `--txt DIR` rewrites only the text copy (finding 30) |
 | `horn_fdtd_case.py` | Lumerical **rung −1**: watertight PEC STL of the H-A75-W20 + WR-15 feed, Mode-source/monitor plan (`horn_case.json`), `export_horn.lsf` |
 | `fdtd_agreement.py` | scores Lumerical exports: `--horn` (rung −1), `--injection` (rung 0), `--sample … --external` (rungs 1–3, z = 30 and MS plane), `--target` (synthetic target) |
 | `lumerical_mockup.py` | draws the target FDTD setup into a Layout-window screenshot, every box from `case.json` |
@@ -863,6 +864,60 @@ first) · or everything at once with `python lab_report.py`.
     24–25 was produced with the PREVIOUS horn. The config comment that called
     the scaled horn "single-mode-identical" was wrong and is corrected.
 
+30. **Lumerical file I/O: the horn loader has two ways in and checks what it
+    loaded; everything Python reads back is saved with `matlabsavelegacy`.**
+    (2026-09-29, the first Lumerical session on the lab machine. Every command
+    below is in Ansys's script reference; links in LUMERICAL.md Sources.)
+
+    *The error, and what is not known about it.* `load_horn_source.lsf`, run
+    from the Script File Editor, stopped at `matlabload("horn_source.mat")`
+    with "cannot be opened … confirm the file is MATLAB v7 or higher".
+    `matlabload` gives that one message for a file it cannot find and for one
+    it cannot read, and the evidence points both ways:
+    - **Not found.** A bare name resolves against Lumerical's working
+      directory (Ansys says so for `readdata`). But Ansys's `cd` page says that
+      running a script file sets the working directory to that file's folder.
+      So this needs the script to have been run from a copy, pasted, or run
+      from an unsaved editor tab.
+    - **Unreadable.** The file is scipy's MAT v5 with MATLAB's default `-v7`
+      compression. Ansys documents `matlabload` as reading "versions 7 and
+      greater", and a 2023 forum thread shows MATLAB-written files loading.
+      But the MAT I/O was reworked in 2024 R1 (MATLAB's libraries were no
+      longer shipped on Linux), and a forum thread reports a v241
+      `matlabload` regression on files that loaded in v231.
+
+    Which one the lab hit is not established. The new script covers both and
+    reports which way worked.
+
+    *The loader now.* It finds `horn_source.mat` by absolute path: first the
+    bundle folder, written into the script at build time, then its own folder
+    (`filedirectory(currentscriptname)`), then the working directory, checking
+    each with `fileexists`. It runs `matlabload` inside `try … catch`. If
+    that fails, it reads `horn_txt/` with `readdata`. `build()` always writes
+    `horn_txt/`: 16 files (the fields as nx lines of ny numbers to 10 digits),
+    62 MB, about 5 s. It deletes any old copy first, so the fallback can never
+    read an earlier source. Whatever loads is **checked** against numbers
+    `build()` wrote into the script (sizes, E and H power, the peak E_y
+    sample), and the source is created only if they match. P5 runs the same
+    check in numpy: it passes on both the `.mat` and the text copy, and it
+    fails on a conjugated, transposed or real-only load. The conjugated case
+    matches in size and power, so only the peak sample's phase catches it.
+
+    *The write direction.* Ansys documents `matlabsavelegacy` as "a legacy
+    Matlab file format required for Matlab version 7.2 and earlier", limited
+    to 2 GB per matrix. That makes plain `matlabsave` the v7.3 (HDF5) format.
+    This is inferred from the docs, not observed, and `matlabsavelegacy` is
+    correct either way. `scipy.io.loadmat` raises NotImplementedError on
+    v7.3. Every export rail3D reads back (`export_horn.lsf`, LUMERICAL.md step
+    8 and the rung exports) now uses `matlabsavelegacy` into an explicit
+    folder. `load_external` refuses a v7.3 file with that fix instead of a
+    scipy traceback (P4).
+
+    One bug was caught on the way. `np.savetxt` writes in text mode, so passing
+    `newline=os.linesep` gave `\r\r\n` on Windows: a blank row after every
+    data row, which `np.loadtxt` skips but `readdata` might not. P5 now
+    checks the raw lines.
+
 
 ## 6b. Objective & metrics (rev. 2)
 
@@ -907,6 +962,11 @@ Done and committed on **`3D_railhead_upgrade`**:
   --aperture-from`.
 - `scipy` declared in `requirements.txt` (the lab venv lacked it);
   `preflight.py` names missing packages.
+- Lumerical file I/O (2026-09-29, finding 30): `load_horn_source.lsf` finds
+  its files by absolute path, falls back to a plain-text copy, and checks
+  what it loaded before creating the source. Every export Python reads uses
+  `matlabsavelegacy`. **Regenerate the FDTD bundles after pulling this**: the
+  old script has neither the fallback nor the check.
 - Overview deck updated with horn / FDTD / prelim slides
   (`data/generated/rail3D_overview.pptx`, gitignored; builders in
   `presentation/`).

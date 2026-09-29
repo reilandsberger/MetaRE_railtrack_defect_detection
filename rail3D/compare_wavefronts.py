@@ -231,7 +231,9 @@ def load_external(path: str, g: dict):
     vectors alongside the field and interpolate onto our grid. Without them the
     array must already match our grid exactly.
 
-    Accepts .npz (numpy) or .mat (what Lumerical's ``matlabsave`` writes).
+    Accepts .npz (numpy) or .mat up to v7 -- what Lumerical's
+    ``matlabsavelegacy`` writes. Plain ``matlabsave`` writes v7.3 (HDF5), which
+    scipy cannot read; that is refused with the fix (README finding 30).
     Lumerical field arrays keep singleton dimensions (nx,ny,nz,nf,ncomp), so
     they are squeezed; a surviving 3-component axis is an error rather than a
     guess, because rail3D is scalar and the choice of component is physics.
@@ -239,7 +241,14 @@ def load_external(path: str, g: dict):
     p = Path(path)
     if p.suffix.lower() == ".mat":
         from scipy.io import loadmat
-        raw = {k: v for k, v in loadmat(str(p)).items() if not k.startswith("__")}
+        try:
+            raw = {k: v for k, v in loadmat(str(p)).items() if not k.startswith("__")}
+        except NotImplementedError as exc:          # scipy's answer to a v7.3 file
+            raise SystemExit(
+                f"{p.name} is a MATLAB v7.3 (HDF5) file -- what Lumerical's plain "
+                "matlabsave writes -- and scipy cannot read it. Save it again with "
+                "matlabsavelegacy(...), same arguments (LUMERICAL.md step 8); "
+                "export_horn.lsf already does.") from exc
     else:
         raw = dict(np.load(p, allow_pickle=True))
 
@@ -1084,7 +1093,8 @@ def export_case(section, params, g, out: Path, seg, source="horn", closed=False,
         "  not the validator.\n"
         + ("- **Lumerical FDTD (the licensed solver): follow rail3D/LUMERICAL.md.**\n"
            "  This folder also holds the horn as an Import source\n"
-           "  (`horn_source.mat` + `load_horn_source.lsf`, see `horn_source.json`).\n"
+           "  (`horn_source.mat` + its text copy `horn_txt/` + `load_horn_source.lsf`,\n"
+           "  see `horn_source.json`).\n"
            if source == "horn" else "") +
         "- **Lumerical FDTD** is valid physics but volumetric. Do NOT box the\n"
         "  whole scene out to z=150 mm (~390 Mcells at lambda/20, ~39 GB, which\n"

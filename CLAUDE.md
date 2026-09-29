@@ -5,13 +5,15 @@
 L5_prelim_9d5878 with the PREVIOUS horn — README findings 24 (the baseline beats
 the metasurface: an optimization failure), 25 (s0 is the dominant variable), 26
 (stale gate blocks) · Lumerical horn Import source + rung −1 — findings 27–29 ·
-shadow guard settled 2026-09-11 (min_t 0.05, offset 0.3).*
+Lumerical file I/O (absolute paths, text fallback, load check,
+`matlabsavelegacy`) — finding 30 · shadow guard settled 2026-09-11 (min_t 0.05,
+offset 0.3).*
 
 ## START HERE (cold start, 2026-09-29)
 
 **Read `rail3D/NEXT_SESSION.md` first** — the current handoff: state, the exact
 next lab commands, open items, landmines. Then this file, then
-`rail3D/README.md` (§4 conventions, §6 findings — 29 is the newest).
+`rail3D/README.md` (§4 conventions, §6 findings — 30 is the newest).
 
 ## Horn change (2026-09-24) — the newest state
 
@@ -30,10 +32,20 @@ next lab commands, open items, landmines. Then this file, then
   prelim goes into a fresh auto-suffixed root (tag `ee8367`). **Lab re-run
   pending: SETUP_LAB §7e.**
 - Lumerical **rung −1** (the horn alone, full-wave): `horn_fdtd_case.py --out
-  DIR` → Mode source TE10 (check neff 0.7468) → `export_horn.lsf` →
-  `fdtd_agreement.py --horn horn_aperture.mat --horn-near horn_near.mat`.
-  `horn_source.py --aperture-from horn_aperture.mat` builds the rail Import
-  source from the full-wave horn. LUMERICAL.md §5.
+  data/generated/fdtd_horn` → Mode source TE10 (check neff 0.7468) →
+  `export_horn.lsf` (writes into that folder, `matlabsavelegacy`) →
+  `fdtd_agreement.py --horn data/generated/fdtd_horn/horn_aperture.mat
+  --horn-near data/generated/fdtd_horn/horn_near.mat`. `horn_source.py
+  --aperture-from <that horn_aperture.mat>` builds the rail Import source from
+  the full-wave horn. LUMERICAL.md §5.
+- **Lumerical file I/O (2026-09-29, finding 30).** The first lab run of
+  `load_horn_source.lsf` stopped at `matlabload` ("cannot be opened … MATLAB
+  v7 or higher"), a message that does not distinguish missing from
+  unreadable, and the cause is not established. The loader now uses absolute
+  paths, falls back to `horn_txt/` via `readdata` (always written), and
+  creates the source only after checking sizes, E/H power and the peak E_y
+  sample. Exports use `matlabsavelegacy` (plain `matlabsave` = v7.3, which
+  scipy cannot read). FDTD bundles made before this must be regenerated.
 - `scipy` is now in `requirements.txt` — the lab venv lacked it and
   `compare_wavefronts.py --export-case` died in `horn_source.build`.
   `preflight.py` names missing packages.
@@ -115,7 +127,9 @@ Trainable metasurface + detector "barcode" system for rail defect detection.
   exp(−iωt) like rail3D, so its exports align AS-IS; the GPU solver has no TFSF
   and needs 2025 R1.1+ for Import sources; STL imports as µm unless the length
   unit is mm first. Rung −1 (the horn alone, `fdtd_agreement.py --horn`) and
-  rung 0 (empty box, `--injection`) gate everything after them.
+  rung 0 (empty box, `--injection`) gate everything after them. Anything saved
+  from Lumerical for Python to read uses **`matlabsavelegacy`**, and generated
+  `.lsf` scripts use absolute paths (README finding 30).
 - **Interpreting a returned result set: `rail3D/READING_RESULTS.md`.** Pass rules
   for every gate, what each field means, how to tell which commit produced a
   report, and the specific ways each output has been misread. Read it before

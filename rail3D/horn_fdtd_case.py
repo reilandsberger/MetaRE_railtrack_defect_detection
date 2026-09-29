@@ -206,15 +206,44 @@ def far_field_cuts(E: np.ndarray, x_mm: np.ndarray, y_mm: np.ndarray, wvl=None,
 # ---------------------------------------------------------------------------
 # the FDTD plan
 # ---------------------------------------------------------------------------
+# The case folder is substituted for @BUNDLE@ at write time (str.replace, NOT
+# str.format: Lumerical if-blocks use braces).
 LSF_EXPORT = """# export_horn.lsf -- written by rail3D/horn_fdtd_case.py
 # Run after the rung -1 simulation finishes. E_y is the TE10 polarisation.
+#
+# Writes into the case folder by ABSOLUTE path, so the results land beside
+# horn_case.json whatever Lumerical's working directory is (a relative path
+# follows the working directory, which saving the .fsp elsewhere moves). Looks
+# in BUNDLE (where horn_fdtd_case.py wrote it), then this script's folder, and
+# only then falls back to the working directory.
+#
+# matlabsavelegacy, not matlabsave: Ansys documents matlabsavelegacy as the
+# format "required for Matlab version 7.2 and earlier", which makes plain
+# matlabsave the v7.3 (HDF5) format -- and scipy.io.loadmat, so
+# fdtd_agreement.py, cannot read v7.3. Same arguments; limit 2 GB per matrix.
+BUNDLE = "@BUNDLE@";
+here = "";
+try {
+    here = filedirectory(currentscriptname);
+} catch(dir_err);
+
+case_dir = BUNDLE;
+if (fileexists(case_dir + "/horn_case.json") == 0) {
+    case_dir = here;
+}
+if (fileexists(case_dir + "/horn_case.json") == 0) {
+    case_dir = pwd;
+    ?"case folder not found; writing to the working directory instead.";
+}
 E = getresult("mon_aperture", "E");
 Ey = pinch(E.Ey);  x = E.x;  y = E.y;
-matlabsave("horn_aperture.mat", Ey, x, y);
+matlabsavelegacy(case_dir + "/horn_aperture.mat", Ey, x, y);
 E = getresult("mon_near", "E");
 Ey = pinch(E.Ey);  x = E.x;  y = E.y;
-matlabsave("horn_near.mat", Ey, x, y);
-?"wrote horn_aperture.mat and horn_near.mat";
+matlabsavelegacy(case_dir + "/horn_near.mat", Ey, x, y);
+?"wrote horn_aperture.mat and horn_near.mat in " + case_dir;
+?"next, in rail3D/:";
+?"  python fdtd_agreement.py --horn '" + case_dir + "/horn_aperture.mat' --horn-near '" + case_dir + "/horn_near.mat'";
 """
 
 
@@ -273,8 +302,10 @@ def plan(size_ant=None, wall: float = WALL, wg_len: float = WG_LEN) -> dict:
             "mon_near": dict(mon_nr, type="frequency-domain field, 2D Z-normal",
                              purpose="the radiated field 3 lambda out -- what travels to the rail"),
         },
-        "export": "run export_horn.lsf -> horn_aperture.mat, horn_near.mat",
-        "then": "python fdtd_agreement.py --horn horn_aperture.mat --horn-near horn_near.mat",
+        "export": ("run export_horn.lsf -> horn_aperture.mat, horn_near.mat in this folder "
+                   "(matlabsavelegacy, which scipy reads); it prints the next command"),
+        "then": ("python fdtd_agreement.py --horn <this folder>/horn_aperture.mat "
+                 "--horn-near <this folder>/horn_near.mat"),
     }
 
 
@@ -289,7 +320,8 @@ def build(out: Path) -> dict:
     p = plan()
     p["solid_checks"] = chk
     (out / "horn_case.json").write_text(json.dumps(p, indent=2), encoding="utf-8")
-    (out / "export_horn.lsf").write_text(LSF_EXPORT, encoding="utf-8")
+    (out / "export_horn.lsf").write_text(
+        LSF_EXPORT.replace("@BUNDLE@", out.resolve().as_posix()), encoding="utf-8")
     return p
 
 

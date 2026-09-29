@@ -3,7 +3,10 @@
 *Last updated: 2026-09-29 · λ = 5 mm (59.9585 GHz) · written for Lumerical FDTD
 2025 R1 (modern UI). Horn Import-source design, no TFSF. The horn is now the
 physical RFspin H-A75-W20 (README finding 29), and rung −1 simulates it
-full-wave (§5).*
+full-wave (§5). File I/O (README finding 30): the horn loader finds its files
+by absolute path, falls back to a text copy and checks what it loaded; every
+export Python reads is saved with `matlabsavelegacy`. Bundles made before this
+must be regenerated.*
 
 **What this answers.** `field3d.py` is **physical optics**: scalar, PEC
 tangent-plane currents, single + double bounce. Crack lines are 1.5–3 mm wide =
@@ -51,7 +54,8 @@ Each folder holds:
 |---|---|
 | `rail_surface.stl` | the rail, a **watertight closed** body in **mm** (crown at z = 0) |
 | `horn_source.mat` | the horn wavefront as plain arrays (SI) — input to the script below |
-| `load_horn_source.lsf` | builds the Lumerical dataset and the Import source |
+| `horn_txt/` | the same arrays as plain text (16 files, ~62 MB): the script's fallback if `matlabload` cannot read the `.mat` |
+| `load_horn_source.lsf` | loads and **checks** the horn data, builds the Lumerical dataset and the Import source |
 | `horn_source.json` | source plane, window, and the self-check numbers |
 | `case.json` → `fdtd` | **every number in §4**, derived from the exported geometry |
 
@@ -237,15 +241,32 @@ it reads 1000× too small, step 1 was skipped. Script alternative, independent o
 the GUI unit: `stlimport("rail_surface.stl", 1e-3);` — the scaling factor
 defaults to 1e-6, micrometres [stlimport].
 
-**Step 4 — the horn.** Set the working directory to the bundle folder (File →
-Program → Working Directory). Open `load_horn_source.lsf` in the Script File
-Editor and **Run**. It:
+**Step 4 — the horn.** Open `load_horn_source.lsf` from the bundle folder in the
+Script File Editor and **Run**. The working directory does not matter. It:
 
-1. loads `horn_source.mat` (`matlabload` [matlabload]),
-2. builds the EM dataset (E **and** H), and saves `horn_EM_dataset.mat`,
-3. adds an Import source named `horn_source`, `importdataset(EM)`, sets
+1. finds `horn_source.mat` by **absolute path**: first the folder
+   `horn_source.py` wrote, then the script's own folder, then the working
+   directory [fileexists, currentscriptname],
+2. loads it with `matlabload` [matlabload]. If `matlabload` cannot read it
+   (the lab's first attempt stopped with "cannot be opened … MATLAB v7 or
+   higher", README finding 30), it prints the error and loads the plain-text
+   copy in `horn_txt/` with `readdata` [readdata] instead,
+3. **checks what it loaded** against numbers `horn_source.py` recorded in the
+   script: array sizes, E and H power, and the peak E_y sample (a conjugated,
+   transposed or real-only load fails this). **No source is created unless
+   the check passes.**
+4. builds the EM dataset (E **and** H) and saves `horn_EM_dataset.mat`
+   beside it,
+5. adds an Import source named `horn_source`, `importdataset(EM)`, sets
    **Direction = Backward** (−z, toward the rail) and a **single wavelength**
    (`"wavelength span", 0`, per Lumerical's example [Equation]).
+
+A good run prints `loaded and verified (matlabload)` or `loaded and verified
+(readdata, the text copy)`, then `created Import source 'horn_source' at z = 15
+mm`. `NO SOURCE CREATED` lists every folder it looked in. `CHECK FAILED` prints
+the loaded and expected numbers: send that output back. A bundle generated
+before 2026-09-29 has the old script, a bare `matlabload("horn_source.mat")`
+with no fallback and no check: regenerate it (§0).
 
 GUI route instead of step 3: FDTD → Sources → **Import** → double-click it →
 General tab → **Import Source** button → `horn_EM_dataset.mat` (written by the
@@ -281,22 +302,31 @@ frequency points **1**, use source limits.
 and flags unsupported objects [GPU]. Then Run Simulation: toggle **GPU**, pick
 *Local Host*, **Run**.
 
-**Step 8 — export.** In the Script Prompt:
+**Step 8 — export.** In the Script Prompt. The `cd` comes first, because a
+bare file name follows Lumerical's working directory [cd, readdata]. The path
+is the lab machine's clone; elsewhere, use the folder holding
+`load_horn_source.lsf`:
 
 ```
+cd("C:/Users/ct2443/Documents/Rei/MetaRE_railtrack_defect_detection/rail3D/data/generated/fdtd_intact");
 E = getresult("mon_z30", "E");
 Ey = pinch(E.Ey);
 x = E.x;  y = E.y;
-matlabsave("intact_z30.mat", Ey, x, y);
+matlabsavelegacy("intact_z30.mat", Ey, x, y);
 ```
 
 `getresult` returns a dataset *"E vs x, y, z, lambda/f"* [getresult], and
 `E.Ey` is its y component [Datasets]. `pinch` drops the singleton z and
-frequency axes. E_y is the s-polarised component rail3D models. Then, in
-`rail3D/`:
+frequency axes. E_y is the s-polarised component rail3D models.
+
+**`matlabsavelegacy`, not `matlabsave`.** Ansys documents the legacy command
+as the format *"required for Matlab version 7.2 and earlier"*
+[matlabsavelegacy]. That makes plain `matlabsave` MATLAB v7.3 (HDF5), which
+scipy cannot read. The arguments are the same. `fdtd_agreement.py` refuses a
+v7.3 file with this fix rather than a traceback. Then, in `rail3D/`:
 
 ```bash
-python fdtd_agreement.py --sample intact --external intact_z30.mat
+python fdtd_agreement.py --sample intact --external data/generated/fdtd_intact/intact_z30.mat
 ```
 
 ---
@@ -338,10 +368,12 @@ It writes `horn_body.stl`, `horn_case.json` (every number below) and
 4. **Two 2D Z-normal frequency-domain monitors**: `mon_aperture` at z = 0.5 mm,
    x ±21.4, y ±18.4 (the mouth + 2λ); `mon_near` at z = 15 mm, x ±31.4,
    y ±28.4 (3λ out + 4λ).
-5. Run, then run **`export_horn.lsf`** → `horn_aperture.mat`, `horn_near.mat`.
+5. Run, then run **`export_horn.lsf`** → `horn_aperture.mat`, `horn_near.mat`,
+   written into the case folder by absolute path with `matlabsavelegacy`
+   (README finding 30). It prints the next command:
 
 ```bash
-python fdtd_agreement.py --horn horn_aperture.mat --horn-near horn_near.mat
+python fdtd_agreement.py --horn data/generated/fdtd_horn/horn_aperture.mat --horn-near data/generated/fdtd_horn/horn_near.mat
 ```
 
 Passes (proposed `HORN_CRITERIA` — revisit after the first real run) when:
@@ -359,7 +391,7 @@ with the **full-wave** horn instead of the formula (overwrites that bundle's
 `horn_source.mat`; reports the source-plane correlation against the analytic horn):
 
 ```bash
-python horn_source.py --out data/generated/fdtd_intact --aperture-from horn_aperture.mat
+python horn_source.py --out data/generated/fdtd_intact --aperture-from data/generated/fdtd_horn/horn_aperture.mat
 ```
 
 It resamples the aperture at λ/10, fits one complex gain to the model (so only
@@ -371,10 +403,11 @@ to 0.909.
 **Rung 0 — empty box: is the horn injected correctly?** Same file as §4, but with
 the rail **disabled** (right-click → disable). Add a second Frequency-Domain
 monitor `mon_z0`: 2D Z-normal, x −60…60, y −70…70, **z = 0**. Run, then export
-**both** monitors (`empty_z0.mat` from `mon_z0`, `empty_z30.mat` from `mon_z30`):
+**both** monitors the step-8 way: `cd` to `fdtd_intact`, then `matlabsavelegacy`
+(`empty_z0.mat` from `mon_z0`, `empty_z30.mat` from `mon_z30`):
 
 ```bash
-python fdtd_agreement.py --injection empty_z0.mat --leak empty_z30.mat
+python fdtd_agreement.py --injection data/generated/fdtd_intact/empty_z0.mat --leak data/generated/fdtd_intact/empty_z30.mat
 ```
 
 It passes when:
@@ -390,10 +423,11 @@ Lumerical recommends for custom sources: *"compare the field profile recorded by
 a monitor just in front of the source with the original"* [Equation].
 
 **Rung 1 — flat plate.** Disable the rail. Design → Structures → **Rectangle**:
-x −37.5…37.5, y −37.5…37.5, **z −1…0**, PEC. Delete `mon_z0`.
+x −37.5…37.5, y −37.5…37.5, **z −1…0**, PEC. Delete `mon_z0`. Export
+`mon_z30` the step-8 way as `plate_z30.mat`:
 
 ```bash
-python fdtd_agreement.py --sample plate --external plate_z30.mat
+python fdtd_agreement.py --sample plate --external data/generated/fdtd_intact/plate_z30.mat
 ```
 
 Both solvers model a plate essentially exactly, so a disagreement here is a
@@ -419,8 +453,9 @@ Crack lines are 1.5–3 mm wide, i.e. 3–6 cells at λ/10: too coarse to trust.
 **re-run rung 2 with the identical override**, so the two runs share one mesh and
 their common-mode numerical error cancels in the difference.
 
-- **Absolute fields:** `fdtd_agreement.py --sample crack --external crack_z30.mat`.
-  Expect roughly rung-2 agreement.
+- **Absolute fields:** export the step-8 way, but `cd` to `fdtd_crack` and
+  save `crack_z30.mat`; then `fdtd_agreement.py --sample crack --external
+  data/generated/fdtd_crack/crack_z30.mat`. Expect roughly rung-2 agreement.
 - **The difference field** (crack − intact) against rail3D's is **the real
   result**. It is where the crack signature lives, and README finding 27 /
   READING_RESULTS §9b explain why the absolute field alone is not enough for
@@ -436,6 +471,9 @@ having: PO failing on a sub-wavelength feature. Report it; do not tune it away.
 
 | symptom | cause |
 |---|---|
+| `matlabload`: "cannot be opened … MATLAB v7 or higher" | Lumerical gives this for a file it cannot find **and** for one it cannot read. Regenerate the bundle: the current `load_horn_source.lsf` uses absolute paths, falls back to `horn_txt/` and says which happened (README finding 30) |
+| `fdtd_agreement.py` stops: "… is a MATLAB v7.3 (HDF5) file" | saved with `matlabsave`; save again with `matlabsavelegacy`, same arguments [matlabsavelegacy] |
+| `load_horn_source.lsf` prints CHECK FAILED | the load does not match what `horn_source.py` wrote (sizes, power, or the peak sample's phase). Send the printed numbers back; do not run with `VERIFY = 0` unless told to |
 | Rail is tiny, or huge | STL has no units; set File → Units → Length = mm **before** importing, or `stlimport(..., 1e-3)` [STL, stlimport] |
 | Script error on the material | name is **PEC (Perfect Electrical Conductor)**, not "Electric" [Materials] |
 | Rung 0 matches only when conjugated | check Direction = **Backward** first. If it is, rebuild with `python horn_source.py --out DIR --conjugate`: Lumerical conjugates *beam* profiles internally for backward injection [Rotations], and this undoes that if it also applies to imports |
@@ -496,6 +534,13 @@ From `case.json` → `fdtd.mesh_options` (uniform mesh; RAM ≈ 100 B/cell):
 - [getresult] getresult – Script command — https://optics.ansys.com/hc/en-us/articles/360034409854-getresult-Script-command
 - [Datasets] Introduction to Lumerical datasets — https://optics.ansys.com/hc/en-us/articles/360034409554-Introduction-to-Lumerical-datasets
 - [matlabload] matlabload – Script command — https://optics.ansys.com/hc/en-us/articles/360034408034-matlabload-Script-command
+- [matlabsavelegacy] matlabsavelegacy – Script command ("a legacy Matlab file format required for Matlab version 7.2 and earlier") — https://optics.ansys.com/hc/en-us/articles/360034928133-matlabsavelegacy-Script-command
+- [readdata] readdata – Script command ("will check for the file in the current working directory") — https://optics.ansys.com/hc/en-us/articles/360034411234-readdata
+- [cd] cd – Script command ("Whenever you open an fsp file or run a script file, it will set the working directory to the directory of the file opened") — https://optics.ansys.com/hc/en-us/articles/360034931553-cd
+- [fileexists] fileexists – Script command — https://optics.ansys.com/hc/en-us/articles/360034931633-fileexists-Script-command
+- [currentscriptname] currentscriptname – Script command — https://optics.ansys.com/hc/en-us/articles/360034931813-currentscriptname
+- [try] try – Script command (`try { … } catch(errMsg);`) — https://optics.ansys.com/hc/en-us/articles/360034928513-try
+- [forum] Ansys forum, "matlabload: can not open file *.mat for reading" (2023: numeric variables from a MATLAB-saved file load) — https://discuss.ansys.com/discussion/2065/matlabload-can-not-open-file-mat-for-reading
 - [Materials] Material database in the Lumerical FDTD and MODE products — https://optics.ansys.com/hc/en-us/articles/360034394614-Material-database-in-the-Lumerical-FDTD-and-MODE-products
 - [TFSF tips] Tips and best practices when using the FDTD TFSF source — https://optics.ansys.com/hc/en-us/articles/360034382934-Tips-and-best-practices-when-using-the-FDTD-TFSF-source
 - [Rotations] Source Rotations in 3D FDTD — https://optics.ansys.com/hc/en-us/articles/1500002383802-Source-Rotations-in-3D-FDTD

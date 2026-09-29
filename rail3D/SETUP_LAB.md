@@ -1,7 +1,8 @@
 # rail3D — Lab Workstation Setup (RTX 5090)
 
 *Last updated: 2026-09-29 · λ = 5 mm (60 GHz), V0–V8 measured on the 5090 · horn changed to the
-RFspin H-A75-W20 on 2026-09-24 — re-run per §7e · bump this line in any
+RFspin H-A75-W20 on 2026-09-24 — re-run per §7e · Lumerical file I/O fixed
+2026-09-29 (README finding 30): regenerate the FDTD bundles · bump this line in any
 commit that changes behaviour this file describes. Timings are now MEASURED
 at λ=5 on the lab 5090 (2026-09-04), not extrapolated.*
 
@@ -623,11 +624,20 @@ Send back the stage bundle, `surface_ablation.json` and the two logs.
 
 **Lumerical** (LUMERICAL.md §5): rung −1 (`python horn_fdtd_case.py --out
 data/generated/fdtd_horn`, then `fdtd_agreement.py --horn …`) → rung 0 → plate →
-intact → crack. Re-export the rail bundles first — the old `fdtd_intact/`,
-`fdtd_crack/` carry the previous horn:
+intact → crack. Re-export the bundles first. Any `fdtd_intact/`, `fdtd_crack/`
+or `fdtd_horn/` made before 2026-09-29 carries the old `.lsf` scripts: a bare
+relative `matlabload`, no text fallback, no load check, and exports with
+`matlabsave` (v7.3, which scipy cannot read; README finding 30). The older
+ones also carry the previous horn.
 
 ```bash
 python compare_wavefronts.py --sample intact --source horn --plane-z 30 --export-closed --export-only --export-case data/generated/fdtd_intact
+```
+```bash
+python compare_wavefronts.py --sample crack --source horn --plane-z 30 --export-closed --export-only --export-case data/generated/fdtd_crack
+```
+```bash
+python horn_fdtd_case.py --out data/generated/fdtd_horn
 ```
 
 ---
@@ -839,10 +849,15 @@ Measured at **λ=5 on the lab 5090** (2026-09-04):
 > `LUMERICAL.md`** — rail3D's horn enters as an **Import source** (no TFSF;
 > `horn_source.py`, written into every `--source horn --export-case` bundle).
 > Rung −1 first (the horn alone, `horn_fdtd_case.py` → `fdtd_agreement.py
-> --horn`), then rung 0: `python fdtd_agreement.py --injection empty_z0.mat --leak
-> empty_z30.mat`. Then score each run with `python fdtd_agreement.py --sample
-> intact --external intact_z30.mat` (both planes, % agreement, worst-pixel
-> residuals with locations, pass/fail). `--target` draws what passing looks like.
+> --horn`), then rung 0: `python fdtd_agreement.py --injection
+> data/generated/fdtd_intact/empty_z0.mat --leak
+> data/generated/fdtd_intact/empty_z30.mat`. Then score each run with `python
+> fdtd_agreement.py --sample intact --external
+> data/generated/fdtd_intact/intact_z30.mat` (both planes, % agreement,
+> worst-pixel residuals with locations, pass/fail). Export from Lumerical with
+> **`matlabsavelegacy`**, not `matlabsave` (v7.3, which scipy cannot read), after
+> a `cd` into the bundle folder (LUMERICAL.md step 8, README finding 30).
+> `--target` draws what passing looks like.
 > `python lumerical_mockup.py --screenshot <layout.png>` draws the target setup
 > into a screenshot of the FDTD Layout window, with every box taken from
 > `case.json`. The MoM discussion below still holds as the stronger reference if
@@ -915,9 +930,10 @@ exactly these points, not a node-centred grid), and a `conventions` block.
 **Two traps that look like physics disagreements and are not:**
 
 - **Time convention.** rail3D uses `exp(-iωt)`, so outgoing waves carry
-  `exp(+ik₀R)`. HFSS, FEKO and Lumerical use `exp(+jωt)` → `exp(-jk₀R)`, so
-  their fields arrive **conjugated**. `--external` detects this and *tells you*
-  which convention matched; it does not silently fix it.
+  `exp(+ik₀R)`. HFSS and FEKO use `exp(+jωt)` → `exp(-jk₀R)`, so their fields
+  arrive **conjugated**; Lumerical is `exp(-iωt)` like rail3D and aligns as-is
+  (README finding 28). `--external` detects which convention matched and *tells
+  you*; it does not silently fix it.
 - **Polarisation.** rail3D is **scalar**. Export ONE component from the vector
   solver — `E_y` (E along the rail axis, TE) is the cleanest match — and set the
   incident polarisation to match it.
