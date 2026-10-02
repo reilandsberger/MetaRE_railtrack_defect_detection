@@ -1,7 +1,9 @@
 # CLAUDE.md — MetaRE railtrack defect detection
 
-*Last updated: 2026-09-29 · λ = 5 mm (60 GHz) · horn = physical RFspin H-A75-W20
-(README finding 29, 2026-09-24) · rev.3 defect model · prelim run 2026-09-11 on
+*Last updated: 2026-10-02 · λ = 5 mm (60 GHz) · horn = physical RFspin H-A75-W20
+(README finding 29, 2026-09-24), moved out to 278.5 mm with its lowest edge level
+with the metasurface, metasurface input upward-only (finding 31, 2026-10-02) ·
+rev.3 defect model · prelim run 2026-09-11 on
 L5_prelim_9d5878 with the PREVIOUS horn — README findings 24 (the baseline beats
 the metasurface: an optimization failure), 25 (s0 is the dominant variable), 26
 (stale gate blocks) · Lumerical horn Import source + rung −1 — findings 27–29 ·
@@ -13,9 +15,29 @@ offset 0.3).*
 
 **Read `rail3D/NEXT_SESSION.md` first** — the current handoff: state, the exact
 next lab commands, open items, landmines. Then this file, then
-`rail3D/README.md` (§4 conventions, §6 findings — 30 is the newest).
+`rail3D/README.md` (§4 conventions, §6 findings — 31 is the newest).
 
-## Horn change (2026-09-24) — the newest state
+## Horn move (2026-10-02) — the newest state
+
+- **The horn slid out along its 55° axis until its lowest point (outer lower
+  aperture edge) is level with the metasurface**: `config.HORN_LOWER_EDGE_Z =
+  H_MS`, `DIST_ANT` DERIVED = 278.51 mm (was 140). User decision: keep horn
+  reflections/re-radiation off the metasurface. README finding 31.
+- **`field3d.upward_only`**: only light crossing a plane going UP is the
+  metasurface's input. Every metasurface-plane producer passes it (generator,
+  `compare_wavefronts.solve`, `scan_geometry`, V7, setup figures); it is
+  bit-identical for a horn below the plane and makes psi0 = psi2 = 0 at the
+  metasurface now, so "tot" = psi1. Leave it False for the horn's own field
+  below it (`horn_source`, V9). It also fixed `fdtd_agreement`'s z = 30
+  reference, which included a downward psi2 the horn-less box cannot make.
+- `term_budget.py` quantifies psi1 vs psi2/psi0 plus the stray paths the move
+  creates (sideways horn light at the plane −4.4 dB, horn → detector plane
+  −17 dB vs the rail's light; laptop look, no shadowing). psi2 was already
+  −42 dB before the move. Signal per unit drive −3.5 to −4.9 dB.
+- New prelim root `L5_prelim_6a5b8f`; FDTD bundles + Import source must be
+  rebuilt (new window/region in LUMERICAL.md). Lab: SETUP_LAB §7e.
+
+## Horn change (2026-09-24)
 
 - The horn is now the **physical RFspin H-A75-W20** (50–75 GHz, WR-15 feed,
   19–21 dBi): `config.SIZE_ANT = (22.8, 16.8, 3.7592, 1.8796, 28.0)` mm (inner
@@ -29,8 +51,8 @@ next lab commands, open items, landmines. Then this file, then
   closed form; 19.07 / 20.09 / 21.01 dBi across 50 / 60 / 75 GHz; RESOL_ANT
   converged; single-mode feed. Rail illumination vs the old horn: corr 0.977.
 - All three are provenance keys → old datasets/checkpoints refused; the next
-  prelim goes into a fresh auto-suffixed root (tag `ee8367`). **Lab re-run
-  pending: SETUP_LAB §7e.**
+  prelim goes into a fresh auto-suffixed root (tag `ee8367`, now `6a5b8f`
+  after the 2026-10-02 move). **Lab re-run pending: SETUP_LAB §7e.**
 - Lumerical **rung −1** (the horn alone, full-wave): `horn_fdtd_case.py --out
   data/generated/fdtd_horn` → Mode source TE10 (check neff 0.7468) →
   `export_horn.lsf` (writes into that folder, `matlabsavelegacy`) →

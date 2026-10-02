@@ -593,9 +593,40 @@ def test_v9_horn() -> dict:
     res["feed_a_over_lam"] = round(a / wvl, 3)
     res["feed_b_over_lam"] = round(b / wvl, 3)
     res["feed_single_mode"] = (0.5 < a / wvl < 1.0) and (b / wvl < 0.5)
+
+    # (e) placement (README finding 31): the horn's lowest point is where config
+    # says, at/above the metasurface; upward_only changes NOTHING for a horn
+    # below the plane (the 140 mm placement every earlier dataset used) and
+    # removes a horn at/above it exactly -- for psi0 and for psi2's last leg
+    th = config.THETA_INC
+    lowest = (config.DIST_ANT * np.cos(th)
+              - (config.SIZE_ANT[0] / 2 + config.HORN_WALL) * np.sin(th))
+    res["horn_lowest_z_mm"] = round(float(lowest), 6)
+    res["lowest_at_configured_z"] = bool(abs(lowest - config.HORN_LOWER_EDGE_Z) < 1e-9
+                                         and lowest >= config.H_MS - 1e-9)
+    Xm, Ym = config.plane_grid(torch.device("cpu"))
+    ms = (Xm, Ym, config.H_MS, wvl, config.THETA_INC, config.SIZE_ANT)
+    v_pl = torch.tensor([[-5.0, -5, 0], [5, -5, 0], [5, 5, 0], [-5, 5, 0]])
+    f_pl = torch.tensor([[0, 1, 2], [0, 2, 3]])
+    same, gone, there = True, True, True
+    for dist, below in ((140.0, True), (config.DIST_ANT, False)):
+        p0 = field3d.horn_to_plane(*ms, dist, config.RESOL_ANT)
+        p0u = field3d.horn_to_plane(*ms, dist, config.RESOL_ANT, upward_only=True)
+        _, p2 = field3d.scattered_fields(v_pl, f_pl, *ms, dist, config.RESOL_ANT)
+        _, p2u = field3d.scattered_fields(v_pl, f_pl, *ms, dist, config.RESOL_ANT,
+                                          upward_only=True)
+        if below:
+            same = torch.equal(p0u, p0) and torch.equal(p2u, p2)
+        else:
+            gone = float(p0u.abs().max()) == 0.0 and float(p2u.abs().max()) == 0.0
+            there = float(p0.abs().max()) > 0 and float(p2.abs().max()) > 0
+    res["upward_only_identity_horn_below"] = bool(same)
+    res["upward_only_zero_horn_above"] = bool(gone)
+    res["unmasked_sideways_field_nonzero"] = bool(there)
     res["part"] = config.HORN_SPEC["part"]
     res["pass"] = bool(res["directivity_ok"] and res["band_spec_ok"]
-                       and res["sampling_ok"] and res["feed_single_mode"])
+                       and res["sampling_ok"] and res["feed_single_mode"]
+                       and res["lowest_at_configured_z"] and same and gone and there)
     return res
 
 

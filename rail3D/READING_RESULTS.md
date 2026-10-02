@@ -1,8 +1,10 @@
 # Reading rail3D's validation output
 
-*Last updated: 2026-09-29 · λ = 5 mm (60 GHz) · horn = RFspin H-A75-W20 (V9 added,
-rung −1 scorer added) — bump this line in any commit that changes a gate, a
-threshold, or what a field means.*
+*Last updated: 2026-10-02 · λ = 5 mm (60 GHz) · horn = RFspin H-A75-W20 at 278.5 mm
+(V9 extended with placement + upward-only checks; `term_budget.json` added;
+`fdtd_agreement`'s horn reference is upward-only, so psi2 = 0 at z = 30) —
+bump this line in any commit that changes a gate, a threshold, or what a field
+means.*
 
 What every file the lab run produces actually contains, what its pass rule is in
 code, and the specific ways each one has been misread. Written so a cold session
@@ -24,8 +26,9 @@ Companion docs: `README.md` §6 (why the physics is the way it is),
 | `geometry_scan.json` | `scan_geometry.py` | **no** — a measurement |
 | `V6b_guard_sweep` / `v6b_grid.txt` | `validation_3d.py --min-t … --normal-offset …` | **no** — a study |
 | `wavefront_comparison.json`, `wavefront_fields.npz` | `compare_wavefronts.py` | **no** — a study |
+| `term_budget.json` | `term_budget.py` | **no** — a measurement (§9d) |
 
-The three "no" rows are the ones most often quoted as if they were gates. They
+The "no" rows are the ones most often quoted as if they were gates. They
 have no pass criterion; they exist to *inform a decision*.
 
 ---
@@ -410,6 +413,35 @@ flat-phase horn deliberately built to FAIL), not from Lumerical. A real run is
 
 The thresholds are `HORN_CRITERIA`, marked *proposed*: revisit them after the
 first real run rather than tuning a run to them.
+
+## 9d. `term_budget.json` — where the metasurface's light comes from
+
+Written by `term_budget.py` (README finding 31). **A measurement, not a gate.**
+One block per horn placement (the configured one, then `--ref-dist`, default
+140 mm). Every dB is a power over the 60×30 metasurface aperture relative to
+**intact psi1** of the same placement.
+
+- `into_metasurface_dB_vs_P1` — psi2 and psi0 that cross the plane going UP:
+  the model's actual input besides psi1. **`null` means excluded by geometry**
+  (the horn is above the plane, `aperture_fraction_below_ms` = 0), not "very
+  small". Quote it as "not an input", never as −∞ dB.
+- `sideways_dB_vs_P1` — horn light reaching the plane travelling sideways or
+  down. **Not in any dataset**; it is the size of a physical stray-light
+  problem (frames, edges, baffles). A large value here is not a model error.
+- `defect_signal` — |defect − intact|² of psi1 (same pose, no augmentation),
+  and the psi2 share of it. Means over `n_per_class`; with the default 3, one
+  odd sample moves a class mean by a dB or more.
+- `detector_plane.horn_direct_dB_vs_rail` — the horn straight onto the
+  detector plane vs the rail's psi1 carried there by the ASM with **no
+  metasurface**. When `horn_line_of_sight_crosses_ms_plane` is false, this
+  light bypasses the metasurface entirely in the real rig. Also not modelled.
+- `P1_intact_vs_reference_dB`, `defect_signal_vs_reference_dB` — signal per
+  unit horn drive vs the reference placement. The model normalises fields
+  (RMS), so this matters for receiver SNR, not for the simulation itself.
+- `intact_field_change_seg_120_to_240` — the SEG_LEN check: how much the
+  intact field moves when the segment doubles. ≲ 5% is the λ=8 acceptance.
+- `shadow: false` — a laptop quick look. Datasets use ray-cast shadowing, so
+  only the shadowed run is quotable.
 
 ## 10. V8 — what it does and does not claim
 

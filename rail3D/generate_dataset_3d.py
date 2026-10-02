@@ -135,6 +135,7 @@ def generate_class(
                 shadow_occluders=(v_occ_b, faces_coarse.to(device)),
                 shadow_min_t=config.SHADOW_MIN_T,
                 shadow_normal_offset=config.SHADOW_NORMAL_OFFSET,
+                upward_only=True,          # only light coming UP through the metasurface
             )
             psis.append(torch.stack([psi1, psi2], dim=-1).cpu())
             metas.extend(batch_meta)
@@ -225,8 +226,10 @@ def main() -> int:
     psi0_file = data3d.psi0_path(root=root)
     if not psi0_file.exists():
         X, Y = config.plane_grid(device)
+        # upward_only: with the horn at/above H_MS (finding 31) this is exactly 0
         psi0 = field3d.horn_to_plane(X, Y, config.H_MS, config.WVL, config.THETA_INC,
-                                     config.SIZE_ANT, config.DIST_ANT, config.RESOL_ANT)
+                                     config.SIZE_ANT, config.DIST_ANT, config.RESOL_ANT,
+                                     upward_only=True)
         data3d.atomic_save(psi0.cpu(), psi0_file)
         log(f"psi0 cached -> {psi0_file.name}", root)
 

@@ -1,8 +1,9 @@
 # rail3D — 3D diffraction simulation + metasurface training for rail defect detection
 
-*Last updated: 2026-09-29 · λ = 5 mm (60 GHz) · horn = RFspin H-A75-W20 (finding 29) · V0–V8
-measured on the 5090 with the PREVIOUS horn; V0–V4, V9 and V5 re-run on the laptop with the new one
-· Lumerical file I/O: absolute paths, text fallback, load check, `matlabsavelegacy` (finding 30)
+*Last updated: 2026-10-02 · λ = 5 mm (60 GHz) · horn = RFspin H-A75-W20 (finding 29) at
+278.5 mm, lowest edge level with the metasurface; upward-only metasurface input (finding 31) · V0–V8
+measured on the 5090 with the PREVIOUS horn and placement; V0–V4 and V9 re-run on the laptop with the
+new ones · Lumerical file I/O: absolute paths, text fallback, load check, `matlabsavelegacy` (finding 30)
 — bump this line in any commit that changes behaviour this file describes.*
 
 **Handoff document.** This README is written so that a future session (any
@@ -43,11 +44,13 @@ with the operating threshold *calibrated* on the validation intact spread
 swept 3D railhead mesh + per-point defect depth field d(s,y)
         │  mesh3d.py    (λ/8 facets = 0.625 mm, fixed topology → batchable)
         ▼
-physical-optics scattering: horn (H-A75-W20, 140 mm @ 55°) → rail → 60×30 plane @ z=150 mm
-        │  field3d.py   (exact RS-I kernel, chunked+batched, ray-cast shadow)
+physical-optics scattering: horn (H-A75-W20, 278.5 mm @ 55°, lowest edge at z=150) → rail → 60×30 plane @ z=150 mm
+        │  field3d.py   (exact RS-I kernel, chunked+batched, ray-cast shadow;
+        │               upward_only: only light crossing the plane going UP)
         ▼
 dataset shards: psi1, psi2 per sample + cached psi0    [generate_dataset_3d.py]
-        │  data3d.py    (mode "tot" = psi0+psi1+psi2, RMS-normalized;
+        │  data3d.py    (mode "tot" = psi0+psi1+psi2 -- = psi1 since the horn
+        │               moved above the plane, finding 31; RMS-normalized;
         │               dataset_config.json provenance, refused on mismatch)
         ▼
 trainable optics: [SLM2D → RS-FFT propagator 100 mm] → |·|²
@@ -185,6 +188,7 @@ field, plus parameter histograms.
 | `lab_report.py` | the whole verification chain in one command → paste-able `data/generated/lab_report.md` |
 | `compare_wavefronts.py` | one sample solved every way — λ=8 vs λ=5, physics terms, shadow guard, mesh, horn vs plane wave — as amplitude/phase figures + metrics; exports a full-wave case (STL+OBJ, optional closed body, `--source plane`) and accepts external solver fields back, auto-detecting their time convention and amplitude. See finding 20 |
 | `scan_geometry.py` | measure the observation plane (H, offset, aperture) before committing to a generation |
+| `term_budget.py` | where the metasurface's light comes from — rail (psi1) vs horn re-radiation (psi2) and horn direct (psi0) — plus sideways horn light, horn → detector stray light, signal level, cut-end illumination; configured horn vs a reference placement (finding 31) |
 | `sweep_detectors.py` | final detector count / MS→detector distance sweep (training-time only) |
 | `analyze_results.py` | where it succeeds and fails, per defect parameter; failure montage |
 | `setup_diagram.py` | renders the annotated scene diagram |
@@ -213,7 +217,10 @@ field, plus parameter histograms.
   DERIVED in config.py — quote config, not this line, if they ever disagree.
 - Horn: the **physical RFspin H-A75-W20** — `config.SIZE_ANT = (22.8, 16.8,
   3.7592, 1.8796, 28.0)` mm = inner aperture A × B, WR-15 feed a × b, axial
-  flare length L — 140 mm from the crown at 55° in x–z, E along y (s-pol).
+  flare length L — aperture centre `DIST_ANT` = 278.5 mm from the crown at 55°
+  in x–z (derived so the horn's lowest edge is level with the metasurface,
+  `HORN_LOWER_EDGE_Z = H_MS`; 140 mm until 2026-10-02, finding 31), E along y
+  (s-pol).
   **Not λ-scaled**: it is hardware. Aperture model = textbook
   (`HORN_FLARE_K="k0"`, `HORN_SAMPLING="midpoint"`); Face3D's variants
   (`"beta_wvg"`, `"linspace"`) exist only so V1 can replay Face3D verbatim.
@@ -860,7 +867,8 @@ first) · or everything at once with `python lab_report.py`.
     *Consequences.* `SIZE_ANT`, `HORN_FLARE_K` and `HORN_SAMPLING` are
     provenance keys: every dataset and checkpoint made with the previous horn
     is refused, and the next prelim generates into a fresh auto-suffixed root
-    (finding 23; tag `ee8367` for this config). The prelim result of findings
+    (finding 23; tag `ee8367` for this config, `6a5b8f` since the horn moved,
+    finding 31). The prelim result of findings
     24–25 was produced with the PREVIOUS horn. The config comment that called
     the scaled horn "single-mode-identical" was wrong and is corrected.
 
@@ -925,6 +933,75 @@ first) · or everything at once with `python lab_report.py`.
     data row, which `np.loadtxt` skips but `readdata` might not. P5 now
     checks the raw lines.
 
+31. **The horn moved out to 278.5 mm, its lowest edge level with the
+    metasurface; only light crossing the metasurface plane going UP is its
+    input.** (2026-10-02, user decision: keep reflections and re-radiation
+    from the horn off the metasurface.)
+
+    *Placement.* `config.HORN_LOWER_EDGE_Z = H_MS` and `DIST_ANT` is derived:
+    the horn slides out along its 55° axis until the outer lower edge of the
+    aperture (A/2 + 0.5 mm wall below the centre, along the tilt) is at
+    z = 150. DIST_ANT = 278.51 mm = 55.7λ; aperture centre (x, z) = (228.1,
+    159.8); the opening spans z 150.4–169.1. It was 140 mm, centre (114.7,
+    80.3), opening z 71–90. The rail is at 0.87 of 2D²/λ (was 0.44).
+
+    *The modelling rule this forced.* Training's default field ("tot",
+    `data3d.combine_field`) adds psi0 (horn direct) and psi2 (rail → horn
+    aperture → plane) to psi1 at the metasurface, and the model then carries
+    everything UP to the detectors. With the horn above the plane, psi0 and
+    psi2 reach it travelling sideways or down, so propagating them up would
+    be wrong. `field3d.horn_to_plane` and `scattered_fields` take
+    `upward_only`: only aperture samples below the plane contribute. It is
+    used everywhere a plane is scored as something light crosses upward: the
+    generator, `compare_wavefronts.solve`, `scan_geometry`, V7 and the setup
+    figures. For a horn wholly below the plane the mask is all ones and the
+    result is bit-identical (V9 checks it at the 140 mm placement). For the
+    new placement psi0 and psi2 at the metasurface are exactly 0, so "tot" =
+    psi1. The same rule removed a scoring error in `fdtd_agreement.py`: at
+    its z = 30 monitor psi2 (7.6% of psi1 there) travels DOWN from the horn,
+    and the horn-less FDTD box could never produce it, yet it was in
+    rail3D's reference. Leave `upward_only` False for the horn's own field
+    on a plane below it (`horn_source`, V9's footprint check).
+
+    *What the move buys and costs* (`term_budget.py`, intact + one sample per
+    class, NO shadowing, laptop, 2026-10-02 — a first look; the 5090 run with
+    shadowing and more samples replaces it). Powers in dB relative to intact
+    psi1 at the metasurface:
+
+    | | 140 mm (before) | 278.5 mm (now) |
+    |---|---|---|
+    | psi2 into the metasurface | −41.7 | none (horn above) |
+    | psi0 into the metasurface | −24.2 | none |
+    | psi2 part of the defect signal, vs its psi1 part | −37 to −55 | none |
+    | horn light reaching the plane sideways (psi0), NOT an input | none | **−4.4** |
+    | horn straight onto the detector plane (z = 250), vs the rail's light there | −41.3 (crosses the MS plane) | **−17.2** (does not) |
+    | defect signal per unit horn drive | reference | −3.5 to −4.9 |
+    | cut-end illumination (×mid-span) | 0.10 | 0.22 |
+    | intact field change, segment 120 → 240 mm (rel L2) | 2.5% | 3.9% |
+
+    Read it this way. psi2, the re-radiation the move targets, was already
+    −42 dB into the metasurface and −37 to −55 dB of the defect signal: it
+    was never a confounder in the model. The real model-side gain is psi0, a
+    −24 dB defect-independent field that the metasurface had to cope with.
+    The costs are physical and outside the model. The horn now sits level with
+    the metasurface and 31–33° off its own boresight from it, so its main-lobe
+    skirt sweeps across the plane at grazing (−4.4 dB of the rail's power).
+    It also has a clear line to the detector plane, 24 dB stronger than
+    before. Neither is in the simulation; both are baffle and absorber
+    problems in the rig, and the horn's real pattern at 30–60° is a rung −1
+    question (the aperture model omits rim diffraction). Signal per unit
+    drive drops 3.5–4.9 dB, and the cut ends are now "brightly lit" by
+    `compare_wavefronts`' own 0.2 threshold.
+
+    *Consequences.* DIST_ANT is a provenance key: the next prelim generates
+    into `L5_prelim_6a5b8f` (was `ee8367`), and every dataset and checkpoint
+    made at 140 mm is refused. FDTD bundles change: window x −30.75…125.5,
+    y ±83.75 (55% of the horn's power); region x −88…133.5, y ±91.8; 42.7 M
+    cells at λ/10; λ/20 no longer fits 32 GB. Regenerate them, and rebuild
+    the Import source. Rung −1 is unaffected (horn frame). SEG_LEN = 120 is
+    still inside the original acceptance (intact shift ≤ ~5%), but confirm
+    with shadowing on the 5090 (`term_budget.py`).
+
 
 ## 6b. Objective & metrics (rev. 2)
 
@@ -947,7 +1024,7 @@ threshold, **balanced accuracy** at the swept optimum
 (`losses3d.best_threshold`, Face3D's argmin(FN+FP)), class accuracy, plus
 ROC / noise / alignment curves in `full_evaluation`.
 
-## 7. Current state / what remains (2026-09-29)
+## 7. Current state / what remains (2026-10-02)
 
 **Picking this up cold: read `NEXT_SESSION.md` first** — the short handoff with
 the exact next commands.
@@ -974,6 +1051,10 @@ Done and committed on **`3D_railhead_upgrade`**:
   what it loaded before creating the source. Every export Python reads uses
   `matlabsavelegacy`. **Regenerate the FDTD bundles after pulling this**: the
   old script has neither the fallback nor the check.
+- **Horn moved out to 278.5 mm (2026-10-02, finding 31):** lowest edge level
+  with the metasurface; metasurface input is upward-only (psi0 = psi2 = 0
+  there now); `term_budget.py`; new prelim root `L5_prelim_6a5b8f`; FDTD
+  bundles and the Import source must be rebuilt.
 - Overview deck updated with horn / FDTD / prelim slides
   (`data/generated/rail3D_overview.pptx`, gitignored; builders in
   `presentation/`).
@@ -981,13 +1062,16 @@ Done and committed on **`3D_railhead_upgrade`**:
 **Remaining, in order** (lab 5090 unless noted; commands in SETUP_LAB §7e):
 1. `git pull`, `pip install -r requirements.txt` (never `-U`), `preflight.py`,
    `tests_plumbing.py`, `tests_physics_3d.py` (V9 included).
-2. `validation_3d.py` — V5–V7 under the new horn.
-3. SEG_LEN cut-end re-check with the new beam (not scripted yet).
+2. `validation_3d.py` — V5–V7 under the new horn and placement.
+3. `term_budget.py --profile lab` — the finding-31 table with production
+   shadowing, including the SEG_LEN 120 → 240 mm check (cut ends are now lit
+   at 0.22× mid-span).
 4. `run_stage.py --stage prelim --fresh --with-baseline --bundle` → fresh
    auto-suffixed root.
 5. `ablate_surface.py --stage prelim --long` on that root — the
    baseline-beats-SLM question (finding 24).
-6. Optional: `scan_geometry.py` (H = 30λ was chosen under the old beam).
+6. Optional: `scan_geometry.py` (H = 30λ was chosen under the old beam and
+   placement; note the horn's lowest edge stays at z = 150 while H varies).
 7. Lumerical: rung −1 (horn) → rung 0 (empty box) → plate → intact → crack
    (LUMERICAL.md §5).
 8. Confirm the horn's inner dimensions (drawing / calipers). A 60 GHz

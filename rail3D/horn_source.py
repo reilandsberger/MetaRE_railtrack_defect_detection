@@ -8,8 +8,9 @@ rail3D's horn is the RFspin H-A75-W20 (config.SIZE_ANT: WR-15 feed, 22.8 x
 16.8 mm inner aperture, 28 mm flare; README finding 29) in the textbook
 aperture-field model (field3d.aperture_field): TE10 cosine along the plane of
 incidence, so E is along y -- s-polarised -- and a quadratic flare phase, with
-the aperture 140 mm from the crown at 55 deg. FDTD
-cannot hold the horn itself (the box would be ~390 Mcells), so the horn enters
+the aperture config.DIST_ANT = 278.5 mm from the crown at 55 deg (its lowest
+edge level with the metasurface, README finding 31; 140 mm before 2026-10-02).
+FDTD cannot hold the horn and the rail together (hundreds of Mcells), so the horn enters
 FDTD the way Lumerical documents for arbitrary beams: an **Import source**, a
 z-normal plane of E and H injected downward just above the rail.
 
@@ -36,15 +37,16 @@ Design decisions, each measured rather than assumed (README finding 28):
       override (top 9.9 mm), below the z = 30 monitor. The monitor then sits on
       the far side of the source from the rail and records ONLY the up-going
       reflected field -- the separation TFSF used to provide, obtained without it.
-  WINDOW  the horn beam is far wider than the rail (at crown height its -20 dB
-      contour spans y = +/-108 mm for the H-A75-W20), so the plane covers the
+  WINDOW  the horn beam is far wider than the rail, so the plane covers the
       rays that can REACH the rail -- every lit facet projected toward the
       phase centre -- plus 6 lambda, with a 2 lambda raised-cosine edge taper.
-      The window depends on rail geometry only, not on the horn. Checked by
-      ASM-propagating the windowed field down in free space and comparing it
-      with rail3D's own horn field on the rail footprint: complex corr 0.9990
-      at the crown, 1.0000 at z = -40, 0.9991 at z = -80, while carrying 74% of
-      the horn's power (the rest misses the rail).
+      The window depends on the rail and on WHERE the horn is (not on its
+      pattern): x -30.75..125.5, y +/-83.75 mm at 278.5 mm (it was
+      -28..102.5, +/-78.25 at 140 mm). Checked by ASM-propagating the windowed
+      field down in free space and comparing it with rail3D's own horn field on
+      the rail footprint: complex corr 0.9990 at the crown, 0.9997 at z = -40,
+      0.9942 at z = -80, while carrying 55% of the horn's power (the rest
+      misses the rail; 74% at 140 mm).
   H FIELD  supplied, not left to Lumerical. Its docs: without H the source
       "makes certain assumptions about the change of phase ... [that] may lead
       to significant errors for ... more complex field profiles". A 55 deg beam

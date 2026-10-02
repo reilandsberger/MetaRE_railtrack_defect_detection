@@ -1,8 +1,9 @@
 # rail3D — Lab Workstation Setup (RTX 5090)
 
-*Last updated: 2026-09-29 · λ = 5 mm (60 GHz), V0–V8 measured on the 5090 · horn changed to the
-RFspin H-A75-W20 on 2026-09-24 — re-run per §7e · Lumerical file I/O fixed
-2026-09-29 (README finding 30): regenerate the FDTD bundles · bump this line in any
+*Last updated: 2026-10-02 · λ = 5 mm (60 GHz), V0–V8 measured on the 5090 · horn changed to the
+RFspin H-A75-W20 on 2026-09-24 and moved out to 278.5 mm on 2026-10-02 (README
+finding 31) — re-run per §7e · Lumerical file I/O fixed 2026-09-29 (README
+finding 30): regenerate the FDTD bundles · bump this line in any
 commit that changes behaviour this file describes. Timings are now MEASURED
 at λ=5 on the lab 5090 (2026-09-04), not extrapolated.*
 
@@ -574,12 +575,14 @@ init` line.
 
 ---
 
-## 7e. After the horn change (2026-09-24) — the lab re-run
+## 7e. After the horn change (2026-09-24) and the horn move (2026-10-02) — the lab re-run
 
-The horn is now the physical **RFspin H-A75-W20** (README finding 29).
-`SIZE_ANT`, `HORN_FLARE_K` and `HORN_SAMPLING` are provenance keys, so every
-dataset and checkpoint made before is **refused, by design**, and the next stage
-run generates into a fresh auto-suffixed root (`L5_prelim_<tag>`). In order:
+The horn is now the physical **RFspin H-A75-W20** (README finding 29), and since
+2026-10-02 it sits 278.5 mm out with its lowest edge level with the metasurface
+(finding 31). `SIZE_ANT`, `HORN_FLARE_K`, `HORN_SAMPLING` and `DIST_ANT` are
+provenance keys, so every dataset and checkpoint made before is **refused, by
+design**, and the next stage run generates into a fresh auto-suffixed root
+(`L5_prelim_6a5b8f`). In order:
 
 ```bash
 cd ~/Documents/Rei/MetaRE_railtrack_defect_detection && git pull && pip install -r rail3D/requirements.txt
@@ -594,26 +597,33 @@ cd rail3D && python preflight.py && python tests_plumbing.py && python tests_phy
 ```
 
 **V9 must pass**: D 20.09 dBi numeric = closed form, 19.07 / 20.09 / 21.01 dBi at
-50 / 60 / 75 GHz, footprint corr ≥ 0.9995, feed single-mode.
+50 / 60 / 75 GHz, footprint corr ≥ 0.9995, feed single-mode, horn lowest point
+at z = 150.0, and `upward_only` bit-identical for a horn below the plane / exactly
+0 above it.
 
 ```bash
 python validation_3d.py 2>&1 | tee ../validation_newhorn.log
 ```
 
-V5–V7 under the new illumination (V5 read 0.958 on the laptop with the new horn).
+V5–V7 under the new illumination and placement (V5 read 0.958 on the laptop
+with the new horn at 140 mm; not yet run at 278.5 mm).
 
-**SEG_LEN check (not scripted yet).** The rail ends are now lit at 0.32 of peak
-(0.28 before). SEG_LEN = 120 mm was justified at λ=8 by a defect-signal cosine ≥
-0.997 against a 240 mm segment (config.py, "Measured truncation study"). Repeat
-that comparison with the new horn before the full generation — needs a small
-script; `compare_wavefronts.py --seg N` solves one sample at a given length.
+```bash
+python term_budget.py --profile lab 2>&1 | tee ../term_budget.log
+```
+
+The finding-31 table with production shadowing, 3 samples per class, for the
+current placement and the old 140 mm one (~minutes). It also answers the
+SEG_LEN question: `intact_field_change_seg_120_to_240` should stay ≲ 5% (the
+λ=8 acceptance; the unshadowed laptop look read 3.9%, cut ends lit at 0.22×
+mid-span). Send back `data/generated/term_budget.json` and the log.
 
 ```bash
 python run_stage.py --stage prelim --fresh --with-baseline --bundle 2>&1 | tee ../prelim_newhorn.log
 ```
 
-~0.6 h + ~6 min of training. The banner must name a NEW root (not
-`L5_prelim_9d5878`). Then the open optimiser question (§7c) on that root:
+~0.6 h + ~6 min of training. The banner must name `L5_prelim_6a5b8f` (not
+`L5_prelim_9d5878`, and not `ee8367`, which was the 140 mm placement). Then the open optimiser question (§7c) on that root:
 
 ```bash
 python ablate_surface.py --stage prelim --long 2>&1 | tee ../ablation_newhorn.log
@@ -624,11 +634,13 @@ Send back the stage bundle, `surface_ablation.json` and the two logs.
 
 **Lumerical** (LUMERICAL.md §5): rung −1 (`python horn_fdtd_case.py --out
 data/generated/fdtd_horn`, then `fdtd_agreement.py --horn …`) → rung 0 → plate →
-intact → crack. Re-export the bundles first. Any `fdtd_intact/`, `fdtd_crack/`
-or `fdtd_horn/` made before 2026-09-29 carries the old `.lsf` scripts: a bare
-relative `matlabload`, no text fallback, no load check, and exports with
-`matlabsave` (v7.3, which scipy cannot read; README finding 30). The older
-ones also carry the previous horn.
+intact → crack. Re-export the bundles first. Any `fdtd_intact/` or
+`fdtd_crack/` made before 2026-10-02 carries the horn at 140 mm: a different
+Import source, window and FDTD region (LUMERICAL.md has the new numbers).
+Delete the old `horn_source` in an open .fsp and run the new
+`load_horn_source.lsf`. Bundles from before 2026-09-29 also carry the old `.lsf`
+scripts (finding 30). `fdtd_horn/` is in the horn's own frame and is unchanged
+by the move.
 
 ```bash
 python compare_wavefronts.py --sample intact --source horn --plane-z 30 --export-closed --export-only --export-case data/generated/fdtd_intact

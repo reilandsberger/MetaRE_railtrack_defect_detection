@@ -178,8 +178,19 @@ def rs_kernel(R: torch.Tensor, cos_term: torch.Tensor, wvl: float, k0: float) ->
 # Direct horn -> plane term (face independent — compute once, cache)
 # ---------------------------------------------------------------------------
 def horn_to_plane(X, Y, H, wvl, theta_inc, size_ant, dist_ant, resol_ant,
-                  flare_k: str | None = None, sampling: str | None = None) -> torch.Tensor:
-    """psi0 on the observation plane (Face3D's psi0_ms term; see aperture_field)."""
+                  flare_k: str | None = None, sampling: str | None = None,
+                  upward_only: bool = False) -> torch.Tensor:
+    """psi0 on the observation plane (Face3D's psi0_ms term; see aperture_field).
+
+    upward_only: keep only aperture samples BELOW the plane (z < H). Their
+    light crosses the plane going up -- the one direction the metasurface ->
+    detector model (an upward ASM) can carry. A horn at or above the plane then
+    contributes exactly nothing: its field reaches the plane travelling
+    sideways or down, and would otherwise be propagated up as if it had come
+    through the metasurface (README finding 31). With the horn wholly below
+    the plane the mask is all ones and the result is bit-identical. Leave it
+    False for the horn's own field on a plane below it (horn_source, V9).
+    """
     k0 = 2 * np.pi / wvl
     device = X.device
     d = incident_direction(theta_inc).to(device)
@@ -203,6 +214,8 @@ def horn_to_plane(X, Y, H, wvl, theta_inc, size_ant, dist_ant, resol_ant,
     point2plane = -((Xp - Xa) * d[0] + (Yp - Ya) * d[1] + (H - Za) * d[2])
     point2plane = point2plane * (point2plane > 0)
     kernel = rs_kernel(R, point2plane, wvl, k0)
+    if upward_only:
+        kernel = kernel * (Za < H)
 
     dS_ant = aperture_weight(a_aptr, b_aptr, resol_ant, sampling)
     return (psi0_ant.reshape(r, r, 1, 1) * dS_ant * kernel).sum(dim=(0, 1))
@@ -338,8 +351,13 @@ def scattered_fields(
     source: str = "horn",
     flare_k: str | None = None,
     sampling: str | None = None,
+    upward_only: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """psi1 (single bounce) and psi2 (double bounce) on the observation plane.
+
+    ``upward_only`` applies horn_to_plane's rule to psi2's last leg (horn
+    aperture -> plane): only aperture samples below the plane re-radiate UP
+    through it. psi1 (rail facets -> plane) is unaffected.
 
     v: (Nv, 3) or (B, Nv, 3); f: (Nf, 3); X, Y: (1, r1, r2) grids at height H.
     ``chunk_faces`` is the total number of face-slots processed per chunk
@@ -491,6 +509,8 @@ def scattered_fields(
         )
         point2plane = point2plane * (point2plane > 0)
         kernel = rs_kernel(R, point2plane, wvl, k0)         # (r, r, r1, r2)
+        if upward_only:
+            kernel = kernel * (Za4 < H)
         psi2 = -dS_ant * torch.einsum(
             "brs,rsxy->bxy", psi1_ant, kernel
         )

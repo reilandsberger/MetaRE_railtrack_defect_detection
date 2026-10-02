@@ -143,6 +143,11 @@ def solve(section, params, g, device, chunk, *, mesh_ds=None, shadow=None,
     source: 'horn' (the dataset's physical source) or 'plane' (unit plane wave
             along the same direction -- the full-wave comparison mode, which
             drops psi0/psi2 because there is no horn to radiate them)
+    Horn terms are UPWARD-ONLY (field3d.upward_only, README finding 31): the
+    plane is scored as something light crosses going up -- the metasurface's
+    input, or an FDTD monitor above its source plane. So psi0/psi2 from a horn
+    above the plane are 0: at z = 30 they travel DOWN, and neither the
+    up-going monitor nor the horn-less FDTD box can carry them.
     """
     ds = mesh_ds or g["mesh_ds"]
     X, Y = plane_grid(g, device)
@@ -151,7 +156,7 @@ def solve(section, params, g, device, chunk, *, mesh_ds=None, shadow=None,
 
     if terms == "psi0":
         return (field3d.plane_wave_incident(X, Y, g["h_ms"], g["wvl"], config.THETA_INC)
-                if source == "plane" else field3d.horn_to_plane(*args))
+                if source == "plane" else field3d.horn_to_plane(*args, upward_only=True))
 
     n_arc = mesh3d.default_arc_count(section, ds)
     v, f = build_mesh(section, params, ds, n_arc, seg)
@@ -170,12 +175,12 @@ def solve(section, params, g, device, chunk, *, mesh_ds=None, shadow=None,
     # so psi1/psi2 already come back as (nx, ny)
     psi1, psi2 = field3d.scattered_fields(v.to(device), f.to(device), *args,
                                           chunk_faces=chunk, source=source,
-                                          compute_psi2=want2, **kw)
+                                          compute_psi2=want2, upward_only=True, **kw)
     out = psi1 + (psi2 if want2 else 0)
     if terms == "tot":
         out = out + (field3d.plane_wave_incident(X, Y, g["h_ms"], g["wvl"],
                                                  config.THETA_INC)
-                     if source == "plane" else field3d.horn_to_plane(*args))
+                     if source == "plane" else field3d.horn_to_plane(*args, upward_only=True))
     return out
 
 

@@ -247,7 +247,7 @@ def _sample_fields(device="cpu", csv_index: int = 0):
     args = (X, Y, config.H_MS, config.WVL, config.THETA_INC,
             config.SIZE_ANT, config.DIST_ANT, config.RESOL_ANT)
 
-    out = {"psi0": field3d.horn_to_plane(*args).cpu()}
+    out = {"psi0": field3d.horn_to_plane(*args, upward_only=True).cpu()}
     n_arc_fine = mesh3d.default_arc_count(section, config.MESH_DS)
     for cls in ("intact",) + config.CLASS_NAMES:
         defect = None
@@ -265,7 +265,7 @@ def _sample_fields(device="cpu", csv_index: int = 0):
         psi1, psi2 = field3d.scattered_fields(
             v.to(device), f.to(device), *args, chunk_faces=2048,
             shadow=config.SHADOW_MODE,
-            shadow_occluders=(v_occ.to(device), f_occ.to(device)))
+            shadow_occluders=(v_occ.to(device), f_occ.to(device)), upward_only=True)
         out[cls] = (psi1.cpu(), psi2.cpu())
     return out
 

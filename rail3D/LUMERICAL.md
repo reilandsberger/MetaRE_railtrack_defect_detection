@@ -1,12 +1,14 @@
 # Validating rail3D against Ansys Lumerical FDTD — horn Import source
 
-*Last updated: 2026-09-29 · λ = 5 mm (59.9585 GHz) · written for Lumerical FDTD
+*Last updated: 2026-10-02 · λ = 5 mm (59.9585 GHz) · written for Lumerical FDTD
 2025 R1 (modern UI). Horn Import-source design, no TFSF. The horn is now the
 physical RFspin H-A75-W20 (README finding 29), and rung −1 simulates it
 full-wave (§5). File I/O (README finding 30): the horn loader finds its files
 by absolute path, falls back to a text copy and checks what it loaded; every
-export Python reads is saved with `matlabsavelegacy`. Bundles made before this
-must be regenerated.*
+export Python reads is saved with `matlabsavelegacy`. **2026-10-02: the horn
+moved out to 278.5 mm (its lowest edge level with the metasurface, README
+finding 31)** — every number below is for that placement, and bundles made
+before it carry the old horn and must be regenerated.*
 
 **What this answers.** `field3d.py` is **physical optics**: scalar, PEC
 tangent-plane currents, single + double bounce. Crack lines are 1.5–3 mm wide =
@@ -86,9 +88,11 @@ slightly slow on the grid, and the error grows with distance. For this geometry
 So FDTD records at z = 30 and rail3D's angular-spectrum propagator (checked by V3
 to 0.13%) carries the field up to the metasurface.
 
-**The horn enters as an Import source, not as geometry.** The horn's phase centre
-is 140 mm out at 55° — (x, z) = (115, 80) mm. Boxing it with the rail would be
-~390 Mcells. Lumerical's Import source instead *"allows the user to specify a
+**The horn enters as an Import source, not as geometry.** Since 2026-10-02 the
+horn's aperture centre is 278.5 mm out at 55° — (x, z) = (228, 160) mm, with its
+lowest edge level with the metasurface at z = 150 (README finding 31; it was
+140 mm, (115, 80), before). Boxing it with the rail would be several hundred
+Mcells. Lumerical's Import source instead *"allows the user to specify a
 custom spatial field profile for the source injection plane … from an analytic
 formula, … or from other simulation tools"* [Import]. `horn_source.py` computes
 rail3D's own horn field on a plane and writes it in Lumerical's format.
@@ -99,19 +103,20 @@ comes **up**: the reflected and scattered field, every bounce included. No TFSF
 and no subtraction run are needed to separate incident from scattered light.
 
 **The source window covers only the rays that can reach the rail.** The horn is
-the H-A75-W20, a 4.6λ × 3.4λ aperture (22.8 × 16.8 mm), so its beam is wide: at
-crown height the −20 dB contour spans y = ±108 mm. `horn_source.py` projects every lit rail facet toward the phase
+the H-A75-W20, a 4.6λ × 3.4λ aperture (22.8 × 16.8 mm), so its beam is far
+wider than the rail. `horn_source.py` projects every lit rail facet toward the phase
 centre onto z = 15, adds 6λ, and applies a 2λ raised-cosine edge taper. The
-result is x −28…102.5, y ±78.25 mm. Checked in free space against rail3D's full
-horn on the rail's footprint (`horn_source.json`):
+result is x −30.75…125.5, y ±83.75 mm (626 × 671 samples). Checked in free space
+against rail3D's full horn on the rail's footprint (`horn_source.json`):
 
 | plane | complex correlation with the full horn |
 |---|---|
 | crown, z = 0 | 0.9990 |
-| z = −40 | 1.0000 |
-| z = −80 (web) | 0.9991 |
+| z = −40 | 0.9997 |
+| z = −80 (web) | 0.9942 |
 
-The window carries 74% of the horn's power. The other 26% never reaches the rail.
+The window carries 55% of the horn's power. The other 45% never reaches the rail
+(the farther horn's beam is wider at the rail; at 140 mm it was 74%).
 
 **E and H are both supplied.** Lumerical: without H, the source *"makes certain
 assumptions … These assumptions hold true for narrow sources such as Gaussian and
@@ -121,8 +126,9 @@ defining complex beams, it is best to specify both E and H"* [Import].
 - **Each plane-wave component** carries ŷ projected transverse to its own k.
 - **H = (k × E)/(ωμ₀)**.
 
-Self-checks: 99.998% of the flux goes down, |E|/|H| = 376.5 Ω against Z₀ = 376.7 Ω,
-and cross-polarisation is Ex/Ey 0.15, Ez/Ey 0.12 rms.
+Self-checks: 99.9998% of the flux goes down, |E|/|H| = 376.6 Ω against Z₀ = 376.7 Ω,
+and cross-polarisation is Ex/Ey 0.09, Ez/Ey 0.07 rms (the farther horn's rays
+arrive more nearly parallel).
 
 **Time convention — no conjugation expected.** Lumerical's documented transform is
 *"P(ω) = ∫ e^{iωt} P(t) dt"*, with J = −iωP [Force]. That is the exp(−iωt)
@@ -217,14 +223,14 @@ editor prior to importing STL files"* [STL].
 | General | dimension | 3D |
 | General | simulation time | 10 ns — an upper bound; *"the actual simulation may be shorter if the autoshutoff criteria are satisfied"* [FDTD] |
 | General | auto shutoff min | leave 1e-5 (default) [FDTD] |
-| Geometry | x min / max | **−88 / 110.5** |
-| Geometry | y min / max | **−86.2 / 86.2** |
+| Geometry | x min / max | **−88 / 133.5** |
+| Geometry | y min / max | **−91.8 / 91.8** |
 | Geometry | z min / max | **−92.9 / 38** |
 | Mesh settings | mesh type | **uniform**, dx = dy = dz = **0.5** (λ/10) for rungs 0–2 |
 | Mesh settings | mesh refinement | **conformal variant 1** — variant 0 (the default) *"is not applied to interfaces involving metals or PEC"*; variant 1 *"applies the conformal mesh algorithm to the PEC"* [Conformal] |
 | Boundary conditions | all six | **PML**, profile stabilized; raise layers if rung 0 shows leakage |
 
-A uniform mesh keeps the cell count predictable (35.9 M at λ/10). It also means
+A uniform mesh keeps the cell count predictable (42.7 M at λ/10). It also means
 adding or removing the rail does not re-mesh the air, so runs stay directly
 comparable. (The auto non-uniform mesher is Lumerical's default and is fine for
 exploring; for the comparison runs, use uniform.)
@@ -276,7 +282,7 @@ General tab → **Import Source** button → `horn_EM_dataset.mat` (written by t
 script with `CREATE_SOURCE = 0`). Then set **Direction: Backward**. *Injection
 axis* is set automatically from the data (z) [Import].
 
-Verify: the source's Geometry tab should show x −28…102.5, y −78.25…78.25,
+Verify: the source's Geometry tab should show x −30.75…125.5, y −83.75…83.75,
 z = 15 (the span *"will be automatically set based on the imported field data"*
 [Import]). In the XZ view it is a grey bar at z = 15 with the arrow pointing
 **down and to −x**.
@@ -499,10 +505,13 @@ From `case.json` → `fdtd.mesh_options` (uniform mesh; RAM ≈ 100 B/cell):
 
 | run | mesh | cells | RAM |
 |---|---|---|---|
-| rungs 0–2 | λ/10 | 35.9 M | 3.6 GB |
-| rung 3 (+ λ/20 override) | λ/10 + local λ/20 | ~38.5 M | ~3.9 GB |
-| production check | λ/15 | 121 M | 12.1 GB |
-| convergence ceiling | λ/20 | 287 M | 28.7 GB (near a 32 GB GPU's limit) |
+| rungs 0–2 | λ/10 | 42.7 M | 4.3 GB |
+| rung 3 (+ λ/20 override) | λ/10 + local λ/20 | ~45.3 M | ~4.5 GB |
+| production check | λ/15 | 144 M | 14.4 GB |
+| convergence ceiling | λ/20 | 341 M | 34.1 GB (over a 32 GB GPU: run on CPU or not at all) |
+
+(Horn at 278.5 mm, 2026-10-02. At 140 mm these were 35.9 / 38.5 / 121 / 287 M:
+the farther horn's wider beam widens the source window and so the box.)
 
 ---
 

@@ -34,7 +34,7 @@ import torch
 
 from rail3d import config, field3d
 
-WALL = 0.5                      # mm; RFspin's outer shell is 1.0 mm larger (0.5 per side)
+WALL = config.HORN_WALL         # mm; RFspin's outer shell is 1.0 mm larger (0.5 per side)
 WG_LEN = 16.0                   # mm of straight WR-15 before the throat (runs into the PML)
 C_MM_GHZ = 299.792458
 

@@ -47,7 +47,7 @@ def build_fields(section, cls, n, H, nx, ny, xc, device, chunk):
     X, Y = config.plane_grid(device, nx=nx, ny=ny, x_center=xc)
     args = (X, Y, H, config.WVL, config.THETA_INC,
             config.SIZE_ANT, config.DIST_ANT, config.RESOL_ANT)
-    psi0 = field3d.horn_to_plane(*args)
+    psi0 = field3d.horn_to_plane(*args, upward_only=True)
     n_arc = mesh3d.default_arc_count(section, config.MESH_DS)
     files = sections.get_dataset_files(cls) if cls in config.DATASET_DIRS else None
 
@@ -69,7 +69,7 @@ def build_fields(section, cls, n, H, nx, ny, xc, device, chunk):
         psi1, psi2 = field3d.scattered_fields(
             v.to(device), f.to(device), *args, chunk_faces=chunk,
             shadow=config.SHADOW_MODE,
-            shadow_occluders=(v_occ.to(device), f_occ.to(device)))
+            shadow_occluders=(v_occ.to(device), f_occ.to(device)), upward_only=True)
         out.append(psi0 + psi1 + psi2)
     return torch.stack(out)
 

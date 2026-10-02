@@ -1,17 +1,18 @@
-# rail3D — session handoff, 2026-09-29
+# rail3D — session handoff, 2026-10-02
 
-*Last updated: 2026-09-29 (evening: Lumerical file I/O, finding 30). Rewritten
-for a cold start on a new Claude account: no chat history or auto-memory is
-assumed. Everything needed is in this repo, plus the external paths listed at
-the end.*
+*Last updated: 2026-10-02 (horn moved out to 278.5 mm, upward-only metasurface
+input, finding 31; Lumerical file I/O 2026-09-29, finding 30). Rewritten for a
+cold start on a new Claude account: no chat history or auto-memory is assumed.
+Everything needed is in this repo, plus the external paths listed at the end.*
 
 ## Read in this order
 
 1. **This file** — state, next commands, open items, landmines.
 2. `CLAUDE.md` (repo root) — ground rules and the dated state sections.
-3. `rail3D/README.md` — §4 conventions, §6 hard-won findings (**30 =
-   Lumerical file I/O, newest**; 29 = the horn; 24–26 = the prelim result;
-   27–28 = Lumerical), §7 current state, §8 limitations.
+3. `rail3D/README.md` — §4 conventions, §6 hard-won findings (**31 = horn
+   placement + upward-only input, newest**; 30 = Lumerical file I/O; 29 = the
+   horn; 24–26 = the prelim result; 27–28 = Lumerical), §7 current state, §8
+   limitations.
 4. As needed: `rail3D/SETUP_LAB.md` (lab runbook — **§7e is the next run**),
    `rail3D/LUMERICAL.md` (FDTD, rungs −1…3), `rail3D/READING_RESULTS.md` (what
    every output field means, and how each has been misread).
@@ -31,7 +32,19 @@ defect / no-defect and crack / dent / wear / shell. All code is in `rail3D/` on
 branch **`3D_railhead_upgrade`** (the λ=12 mm 2D code at the repo root is
 legacy reference — do not modify).
 
-## Where things stand (2026-09-29)
+## Where things stand (2026-10-02)
+
+- **Horn moved (2026-10-02, finding 31):** slid out along the 55° axis until
+  its lowest edge is level with the metasurface (z = 150): `DIST_ANT` = 278.51
+  mm, derived from `HORN_LOWER_EDGE_Z = H_MS` (was 140). The metasurface input
+  is now **upward-only** (`field3d.upward_only`), so psi0 = psi2 = 0 there and
+  "tot" = psi1. `term_budget.py` (laptop, no shadowing) says psi2 was already
+  −42 dB before the move; the move instead removes psi0 (−24 dB), costs
+  3.5–4.9 dB of signal per unit drive, and creates two unmodelled stray paths:
+  horn light skimming the metasurface plane (−4.4 dB of the rail's power) and
+  a direct horn → detector line (−17 dB of the rail's light there; was −41).
+  Baffles are the rig's answer. The user has these numbers; whether the
+  placement stays is their call. New prelim root `L5_prelim_6a5b8f`.
 
 - **Pipeline verified at λ = 5** on the lab RTX 5090 (V0–V8, 2026-09-04),
   shadow guard settled 2026-09-11 (`min_t` 0.05, `normal_offset` 0.3).
@@ -78,13 +91,15 @@ legacy reference — do not modify).
 
 On the 5090, in order: `git pull` → `pip install -r rail3D/requirements.txt`
 (never `-U`) → `preflight.py` → `tests_plumbing.py` → `tests_physics_3d.py`
-(V9 must pass) → `validation_3d.py` (V5–V7 under the new horn) → SEG_LEN
-cut-end check (not scripted — see §7e) → `run_stage.py --stage prelim --fresh
---with-baseline --bundle` (must choose a NEW root; old datasets are refused by
-design) → `ablate_surface.py --stage prelim --long` → optional
+(V9 must pass) → `validation_3d.py` (V5–V7 under the new horn and placement)
+→ `term_budget.py --profile lab` (finding-31 table with shadowing, includes the
+SEG_LEN 120 → 240 mm check) → `run_stage.py --stage prelim --fresh
+--with-baseline --bundle` (must choose `L5_prelim_6a5b8f`; old datasets are
+refused by design) → `ablate_surface.py --stage prelim --long` → optional
 `scan_geometry.py`. Re-export the Lumerical bundles (`fdtd_intact`,
-`fdtd_crack`, `fdtd_horn`; older ones carry the old `.lsf` scripts and some the
-previous horn). Then Lumerical: rung −1 → rung 0 → plate → intact → crack.
+`fdtd_crack`: the horn moved, so the Import source, window and region all
+changed — LUMERICAL.md has the new numbers; `fdtd_horn` is in the horn frame
+and unchanged). Then Lumerical: rung −1 → rung 0 → plate → intact → crack.
 
 ## Open items (not built / not decided)
 
@@ -160,6 +175,12 @@ Outside the repo (read-only references):
 
 ## Landmines
 
+- **Any new code that builds the metasurface-plane field must pass
+  `upward_only=True`** to `field3d.horn_to_plane` / `scattered_fields`
+  (finding 31). Without it, the horn (now above the plane) adds a sideways
+  field 4.4 dB below the rail's that the upward model would carry to the
+  detectors. Do NOT pass it for the horn's own field on a plane below it
+  (`horn_source`, V9): that is the downward illumination and must stay.
 - **Never lay out detector centres outside `config.dense_detector_centers()`**
   (finding 17).
 - **Never hardcode `L5_<stage>`** — use `data3d.stage_root(stage)`; roots are

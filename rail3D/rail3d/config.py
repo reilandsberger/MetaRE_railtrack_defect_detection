@@ -145,9 +145,19 @@ HORN_SPEC = {"part": "RFspin H-A75-W20", "band_GHz": (50.0, 75.0),
 # samples cell centres; "linspace" is Face3D's edge-inclusive grid.
 HORN_FLARE_K = "k0"
 HORN_SAMPLING = "midpoint"
-DIST_ANT = 28 * WVL             # 140 mm from the crown origin at λ=5
 THETA_INC = 55 * np.pi / 180    # incidence angle in the x-z plane
 RESOL_ANT = 20                  # 20x20 aperture samples (V9 checks convergence)
+# Horn placement (user decision 2026-10-02, README finding 31): the horn slides
+# OUT along its 55 deg axis until its lowest point -- the outer lower edge of
+# the aperture, A/2 + wall below the aperture centre along the tilt -- is level
+# with the metasurface plane. Then nothing the horn radiates or re-radiates
+# (psi0, psi2) can come UP through the metasurface; field3d's upward_only
+# makes the model honour that. DIST_ANT (aperture centre to crown origin) is
+# DERIVED: 278.51 mm = 55.7 lambda (was 28 lambda = 140 mm, aperture at z 71-90).
+HORN_WALL = 0.5                 # mm per side: RFspin's outer shell is 1.0 mm larger
+HORN_LOWER_EDGE_Z = H_MS        # z of the horn's lowest point
+DIST_ANT = float((HORN_LOWER_EDGE_Z + (SIZE_ANT[0] / 2 + HORN_WALL) * np.sin(THETA_INC))
+                 / np.cos(THETA_INC))
 
 # Rail geometry
 RAIL_HEIGHT = 180.0             # cross-section normalized height (mm)
@@ -162,9 +172,13 @@ Z_CUT = -80.0                   # illuminated region: z > -80 mm (2D's y2d > 100
 #      80 mm   40160 faces  1.22 s/sample   cosines 0.959-0.995     <- too short
 # Truncation shifts the intact field ~5% at 120 mm, but that is common mode
 # (intact and defect samples share the segment), so the defect SIGNATURE is
-# preserved better than the mesh-resolution error we already accept. At λ=5
-# the illuminated footprint shrinks ∝λ, so 120 mm is SAFER than it was when
-# measured. Note it no longer equals the y-aperture (WY = 75 mm at λ=5); the
+# preserved better than the mesh-resolution error we already accept. The
+# horn has since changed twice -- the physical H-A75-W20 (2026-09-24) and
+# moved out to 278.5 mm (2026-10-02) -- and the farther horn's wider beam lights
+# the cut ends at 0.22x mid-span (0.10x at 140 mm); unshadowed, the intact
+# field moves 3.9% when the segment doubles (2.5% at 140 mm), still inside the
+# ~5% accepted above. term_budget.py re-measures it with shadowing (finding 31).
+# Note it no longer equals the y-aperture (WY = 75 mm at λ=5); the
 # mesh extending past the plane is fine — oblique scattering still lands on it.
 SEG_LEN = 120.0
 SLICE_DS = WVL / 2              # coarse (lambda/2) sampling: occluder meshes, quick tests

@@ -39,9 +39,11 @@ WHAT is compared (--source horn, the default and the setup LUMERICAL.md builds):
 the field the rail sends UP under rail3D's own horn, injected into FDTD as an
 Import source at z = 15 mm (horn_source.py). The z = 30 monitor sits above that
 plane, so it records only the up-going field -- reflected + scattered, every
-bounce -- and rail3D's side is psi1 + psi2 under the horn. The horn's DIRECT
-field to the metasurface (psi0) is analytic and identical in both by
-construction, so including it would only inflate agreement.
+bounce ON THE RAIL -- and rail3D's side is the upward part of psi1 + psi2
+under the horn, i.e. psi1: psi2 (re-radiation from the horn aperture, which
+is above z = 30) reaches the monitor going down, and the box has no horn
+(README finding 31). The horn's DIRECT field (psi0) is analytic and identical
+in both by construction, so including it would only inflate agreement.
 (--source plane keeps the older plane-wave comparison: psi1 under a unit
 s-polarised plane wave, for a plane-wave source in the external solver.)
 
@@ -558,7 +560,11 @@ def main() -> int:
     plan = cw.fdtd_plan(v.numpy(), dict(cw.geom_now(), h_ms=Z_MON), Z_MON, None)
     gw = window_geom(plan["monitor_mm"])
     win_txt = f"x +/-{gw['nx']*gw['dx']/2:g} y +/-{gw['ny']*gw['dx']/2:g} mm"
-    # horn: every bounce (FDTD has them all); plane: single bounce, as before
+    # horn: psi1 + psi2 UPWARD-ONLY (cw.solve). psi2 is rail -> horn aperture ->
+    # plane; the horn sits above z = 30, so at the monitor psi2 travels DOWN and
+    # comes out 0 -- right, since the FDTD box has no horn and its monitor sees
+    # only up-going light (it was 7.6% of psi1 there before 2026-10-02 and
+    # would have been scored as a PO error; README finding 31).
     terms = "psi12" if args.source == "horn" else "psi1"
     common = dict(section=section, params=params, device=device, chunk=chunk,
                   seg=None, source=args.source, shadow="raycast",

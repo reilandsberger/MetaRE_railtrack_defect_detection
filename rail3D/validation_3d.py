@@ -518,7 +518,7 @@ def v7_mesh_convergence(device: torch.device) -> dict:
     X, Y = config.plane_grid(device)
     args = (X, Y, config.H_MS, config.WVL, config.THETA_INC,
             config.SIZE_ANT, config.DIST_ANT, config.RESOL_ANT)
-    psi0 = field3d.horn_to_plane(*args)
+    psi0 = field3d.horn_to_plane(*args, upward_only=True)
     det = optics3d.SoftDetector2D().to(device)
     fine = config.WVL / 16
 
