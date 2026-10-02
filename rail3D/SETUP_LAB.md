@@ -633,14 +633,18 @@ Optional: `python scan_geometry.py` — H = 30λ was chosen under the old beam.
 Send back the stage bundle, `surface_ablation.json` and the two logs.
 
 **Lumerical** (LUMERICAL.md §5): rung −1 (`python horn_fdtd_case.py --out
-data/generated/fdtd_horn`, then `fdtd_agreement.py --horn …`) → rung 0 → plate →
-intact → crack. Re-export the bundles first. Any `fdtd_intact/` or
+data/generated/fdtd_horn`, then `fdtd_agreement.py --horn … --horn-near …
+--horn-slab …`) → rung 0 (with `mon_src` and `--injection-src`) → plate →
+intact → crack. Rungs −1 and 0 together verify the Import source at the three
+planes of README finding 32: out of the horn, the global z = 150 plane under
+it, and the Import plane z = 15. Re-export the bundles first. Any `fdtd_intact/` or
 `fdtd_crack/` made before 2026-10-02 carries the horn at 140 mm: a different
 Import source, window and FDTD region (LUMERICAL.md has the new numbers).
 Delete the old `horn_source` in an open .fsp and run the new
 `load_horn_source.lsf`. Bundles from before 2026-09-29 also carry the old `.lsf`
-scripts (finding 30). `fdtd_horn/` is in the horn's own frame and is unchanged
-by the move.
+scripts (finding 30). `fdtd_horn/` is in the horn's own frame and was not
+changed by the move, but regenerate it too: since 2026-10-02 it carries the
+`mon_slab` plan, a larger region and the slab export (finding 32).
 
 ```bash
 python compare_wavefronts.py --sample intact --source horn --plane-z 30 --export-closed --export-only --export-case data/generated/fdtd_intact

@@ -1,7 +1,15 @@
 """Lumerical FDTD vs rail3D: how well do they agree, pixel by pixel?
 
-    python fdtd_agreement.py --horn data/generated/fdtd_horn/horn_aperture.mat --horn-near data/generated/fdtd_horn/horn_near.mat  # rung -1
-    python fdtd_agreement.py --injection data/generated/fdtd_intact/empty_z0.mat --leak data/generated/fdtd_intact/empty_z30.mat  # rung 0
+    python fdtd_agreement.py --horn data/generated/fdtd_horn/horn_aperture.mat --horn-near data/generated/fdtd_horn/horn_near.mat --horn-slab data/generated/fdtd_horn/horn_slab.mat  # rung -1
+    python fdtd_agreement.py --injection data/generated/fdtd_intact/empty_z0.mat --leak data/generated/fdtd_intact/empty_z30.mat --injection-src data/generated/fdtd_intact/empty_src.mat  # rung 0
+
+SOURCE VERIFICATION, three planes (LUMERICAL.md section 5, README finding 32):
+  out of the horn      --horn / --horn-near: aperture + 3 lambda, horn frame
+  z = H_MS under it    --horn-slab: FDTD's own field vs rail3D's propagator
+                       (on FDTD's aperture) and vs the aperture model
+  z = 15, the Import   always with --horn: the full-wave horn carried down vs
+  plane                the production source; --injection-src (rung 0): what
+                       Lumerical actually injected vs what was written
     python fdtd_agreement.py --sample plate --external data/generated/fdtd_intact/plate_z30.mat   # rung 1
     python fdtd_agreement.py --external data/generated/fdtd_intact/intact_z30.mat   # a REAL Lumerical run
     python fdtd_agreement.py --target                       # the TARGET figure
@@ -383,6 +391,32 @@ def rung0(args, device) -> int:
               "profile was injected the wrong way (Direction, or the E/H pair).")
     out = {"injection_corr_footprint": corr, "alignment": al,
            "centroid_x_mm": {"fdtd": cx_ext, "rail3d": cx_ref}, "pass": bool(ok)}
+    if args.injection_src:
+        # 0.5 mm below the Import plane: did Lumerical inject exactly what
+        # horn_source.py wrote? Compared over the source window with the
+        # written (windowed, tapered) field carried down 0.5 mm by the exact
+        # angular spectrum -- the check Lumerical's own docs recommend
+        from scipy.interpolate import RegularGridInterpolator
+        z_mon = horn_source.Z_SRC - 0.5
+        E, (xv, yv) = cw.read_monitor(args.injection_src, "Ey", "xy")
+        ref_s, xs_s, ys_s, win = horn_source.source_plane_reference(z_mon, device)
+        XV, YV = np.meshgrid(xv, yv, indexing="ij")
+        inw = ((XV >= win["x"][0]) & (XV <= win["x"][1]) & (YV >= win["y"][0])
+               & (YV <= win["y"][1]))
+        pts = np.stack([XV[inw], YV[inw]], 1)
+        r_ = RegularGridInterpolator((xs_s, ys_s), ref_s.real)(pts)
+        i_ = RegularGridInterpolator((xs_s, ys_s), ref_s.imag)(pts)
+        a_s, b_s = torch.as_tensor(r_ + 1j * i_), torch.as_tensor(E[inw])
+        al_s_f, al_s = cw.align_external(b_s, a_s)
+        corr_s = cw.complex_corr(al_s_f, a_s)
+        out["source_plane"] = {"z_mm": z_mon, "points": int(inw.sum()), "complex_corr": corr_s,
+                               "alignment": al_s,
+                               **_plane_stats(al_s_f.numpy(), a_s.numpy(), pts)}
+        print(f"  injected field 0.5 mm below the Import plane (z = {z_mon:g}): complex corr "
+              f"{corr_s:.4f} with what horn_source.py wrote [{al_s['convention']}], centroid "
+              f"shift {out['source_plane']['centroid_shift_xy_mm']} mm")
+        ok = ok and corr_s >= 0.99
+        out["pass"] = bool(ok)
     if args.leak:
         g30 = dict(cw.geom_now(), h_ms=Z_MON, nx=64, ny=56)
         leak, _, _ = cw.load_external(args.leak, g30)
@@ -404,7 +438,140 @@ HORN_CRITERIA = {                  # rung -1, proposed -- revisit after the firs
     "near_corr": 0.98,             # 3 lambda out, which is what reaches the rail
     "hpbw_deg": 1.5,               # |FDTD - model| in each principal plane
     "directivity_dB": 0.5,         # |FDTD - model|
+    # the global z = H_MS plane right under the horn (--horn-slab):
+    "slab_propagation_corr": 0.98, # FDTD's own field vs rail3D's RS-I of FDTD's
+                                   # aperture field: our PROPAGATOR against Maxwell,
+                                   # independent of the aperture model
+    "slab_model_corr": 0.95,       # FDTD vs the aperture model there (as aperture_corr)
+    # the Import-source plane z = 15 near the rail (computed from --horn):
+    "source_plane_corr": 0.98,     # the full-wave horn vs the production source
 }
+SLAB_NEAR_LIP_MM = 2.0             # z' < 2 mm of the aperture plane is not scored: the
+                                   # RS-I sum from the 0.5 mm monitor plane and the
+                                   # Kirchhoff rim both fail there (README finding 32)
+
+
+def _corr(a, b) -> float:
+    return float(abs(np.vdot(a, b)) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-30))
+
+
+def _model_at(P: np.ndarray, n: int, device, chunk: int = 2048) -> np.ndarray:
+    """rail3D's horn field (aperture model, n x n samples) at global points on
+    ONE z-plane -- field3d.horn_to_plane on a (1, N, 1) grid, chunked."""
+    from rail3d import field3d
+    out = []
+    for s in range(0, len(P), chunk):
+        p = torch.tensor(P[s:s + chunk, :2], dtype=torch.float32, device=device)
+        out.append(field3d.horn_to_plane(
+            p[:, 0].reshape(1, -1, 1), p[:, 1].reshape(1, -1, 1), float(P[0, 2]), config.WVL,
+            config.THETA_INC, config.SIZE_ANT, config.DIST_ANT, n).reshape(-1).cpu().numpy())
+    return np.concatenate(out).astype(np.complex128)
+
+
+def _plane_stats(fd, m, P) -> dict:
+    I_f, I_m = np.abs(fd) ** 2, np.abs(m) ** 2
+    cen = lambda I: (P[:, :2] * I[:, None]).sum(0) / I.sum()                  # noqa: E731
+    return {"level_fdtd_over_model_dB": round(float(10 * np.log10(I_f.sum() / I_m.sum())), 2),
+            "centroid_shift_xy_mm": [round(float(v), 2) for v in cen(I_f) - cen(I_m)]}
+
+
+def _slab_planes(slab_path, ap_path, alpha, conj, device, rows) -> list:
+    """The global planes z = H_MS and H_MS - 2 lambda right under the horn.
+
+    Three fields on each, so each comparison isolates ONE thing:
+      FDTD     E_y from the 3D monitor, resampled onto the plane (the truth)
+      RS-I     rail3D's propagator applied to FDTD's OWN aperture field
+      model    rail3D's propagator applied to the textbook aperture (80x80)
+    FDTD vs RS-I tests the propagator; FDTD vs model tests the aperture model;
+    model 20x20 vs 80x80 is the production quadrature. FDTD fields carry the
+    aperture fit's gain (alpha), so the level comparison is absolute.
+    """
+    from scipy.interpolate import RegularGridInterpolator
+    import horn_fdtd_case as hf
+    import horn_source as hs
+    E, (xv, yv, zv) = cw.read_monitor(slab_path, "Ey", "xyz")
+    if conj:
+        E = E.conj()
+    # interpolate the ENVELOPE: the field advances ~k z' along the boresight,
+    # and linear interpolation across that phase ramp loses amplitude (-0.26 dB
+    # at 0.5 mm sampling in P6's round trip). Divide the carrier out, put it back.
+    k0 = 2 * np.pi / config.WVL
+    E = E * np.exp(-1j * k0 * zv)[None, None, :]
+    re_ = RegularGridInterpolator((xv, yv, zv), E.real, bounds_error=False, fill_value=np.nan)
+    im_ = RegularGridInterpolator((xv, yv, zv), E.imag, bounds_error=False, fill_value=np.nan)
+    carrier = lambda L_: np.exp(1j * k0 * L_[:, 2])                         # noqa: E731
+    ap20 = hs.load_fdtd_aperture(ap_path, sample=config.WVL / 20)
+    box = {"x": (xv.min(), xv.max()), "y": (yv.min(), yv.max()), "z": (zv.min(), zv.max())}
+    corners = np.array([(a, b, c) for a in box["x"] for b in box["y"] for c in box["z"]])
+    G, _ = hf.local_to_global(*corners.T)
+    res = []
+    for z in (config.HORN_LOWER_EDGE_Z, config.HORN_LOWER_EDGE_Z - 2 * config.WVL):
+        xs = np.arange(np.floor(G[:, 0].min()), G[:, 0].max() + 0.5, 0.5)
+        ys = np.arange(np.floor(G[:, 1].min()), G[:, 1].max() + 0.5, 0.5)
+        X, Y = np.meshgrid(xs, ys, indexing="ij")
+        P = np.stack([X.ravel(), Y.ravel(), np.full(X.size, z)], 1)
+        L = hf.global_to_local(P)
+        ok = ((L[:, 0] >= box["x"][0]) & (L[:, 0] <= box["x"][1]) & (L[:, 1] >= box["y"][0])
+              & (L[:, 1] <= box["y"][1]) & (L[:, 2] <= box["z"][1])
+              & (L[:, 2] >= max(box["z"][0], SLAB_NEAR_LIP_MM)))
+        if ok.sum() < 50:
+            print(f"  slab: the plane z = {z:g} barely meets mon_slab ({ok.sum()} points) -- skipped")
+            continue
+        Pk = P[ok]
+        fd = alpha * (re_(L[ok]) + 1j * im_(L[ok])) * carrier(L[ok])
+        rsi = hs.aperture_to_points(ap20, Pk, device)
+        m80 = _model_at(Pk, 80, device)
+        m20 = _model_at(Pk, config.RESOL_ANT, device)
+        row = {"global_z_mm": z, "points": int(ok.sum()),
+               "fdtd_vs_rsi_of_fdtd_aperture": round(_corr(fd, rsi), 5),
+               "fdtd_vs_model": round(_corr(fd, m80), 5),
+               "rsi_of_fdtd_aperture_vs_model": round(_corr(rsi, m80), 5),
+               f"model_{config.RESOL_ANT}x{config.RESOL_ANT}_vs_80x80": round(_corr(m20, m80), 6),
+               **_plane_stats(fd, m80, Pk)}
+        row["pass"] = {"slab_propagation_corr": row["fdtd_vs_rsi_of_fdtd_aperture"]
+                       >= HORN_CRITERIA["slab_propagation_corr"],
+                       "slab_model_corr": row["fdtd_vs_model"] >= HORN_CRITERIA["slab_model_corr"]}
+        res.append(row)
+        full = lambda v: np.where(ok, 0j, np.nan).astype(complex)              # noqa: E731
+        F, R, M = full(0), full(0), full(0)
+        F[ok], R[ok], M[ok] = fd, rsi, m80
+        rows.append({"label": f"global z = {z:g} mm, just under the horn (FDTD 3D monitor, "
+                              f"resampled; z' < {SLAB_NEAR_LIP_MM:g} mm not scored)",
+                     "x": xs, "y": ys, "model": M.reshape(X.shape), "fdtd": F.reshape(X.shape),
+                     "extra": R.reshape(X.shape), "extra_name": "RS-I of FDTD aperture",
+                     "model_name": "model (80x80)", "fdtd_name": "FDTD direct", "global": True})
+        print(f"  global z = {z:g} under the horn ({row['points']} pts): FDTD vs our RS-I of its "
+              f"aperture {row['fdtd_vs_rsi_of_fdtd_aperture']:.4f} | FDTD vs model "
+              f"{row['fdtd_vs_model']:.4f} | level {row['level_fdtd_over_model_dB']:+.2f} dB, "
+              f"centroid shift {row['centroid_shift_xy_mm']} mm")
+    return res
+
+
+def _source_plane(ap_path, device, rows) -> dict:
+    """The Import-source plane near the rail: the full-wave horn (FDTD aperture,
+    carried down by RS-I) vs the production source (aperture model, 20x20)."""
+    import horn_source as hs
+    ap10 = hs.load_fdtd_aperture(ap_path)
+    win = hs.window(hs.ray_bundle(hs.Z_SRC))
+    xs = np.arange(win["x"][0], win["x"][1] + 1e-9, 1.0)
+    ys = np.arange(win["y"][0], win["y"][1] + 1e-9, 1.0)
+    X, Y = np.meshgrid(xs, ys, indexing="ij")
+    mod = hs.horn_field(xs, ys, hs.Z_SRC, device)
+    rsi = hs.horn_field_from_aperture(ap10, xs, ys, hs.Z_SRC, device)
+    P = np.stack([X.ravel(), Y.ravel()], 1)
+    row = {"z_mm": hs.Z_SRC, "window_mm": win,
+           "full_wave_horn_vs_source": round(_corr(rsi.ravel(), mod.ravel()), 5),
+           **_plane_stats(rsi.ravel(), mod.ravel(), P)}
+    row["pass"] = {"source_plane_corr": row["full_wave_horn_vs_source"]
+                   >= HORN_CRITERIA["source_plane_corr"]}
+    rows.append({"label": f"Import-source plane z = {hs.Z_SRC:g} mm (the full-wave horn carried "
+                          "down by RS-I vs the production source)",
+                 "x": xs, "y": ys, "model": mod, "fdtd": rsi, "global": True,
+                 "model_name": "source (20x20 model)", "fdtd_name": "full-wave horn (RS-I)"})
+    print(f"  Import plane z = {hs.Z_SRC:g}: full-wave horn vs the source "
+          f"{row['full_wave_horn_vs_source']:.4f}, level {row['level_fdtd_over_model_dB']:+.2f} dB, "
+          f"centroid shift {row['centroid_shift_xy_mm']} mm")
+    return row
 
 
 def horn_check(args, device) -> int:
@@ -444,8 +611,17 @@ def horn_check(args, device) -> int:
         "directivity": abs(ff_x["directivity_dBi"] - ff_m["directivity_dBi"]) <= HORN_CRITERIA["directivity_dB"],
         "fdtd_gain_in_part_spec": lo - 0.3 <= ff_x["directivity_dBi"] <= hi + 0.3,
     }
+    # how bright the horn is toward the metasurface: the H-plane pattern at the
+    # angle from the aperture centre to the metasurface centre (far-field form;
+    # the metasurface is in the radiating near field, so read it as a guide)
+    loc = hf.global_to_local(np.array([[config.PLANE_X_CENTER, 0.0, config.H_MS]]))[0]
+    th_ms = float(np.degrees(np.arctan2(abs(loc[0]), loc[2])))
+    lvl = lambda ff: float(20 * np.log10(np.interp(th_ms, ff["theta_deg"], ff["H_plane"]) + 1e-12))  # noqa: E731
+    ap_row["metasurface_direction"] = {"theta_from_boresight_deg": round(th_ms, 2),
+                                       "model_dB": round(lvl(ff_m), 2), "fdtd_dB": round(lvl(ff_x), 2)}
     out["aperture"] = ap_row
-    rows.append(("aperture plane (z' = +0.5 mm)", xs, ys, mod, al_ext))
+    rows.append({"label": "aperture plane (z' = +0.5 mm)", "x": xs, "y": ys, "model": mod,
+                 "fdtd": al_ext, "pattern": True})
     print(f"RUNG -1 aperture ({al['convention']}): complex corr {ap_row['complex_corr']:.4f}, "
           f"amplitude corr {ap_row['amplitude_corr']:.4f}")
     print(f"  model: D {ff_m['directivity_dBi']:.2f} dBi, HPBW E {ff_m['hpbw_E_deg']:.1f} / H "
@@ -462,11 +638,24 @@ def horn_check(args, device) -> int:
         out["near"] = {"complex_corr": corr_n, "alignment": aln,
                        "coverage": info_n.get("plane_coverage", 1.0),
                        "pass": {"near_corr": corr_n >= HORN_CRITERIA["near_corr"]}}
-        rows.append((f"z' = {p['monitors']['mon_near']['z']:g} mm (3 lambda out)",
-                     xn, yn, mod_n, al_n.numpy()))
+        rows.append({"label": f"z' = {p['monitors']['mon_near']['z']:g} mm (3 lambda out)",
+                     "x": xn, "y": yn, "model": mod_n, "fdtd": al_n.numpy()})
         print(f"  near plane ({aln['convention']}): complex corr {corr_n:.4f}")
+    md = ap_row["metasurface_direction"]
+    print(f"  toward the metasurface ({md['theta_from_boresight_deg']:.1f} deg off boresight, "
+          f"H-plane): model {md['model_dB']:+.1f} dB, FDTD {md['fdtd_dB']:+.1f} dB re boresight")
 
-    checks = dict(out["aperture"]["pass"], **(out.get("near", {}).get("pass", {})))
+    # --- the global z = H_MS plane right under the horn (mon_slab) -----------
+    alpha = al["gain"] * np.exp(1j * np.radians(al["phase_deg"]))
+    if args.horn_slab:
+        out["slab"] = _slab_planes(args.horn_slab, args.horn, alpha, al["conjugated"],
+                                   device, rows)
+    # --- the Import-source plane near the rail: full-wave horn vs the source -
+    out["source_plane"] = _source_plane(args.horn, device, rows)
+
+    checks = dict(out["aperture"]["pass"], **(out.get("near", {}).get("pass", {})),
+                  **out["source_plane"]["pass"],
+                  **(out["slab"][0]["pass"] if out.get("slab") else {}))
     out["pass"] = bool(all(checks.values()))
     for k, v in checks.items():
         if not v:
@@ -477,36 +666,44 @@ def horn_check(args, device) -> int:
 
     fig = plt.figure(figsize=(22, 5.2 * len(rows)), layout="constrained")
     subs = np.atleast_1d(fig.subfigures(len(rows), 1))
-    for sub, (label, x, y, m, e) in zip(subs, rows):
+    for sub, r in zip(subs, rows):
+        x, y, m, e = r["x"], r["y"], r["model"], r["fdtd"]
         axs = sub.subplots(1, 5)
-        vmax = float(np.abs(m).max())
-        lit = lambda z: np.where(np.abs(z) > 0.05 * np.abs(z).max(), np.angle(z), np.nan)  # noqa: E731
+        vmax = float(np.nanmax(np.abs(m)))
+        lit = lambda z: np.where(np.abs(z) > 0.05 * np.nanmax(np.abs(z)), np.angle(z), np.nan)  # noqa: E731
+        glob = r.get("global", False)
+        xl, yl = (("x (mm, global)", "y (mm, global)") if glob
+                  else ("x' (mm, along A)", "y' (mm, along B, E)"))
         for ax, arr, cmap, lim, title in (
-                (axs[0], np.abs(m), "viridis", (0, vmax), "|E_y| rail3D aperture model"),
-                (axs[1], np.abs(e), "viridis", (0, vmax), "|E_y| FDTD (aligned)"),
+                (axs[0], np.abs(m), "viridis", (0, vmax), f"|E_y| rail3D {r.get('model_name', 'aperture model')}"),
+                (axs[1], np.abs(e), "viridis", (0, vmax), f"|E_y| {r.get('fdtd_name', 'FDTD (aligned)')}"),
                 (axs[2], lit(m), "twilight", (-np.pi, np.pi), "arg rail3D (|E| > 5%)"),
                 (axs[3], lit(e), "twilight", (-np.pi, np.pi), "arg FDTD (|E| > 5%)")):
             cm = plt.get_cmap(cmap).copy()
             cm.set_bad("#bdbdbd")
             im = ax.pcolormesh(x, y, arr.T, cmap=cm, vmin=lim[0], vmax=lim[1], shading="nearest")
             fig.colorbar(im, ax=ax, fraction=0.05, pad=0.02)
-            ax.set(title=title, xlabel="x' (mm, along A)", ylabel="y' (mm, along B, E)")
+            ax.set(title=title, xlabel=xl, ylabel=yl)
             ax.set_aspect("equal")
         ax = axs[4]
-        if label.startswith("aperture"):
+        if r.get("pattern"):
             for ff, ls, who in ((ff_m, "-", "model"), (ff_x, "--", "FDTD")):
                 ax.plot(ff["theta_deg"], 20 * np.log10(ff["E_plane"] + 1e-12), "C0" + ls, label=f"E-plane {who}")
                 ax.plot(ff["theta_deg"], 20 * np.log10(ff["H_plane"] + 1e-12), "C3" + ls, label=f"H-plane {who}")
+            ax.axvline(md["theta_from_boresight_deg"], color="0.4", lw=0.8, ls=":",
+                       label="toward the metasurface")
             ax.set(ylim=(-40, 1), xlabel="angle from boresight (deg)", ylabel="dB",
                    title="far-field principal planes")
         else:
-            jy = len(y) // 2
+            jy = int(np.argmin(np.abs(y)))
             ax.plot(x, np.abs(m[:, jy]) / vmax, "k-", label="rail3D")
-            ax.plot(x, np.abs(e[:, jy]) / vmax, "C1--", label="FDTD")
-            ax.set(xlabel="x' (mm)", title="|E_y| cut at y' = 0")
+            ax.plot(x, np.abs(e[:, jy]) / vmax, "C1--", label=r.get("fdtd_name", "FDTD"))
+            if r.get("extra") is not None:
+                ax.plot(x, np.abs(r["extra"][:, jy]) / vmax, "C2:", label=r["extra_name"])
+            ax.set(xlabel=xl, title=f"|E_y| cut at y = {y[jy]:.1f}")
         ax.legend(fontsize=8)
         ax.grid(alpha=0.3)
-        sub.suptitle(label, x=0.01, ha="left", fontsize=12)
+        sub.suptitle(r["label"], x=0.01, ha="left", fontsize=12)
     fig.suptitle(f"Rung -1: {config.HORN_SPEC['part']} full-wave vs rail3D aperture model -- "
                  f"{'PASS' if out['pass'] else 'FAIL'}", fontsize=14, fontweight="bold")
     config.ensure_dirs()
@@ -536,8 +733,14 @@ def main() -> int:
                       help="RUNG -1: E_y on mon_aperture from the horn_fdtd_case.py run")
     ap.add_argument("--horn-near", default=None,
                     help="RUNG -1: E_y on mon_near (3 lambda out) from the same run")
+    ap.add_argument("--horn-slab", default=None,
+                    help="RUNG -1: 3D E_y on mon_slab (horn_slab.mat): scores the global "
+                         "z = H_MS plane right under the horn")
     ap.add_argument("--leak", default=None,
                     help="RUNG 0: E_y at the z = 30 monitor from the EMPTY-box run")
+    ap.add_argument("--injection-src", default=None,
+                    help="RUNG 0: E_y on mon_src, 0.5 mm below the Import plane -- did "
+                         "Lumerical inject what horn_source.py wrote?")
     ap.add_argument("--source", default="horn", choices=("horn", "plane"),
                     help="illumination rail3D is scored under (default horn: the "
                          "Import-source setup in LUMERICAL.md)")

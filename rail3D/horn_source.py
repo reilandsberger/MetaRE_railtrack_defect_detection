@@ -427,19 +427,38 @@ def load_fdtd_aperture(path: str, sample: float | None = None) -> dict:
             "alignment": align, "coverage": info.get("plane_coverage", 1.0)}
 
 
-def horn_field_from_aperture(ap: dict, xs: np.ndarray, ys: np.ndarray, z: float,
-                             device, z_offset: float | None = None) -> np.ndarray:
-    """The horn field on a global z-plane, radiated (RS-I, the horn's own
-    kernel) from a full-wave aperture field placed where the monitor was:
-    ap["z_offset"] mm in front of the aperture, in the horn's local frame."""
+def aperture_to_points(ap: dict, P: np.ndarray, device, z_offset: float | None = None) -> np.ndarray:
+    """RS-I radiation (the horn's own kernel) of a full-wave aperture field,
+    placed where its monitor was -- ap["z_offset"] mm in front of the aperture
+    in the horn's local frame -- to arbitrary GLOBAL points P (N, 3)."""
     import horn_fdtd_case as hf
     zo = ap["z_offset"] if z_offset is None else z_offset
     XL, YL = np.meshgrid(ap["x"], ap["y"], indexing="ij")
     q, ez = hf.local_to_global(XL.ravel(), YL.ravel(), np.full(XL.size, zo))
+    return hf.radiate(ap["field"], q, ap["dx"] ** 2, ez, P, chunk=512, device=device)
+
+
+def horn_field_from_aperture(ap: dict, xs: np.ndarray, ys: np.ndarray, z: float,
+                             device, z_offset: float | None = None) -> np.ndarray:
+    """The horn field on a global z-plane from a full-wave aperture field
+    (aperture_to_points on the plane's grid)."""
     X, Y = np.meshgrid(xs, ys, indexing="ij")
     P = np.stack([X.ravel(), Y.ravel(), np.full(X.size, z)], 1)
-    return hf.radiate(ap["field"], q, ap["dx"] ** 2, ez, P, chunk=512,
-                      device=device).reshape(X.shape)
+    return aperture_to_points(ap, P, device, z_offset).reshape(X.shape)
+
+
+def source_plane_reference(z_mon: float, device, z_src: float = Z_SRC, margin: float = MARGIN,
+                           sample: float = SAMPLE):
+    """What an FDTD monitor at z_mon (just below the Import plane) should read:
+    the windowed, tapered E_y that build() writes, carried down z_src - z_mon by
+    the exact angular spectrum. Rung 0's injection-fidelity reference."""
+    win = window(ray_bundle(z_src), margin, sample)
+    xs = np.arange(win["x"][0], win["x"][1] + 1e-9, sample)
+    ys = np.arange(win["y"][0], win["y"][1] + 1e-9, sample)
+    X, Y = np.meshgrid(xs, ys, indexing="ij")
+    ey = horn_field(xs, ys, z_src, device) * taper(X, *win["x"]) * taper(Y, *win["y"])
+    _, _, kz, _ = _k_grid(len(xs), len(ys), sample)
+    return np.fft.ifft2(np.fft.fft2(ey) * np.exp(-1j * kz * (z_src - z_mon) * 1e-3)), xs, ys, win
 
 
 def build(out: Path, device, z_src: float = Z_SRC, margin: float = MARGIN,

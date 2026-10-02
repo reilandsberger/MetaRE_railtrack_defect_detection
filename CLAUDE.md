@@ -2,7 +2,8 @@
 
 *Last updated: 2026-10-02 · λ = 5 mm (60 GHz) · horn = physical RFspin H-A75-W20
 (README finding 29, 2026-09-24), moved out to 278.5 mm with its lowest edge level
-with the metasurface, metasurface input upward-only (finding 31, 2026-10-02) ·
+with the metasurface, metasurface input upward-only (finding 31, 2026-10-02);
+Import source verified at three planes by rungs −1/0 (finding 32) ·
 rev.3 defect model · prelim run 2026-09-11 on
 L5_prelim_9d5878 with the PREVIOUS horn — README findings 24 (the baseline beats
 the metasurface: an optimization failure), 25 (s0 is the dominant variable), 26
@@ -15,7 +16,7 @@ offset 0.3).*
 
 **Read `rail3D/NEXT_SESSION.md` first** — the current handoff: state, the exact
 next lab commands, open items, landmines. Then this file, then
-`rail3D/README.md` (§4 conventions, §6 findings — 31 is the newest).
+`rail3D/README.md` (§4 conventions, §6 findings — 32 is the newest).
 
 ## Horn move (2026-10-02) — the newest state
 
@@ -36,6 +37,15 @@ next lab commands, open items, landmines. Then this file, then
   −42 dB before the move. Signal per unit drive −3.5 to −4.9 dB.
 - New prelim root `L5_prelim_6a5b8f`; FDTD bundles + Import source must be
   rebuilt (new window/region in LUMERICAL.md). Lab: SETUP_LAB §7e.
+- **Source verification at three planes (finding 32):** rung −1 now carries a
+  3D `mon_slab` (Ey only) so `fdtd_agreement.py --horn-slab` scores the
+  global z = 150 plane under the horn — FDTD vs our RS-I of FDTD's own
+  aperture (the propagator) and vs the model (the aperture model) — and
+  `--horn` alone scores the Import plane z = 15 (full-wave horn vs the
+  production source). Rung 0's `mon_src` + `--injection-src` checks what
+  Lumerical injected. The 20×20 aperture sum IS the RS-I integral,
+  discretised; it matches 80×80 to 0.99999 even at the horn's lip. P6
+  round-trips both scorers.
 
 ## Horn change (2026-09-24)
 
@@ -162,7 +172,7 @@ Trainable metasurface + detector "barcode" system for rail defect detection.
   call `data3d.stage_root(stage)` and `data3d.run_tag(root)`. A provenance
   change auto-suffixes the root with a geometry digest so the generator has a
   legal next move instead of refusing with nowhere to go (README finding 23).
-- **`python tests_plumbing.py` (~25 s, CPU) after touching anything that
+- **`python tests_plumbing.py` (~1 min, CPU) after touching anything that
   addresses, reads back or compares results** — dataset-root resolution, the
   history schema the reports read, or the SLM/baseline identity. These are NOT
   physics gates; they exist because the last three lab failures were all

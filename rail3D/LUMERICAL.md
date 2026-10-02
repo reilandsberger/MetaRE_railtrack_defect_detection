@@ -194,6 +194,34 @@ by the same export (or standalone: `python horn_source.py --out <dir>`). The
 - sampled at λ/20 (0.25 mm), so interpolating the 55° phase ramp onto the FDTD
   mesh costs < 1% amplitude
 
+*How the numbers are made* (`horn_source.build`, README finding 32):
+
+1. **Aperture field** — the textbook pyramidal horn (Nikolova L18 eq. 18.38),
+   ψ_ap(u, v) = cos(πu/A) · exp[+j(k/2)(u²/ρ_H + v²/ρ_E)], ρ_H = AL/(A−a) =
+   33.5 mm, ρ_E = BL/(B−b) = 31.5 mm, on the 22.8 × 16.8 mm opening and **zero
+   outside it**. That zero is the one physical approximation in the chain
+   (no rim or outer-wall currents); rung −1 measures it.
+2. **Placed on the tilted opening**: centre c = D(sin 55°, 0, cos 55°), D =
+   278.51 mm; the point (u, v) sits at c + u·x̂′ + v·ŷ.
+3. **Radiated by the Rayleigh–Sommerfeld integral** (first kind):
+   ψ(P) = ∬ ψ_ap(Q) (1/λ)(1/(kR) − j)(cos χ / R) e^{jkR} dS, R = |P − Q|,
+   cos χ = (P − Q)·ẑ′/R, zero behind the aperture plane (`field3d.rs_kernel`).
+   For a scalar field given on the whole aperture plane this is exact — it is
+   Huygens' principle in closed form, near-field term 1/(kR) included.
+4. **Evaluated as a 20 × 20 midpoint sum**: each cell (1.14 × 0.84 mm)
+   contributes ψ_ap(Q_i)·ΔS × kernel. "20 × 20 point sources" IS that integral,
+   discretised, and it is converged: against 80 × 80, complex corr 0.99999
+   (0.5% rel L2) on the z = 150 plane under the horn, 1.00000 (0.2%) at z = 15
+   and (0.1%) at the crown. There is no separate "propagate along the axis,
+   then slice" step: the integral gives the field at any point in front of
+   the aperture, so evaluating it at the points of a horizontal plane is the
+   cross-section.
+5. **Vector completion on the plane** (`vector_fields`): FFT E_y into plane
+   waves with k_z = −√(k² − k_x² − k_y²) (downward; evanescent parts decay
+   downward); each gets E = E_y(ŷ − (ŷ·k̂)k̂)/(1 − k̂_y²) — E_y unchanged, E ⟂ k
+   — and H = k × E/(ωμ₀). 99.9998% of the flux goes down, |E|/|H| = 376.6 Ω.
+6. **Window and taper** as above, then the `.lsf` and Lumerical, below.
+
 The `.lsf` turns those arrays into a Lumerical dataset with the documented calls,
 `rectilineardataset("EM fields", x, y, z)` and `addattribute("E"…)` /
 `addattribute("H"…)` [Import], then loads it with `importdataset` [Equation]. The
@@ -362,11 +390,12 @@ It writes `horn_body.stl`, `horn_case.json` (every number below) and
    (Perfect Electrical Conductor)**. It is a watertight hollow horn: a 16 mm
    WR-15 section (3.7592 × 1.8796 mm inside) + the flare to 22.8 × 16.8 mm over
    28 mm, 0.5 mm walls (checked: oriented, closed, volume 767.564 mm³).
-2. **FDTD region** x −39.4…39.4, y −36.4…36.4, z −38…23 mm; **PML on all six
+2. **FDTD region** x −39.4…51, y −43…43, z −38…84.5 mm; **PML on all six
    faces** (the waveguide runs into the z-min PML, which absorbs it like a
    matched load). Mesh: uniform **λ/20 = 0.25 mm** (the walls are 2 cells),
-   refinement *conformal variant 1* → ≈ 22.5 M cells, ≈ 2.3 GB. λ/15 (9.5 M,
-   0.9 GB) for a quick first look.
+   refinement *conformal variant 1* → ≈ 61 M cells, ≈ 6.1 GB. λ/15 (25.8 M,
+   2.6 GB) for a quick first look. (The box reaches z = 84.5 and x = 51 only to
+   hold `mon_slab`, step 4; without it, x ±39.4, y ±36.4, z −38…23 is enough.)
 3. **Source → Mode**: injection axis **z**, direction **Forward**, at
    **z = −34 mm**, x −3.38…3.38, y −2.44…2.44 mm (the waveguide + 1.5 mm),
    frequency **59.9585 GHz**, mode selection **fundamental mode**. Before
@@ -376,14 +405,42 @@ It writes `horn_body.stl`, `horn_case.json` (every number below) and
    "fundamental" IS TE10 — no TE/TM naming question.
 4. **Two 2D Z-normal frequency-domain monitors**: `mon_aperture` at z = 0.5 mm,
    x ±21.4, y ±18.4 (the mouth + 2λ); `mon_near` at z = 15 mm, x ±31.4,
-   y ±28.4 (3λ out + 4λ).
-5. Run, then run **`export_horn.lsf`** → `horn_aperture.mat`, `horn_near.mat`,
-   written into the case folder by absolute path with `matlabsavelegacy`
-   (README finding 30). It prints the next command:
+   y ±28.4 (3λ out + 4λ). **And one 3D frequency-domain monitor `mon_slab`**:
+   x −16…43, y −35…35, z 0…76.5 mm, *Data to record* → **Ey only** (untick
+   Ex, Ez, Hx, Hy, Hz and power; ≈ 324 MB exported at λ/20, ≈ 137 MB at λ/15).
+   In the horn's frame the global plane z = 150 — the first horizontal plane
+   below the horn, the metasurface height — is tilted 55°, and Lumerical
+   monitors are axis-aligned, so it is recorded as the volume it passes through
+   and resampled in Python. The box covers that plane's −20 dB beam footprint
+   (94% of the power crossing it). If *Check → GPU* refuses the 3D monitor, run
+   this rung on CPU.
+5. Run, then run **`export_horn.lsf`** → `horn_aperture.mat`, `horn_near.mat`
+   and `horn_slab.mat`, written into the case folder by absolute path with
+   `matlabsavelegacy` (README finding 30; the slab is skipped with a note if
+   `mon_slab` is missing). It prints the next command:
 
 ```bash
-python fdtd_agreement.py --horn data/generated/fdtd_horn/horn_aperture.mat --horn-near data/generated/fdtd_horn/horn_near.mat
+python fdtd_agreement.py --horn data/generated/fdtd_horn/horn_aperture.mat --horn-near data/generated/fdtd_horn/horn_near.mat --horn-slab data/generated/fdtd_horn/horn_slab.mat
 ```
+
+**This one run verifies the source at all three places** (README finding 32):
+
+| where | compared | what a disagreement would mean |
+|---|---|---|
+| out of the horn: aperture (z′ = 0.5) and 3λ out | FDTD vs the textbook aperture field / its RS-I radiation | the aperture model is wrong |
+| global z = 150 under the horn (and z = 140 where the slab reaches it) | FDTD's own field vs **our RS-I applied to FDTD's own aperture field** | our **propagator** is wrong — independent of the aperture model |
+| same plane | FDTD vs the model (80 × 80 samples) | the aperture model is wrong near the horn |
+| same plane | model 20 × 20 vs 80 × 80 | the production quadrature is too coarse there |
+| Import plane z = 15 near the rail | the full-wave horn (FDTD aperture → RS-I) vs the production source | the source we inject differs from the real horn's field at the rail |
+
+Every FDTD-derived field carries the gain fitted at the aperture, so the
+`level` numbers on the later planes are absolute — they test how the field
+decays with distance, not just its shape. Points within 2 mm of the aperture
+plane are not scored (`SLAB_NEAR_LIP_MM`): there the RS-I sum from a monitor
+0.5 mm in front of the mouth and the Kirchhoff rim assumption both break down.
+The report also gives the H-plane pattern level **toward the metasurface**
+(32.5° off boresight; the model reads −21.4 dB), the number behind the
+"sideways horn light" estimate of finding 31.
 
 Passes (proposed `HORN_CRITERIA` — revisit after the first real run) when:
 - the aperture field's complex correlation with eq. 18.38 is ≥ 0.95 — not ≈ 1:
@@ -392,7 +449,10 @@ Passes (proposed `HORN_CRITERIA` — revisit after the first real run) when:
 - the field 3λ out (`mon_near`) correlates ≥ 0.98 with rail3D's;
 - far-field HPBW (E, H) within 1.5° of the model's 15.8° / 17.2°, directivity
   within 0.5 dB of 20.09 dBi, **and** the FDTD gain inside the part's
-  19–21 dBi.
+  19–21 dBi;
+- on the global z = 150 plane: FDTD vs our RS-I of its aperture ≥ 0.98, FDTD
+  vs the model ≥ 0.95;
+- at the Import plane: the full-wave horn vs the production source ≥ 0.98.
 
 It writes `data/figures/fdtd_horn_agreement.png` and a `_stamp`ed
 `data/generated/fdtd_horn_agreement.json`. Then, optionally, drive the rail rungs
@@ -410,16 +470,22 @@ the analytic source at corr 0.99987; a horn with the flare phase removed drops
 to 0.909.
 
 **Rung 0 — empty box: is the horn injected correctly?** Same file as §4, but with
-the rail **disabled** (right-click → disable). Add a second Frequency-Domain
-monitor `mon_z0`: 2D Z-normal, x −60…60, y −70…70, **z = 0**. Run, then export
-**both** monitors the step-8 way: `cd` to `fdtd_intact`, then `matlabsavelegacy`
-(`empty_z0.mat` from `mon_z0`, `empty_z30.mat` from `mon_z30`):
+the rail **disabled** (right-click → disable). Add two more Frequency-Domain
+monitors, both 2D Z-normal: `mon_z0` at x −60…60, y −70…70, **z = 0**; and
+`mon_src` over the source window, x −30.75…125.5, y −83.75…83.75, **z = 14.5**
+(0.5 mm below the Import plane). Run, then export all three the step-8 way:
+`cd` to `fdtd_intact`, then `matlabsavelegacy` (`empty_z0.mat` from `mon_z0`,
+`empty_z30.mat` from `mon_z30`, `empty_src.mat` from `mon_src`):
 
 ```bash
-python fdtd_agreement.py --injection data/generated/fdtd_intact/empty_z0.mat --leak data/generated/fdtd_intact/empty_z30.mat
+python fdtd_agreement.py --injection data/generated/fdtd_intact/empty_z0.mat --leak data/generated/fdtd_intact/empty_z30.mat --injection-src data/generated/fdtd_intact/empty_src.mat
 ```
 
 It passes when:
+- **just below the Import plane, FDTD holds what `horn_source.py` wrote**:
+  complex correlation ≥ 0.99 with the written (windowed, tapered) E_y carried
+  down 0.5 mm by the exact angular spectrum — the check that isolates
+  Lumerical's import, interpolation and injection from everything else
 - FDTD's field at crown height matches rail3D's horn field over the rail
   footprint at complex correlation ≥ 0.98, **as-is**
 - the beam centroid is within 5 mm of rail3D's

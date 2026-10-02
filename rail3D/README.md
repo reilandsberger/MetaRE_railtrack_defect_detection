@@ -1,7 +1,8 @@
 # rail3D — 3D diffraction simulation + metasurface training for rail defect detection
 
 *Last updated: 2026-10-02 · λ = 5 mm (60 GHz) · horn = RFspin H-A75-W20 (finding 29) at
-278.5 mm, lowest edge level with the metasurface; upward-only metasurface input (finding 31) · V0–V8
+278.5 mm, lowest edge level with the metasurface; upward-only metasurface input (finding 31); the
+Import source verified at three planes by rungs −1 and 0 (finding 32) · V0–V8
 measured on the 5090 with the PREVIOUS horn and placement; V0–V4 and V9 re-run on the laptop with the
 new ones · Lumerical file I/O: absolute paths, text fallback, load check, `matlabsavelegacy` (finding 30)
 — bump this line in any commit that changes behaviour this file describes.*
@@ -195,12 +196,12 @@ field, plus parameter histograms.
 | `run_stage.py` | generate → gate → train → analyse as ONE resumable command (`--stage prelim/full`, `--with-baseline`, `--fresh`, `--bundle`); refuses short or mismatched datasets |
 | `ablate_surface.py` | 2×2 over SLM init × `w_capture` + the no-MS control (finding 24); resumable, writes `surface_ablation.json` |
 | `slm_profile.py` | the trained mask: wrapped phase, \|t\|, incident light, change from init |
-| `tests_plumbing.py` | P0–P5 non-physics plumbing tests (~25 s CPU): dataset-root resolution, history schema, zero-phase ≡ baseline, slm_profile, FDTD round trip, horn source |
+| `tests_plumbing.py` | P0–P6 non-physics plumbing tests (~1 min CPU): dataset-root resolution, history schema, zero-phase ≡ baseline, slm_profile, FDTD round trip, horn source, three-plane source verification |
 | `check_notebook.py` | fresh-kernel name-ordering check for `rail3D_pipeline.ipynb` (~1 s) |
 | `target_figures.py` | what a successful result would look like — labelled TARGET, never a measurement |
 | `horn_source.py` | rail3D's horn as a Lumerical **Import source** (E + H as .mat and as text, + a self-checking .lsf) on z = 15 mm; `--aperture-from` builds it from the full-wave horn (rung −1) instead; `--txt DIR` rewrites only the text copy (finding 30) |
-| `horn_fdtd_case.py` | Lumerical **rung −1**: watertight PEC STL of the H-A75-W20 + WR-15 feed, Mode-source/monitor plan (`horn_case.json`), `export_horn.lsf` |
-| `fdtd_agreement.py` | scores Lumerical exports: `--horn` (rung −1), `--injection` (rung 0), `--sample … --external` (rungs 1–3, z = 30 and MS plane), `--target` (synthetic target) |
+| `horn_fdtd_case.py` | Lumerical **rung −1**: watertight PEC STL of the H-A75-W20 + WR-15 feed, Mode-source/monitor plan incl. the 3D `mon_slab` under the horn (`horn_case.json`), `export_horn.lsf` |
+| `fdtd_agreement.py` | scores Lumerical exports: `--horn` (+ `--horn-near`, `--horn-slab`: rung −1, the source at three planes, finding 32), `--injection` (+ `--injection-src`: rung 0), `--sample … --external` (rungs 1–3, z = 30 and MS plane), `--target` (synthetic target) |
 | `lumerical_mockup.py` | draws the target FDTD setup into a Layout-window screenshot, every box from `case.json` |
 | `presentation/` | `deck_figs.py` (horn/result figures computed from the code) + `update_deck.py` (the 2026-09-24 slides) for `data/generated/rail3D_overview.pptx` |
 | notebooks | `rail3D_pipeline` (the whole pipeline, narrated), `design_review_`, `validation_3d_`, `training_3d_ms_`, `training_3d_no_ms_` — all thin wrappers over the modules |
@@ -1002,6 +1003,63 @@ first) · or everything at once with `python lab_report.py`.
     still inside the original acceptance (intact shift ≤ ~5%), but confirm
     with shadowing on the 5090 (`term_budget.py`).
 
+32. **The Import source is verified at three planes, and each comparison is
+    built to isolate one thing.** (2026-10-02, user request: "validate the
+    shape and profile of the imported source right out of the horn, at the
+    first z = 150 plane after the horn, and at z = 15 near the railhead".)
+
+    *What the source is* (LUMERICAL.md §3.2 has the formulas). It is the
+    textbook aperture field, zero outside the opening, radiated by the exact
+    Rayleigh–Sommerfeld integral and evaluated directly at the points of the
+    target plane. The 20 × 20 "point sources" ARE that integral, discretised
+    by the midpoint rule. There is no separate propagate-then-slice step.
+    The quadrature is converged everywhere it is used: against 80 × 80,
+    complex corr 0.99999 / rel L2 0.5% on the global z = 150 plane touching the
+    horn's lip, 0.2% at z = 15 and 0.1% at the crown. Only one physical
+    approximation is in the chain: the aperture field itself. Then come the
+    vector completion, the window, and Lumerical's import.
+
+    *The checks, and the one thing each tests:*
+    - **Out of the horn** (rung −1, existing): FDTD aperture and 3λ fields vs
+      the model. This tests the aperture model.
+    - **Global z = 150 under the horn** (rung −1, new 3D monitor `mon_slab`):
+      Lumerical monitors are axis-aligned and that plane is tilted 55° in the
+      horn's frame, so it is recorded as a volume (x′ −16…43, y′ ±35, z′
+      0…76.5, E_y only, the −20 dB footprint, 94% of the plane's power) and
+      resampled. Three fields meet on it. FDTD vs **our RS-I applied to
+      FDTD's own aperture field** tests our *propagator* against Maxwell, with
+      the aperture model taken out (same input on both sides). FDTD vs the
+      model (80 × 80) tests the aperture model there. Model 20 × 20 vs 80 × 80
+      tests the production quadrature. The resampling interpolates the
+      envelope (the e^{jkz′} carrier is divided out and put back); plain linear
+      interpolation of the carrier read −0.26 dB low at 0.5 mm in P6's round
+      trip. z′ < 2 mm is not scored.
+    - **The Import plane z = 15** (computed from rung −1, no extra run): the
+      full-wave horn, its FDTD aperture field carried down by RS-I, vs the
+      production source. This says whether the field we inject is the real
+      horn's.
+    - **What Lumerical injected** (rung 0, new monitor `mon_src` 0.5 mm below
+      the Import plane): FDTD vs the written field carried down 0.5 mm by the
+      exact angular spectrum. This tests import + interpolation + injection
+      alone, which is the check Lumerical's docs recommend.
+
+    FDTD fields keep the gain fitted at the aperture, so the level numbers on
+    later planes are absolute (decay with distance), not refitted shapes.
+    Also reported: the H-plane pattern 32.5° off boresight, toward the
+    metasurface (model −21.4 dB). It is the angle behind finding 31's
+    sideways light.
+
+    Why not inject at z = 150 and let FDTD carry the beam to the rail: that
+    leg is ~47λ of air at 55°, where FDTD's grid dispersion (repo estimate
+    up to 4.2°/λ at λ/10, 1.8°/λ at λ/15) would be measured instead of rail3D.
+    The slab already tests the propagator against Maxwell with no long air
+    path.
+
+    Guard: plumbing **P6** builds synthetic exports from the model in
+    Lumerical's layout (metres, columns, an arbitrary complex gain) and runs
+    both scorers: aperture 0.9999, z = 150 slab 0.9997 / 1.0000 at +0.01 dB,
+    Import plane 0.9999 at +0.05 dB, injection 1.0000.
+
 
 ## 6b. Objective & metrics (rev. 2)
 
@@ -1055,6 +1113,10 @@ Done and committed on **`3D_railhead_upgrade`**:
   with the metasurface; metasurface input is upward-only (psi0 = psi2 = 0
   there now); `term_budget.py`; new prelim root `L5_prelim_6a5b8f`; FDTD
   bundles and the Import source must be rebuilt.
+- **Source verification at three planes (2026-10-02, finding 32):** rung −1
+  gains the 3D `mon_slab` (global z = 150 under the horn) and scores the
+  Import plane z = 15 against the full-wave horn; rung 0 gains `mon_src`
+  (what Lumerical injected). Plumbing P6 round-trips both scorers.
 - Overview deck updated with horn / FDTD / prelim slides
   (`data/generated/rail3D_overview.pptx`, gitignored; builders in
   `presentation/`).
@@ -1077,10 +1139,9 @@ Done and committed on **`3D_railhead_upgrade`**:
 8. Confirm the horn's inner dimensions (drawing / calipers). A 60 GHz
    meta-atom library (`surface="metaunit"` is blocked at λ≠8).
 
-Not built yet: the rung-3 **difference-field** scorer in `fdtd_agreement.py`;
-plumbing test **P6** for `--horn` / `--aperture-from` (both verified only by
-scratch round trips: an ideal export passes and a flat-phase horn fails
-`--horn`; aperture-from reproduces the analytic source at corr 0.99987).
+Not built yet: the rung-3 **difference-field** scorer in `fdtd_agreement.py`.
+(`--horn` and the aperture radiation behind `--aperture-from` are now covered
+by plumbing P6.)
 
 ## 8. Simplifications & limitations (what this simulation is NOT)
 

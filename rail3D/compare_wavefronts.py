@@ -228,6 +228,47 @@ def _pick(raw, keys):
     return None, None
 
 
+def read_raw(path) -> dict:
+    """Every variable in a .mat (up to v7) or .npz, names without MATLAB's __ keys."""
+    p = Path(path)
+    if p.suffix.lower() == ".mat":
+        from scipy.io import loadmat
+        try:
+            return {k: v for k, v in loadmat(str(p)).items() if not k.startswith("__")}
+        except NotImplementedError as exc:          # scipy's answer to a v7.3 file
+            raise SystemExit(
+                f"{p.name} is a MATLAB v7.3 (HDF5) file -- what Lumerical's plain "
+                "matlabsave writes -- and scipy cannot read it. Save it again with "
+                "matlabsavelegacy(...), same arguments (LUMERICAL.md step 8); "
+                "export_horn.lsf already does.") from exc
+    return dict(np.load(p, allow_pickle=True))
+
+
+def read_monitor(path, key: str = "Ey", axes: str = "xy"):
+    """A Lumerical monitor export on its OWN grid: (field, coord vectors in mm).
+
+    For checks whose grid is not rail3D's centred plane (an off-centre source
+    window, a 3D volume). Coordinates in metres are converted (every extent here
+    is < 1 m but > 1 mm); the field is squeezed and must come out with one axis
+    per coordinate, in ``axes`` order -- a transposed 2-D export is accepted.
+    """
+    p = Path(path)
+    raw = read_raw(p)
+    if key not in raw:
+        raise SystemExit(f"{p.name}: no '{key}' (keys: {sorted(raw)})")
+    fld = np.squeeze(np.asarray(raw[key])).astype(np.complex128)
+    vecs = [np.asarray(raw[a], float).reshape(-1) for a in axes]
+    if max(np.abs(v).max() for v in vecs) < 1.0:
+        vecs = [v * 1000.0 for v in vecs]
+    want = tuple(len(v) for v in vecs)
+    if fld.ndim == 2 and fld.shape == want[::-1] and want[0] != want[1]:
+        fld = fld.T
+    if fld.shape != want:
+        raise SystemExit(f"{p.name}: '{key}' is {fld.shape}, expected {want} for "
+                         f"axes {axes}")
+    return fld, vecs
+
+
 def load_external(path: str, g: dict):
     """Read a full-wave result and put it on OUR cell-centred plane grid.
 
@@ -244,19 +285,7 @@ def load_external(path: str, g: dict):
     guess, because rail3D is scalar and the choice of component is physics.
     """
     p = Path(path)
-    if p.suffix.lower() == ".mat":
-        from scipy.io import loadmat
-        try:
-            raw = {k: v for k, v in loadmat(str(p)).items() if not k.startswith("__")}
-        except NotImplementedError as exc:          # scipy's answer to a v7.3 file
-            raise SystemExit(
-                f"{p.name} is a MATLAB v7.3 (HDF5) file -- what Lumerical's plain "
-                "matlabsave writes -- and scipy cannot read it. Save it again with "
-                "matlabsavelegacy(...), same arguments (LUMERICAL.md step 8); "
-                "export_horn.lsf already does.") from exc
-    else:
-        raw = dict(np.load(p, allow_pickle=True))
-
+    raw = read_raw(p)
     key = next((k for k in FIELD_KEYS if k in raw), None)
     if key is None:
         cand = [k for k, v in raw.items()
@@ -858,6 +887,13 @@ def _fdtd_plan_horn(v, g, z_mon, override, horn, lo, hi) -> dict:
                      "delivers at crown height, to score against rail3D's horn "
                      "field there (fdtd_agreement.py --injection). Delete or "
                      "disable it once the rail is in."),
+        },
+        "rung0_source_monitor_mm": {
+            "x": list(win["x"]), "y": list(win["y"]), "z": round(zs - 0.5, 2),
+            "name": "mon_src",
+            "note": ("EMPTY box only: 0.5 mm below the Import plane, over the source "
+                     "window -- what Lumerical actually injected, scored against what "
+                     "horn_source.py wrote (fdtd_agreement.py --injection-src)."),
         },
         "ms_plane_leg": (
             "The monitor window is propagated to H_MS with rail3D's ASM for the "

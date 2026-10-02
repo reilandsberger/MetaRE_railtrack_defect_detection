@@ -170,16 +170,63 @@ def model_plane(x_mm: np.ndarray, y_mm: np.ndarray, z_mm: float, n: int = 80,
     return radiate(psi, q, dS, np.array([0.0, 0.0, 1.0]), p, wvl).reshape(X.shape)
 
 
+def frame():
+    """(ex, ey, ez, c): the horn's local axes and aperture centre in the global
+    frame -- aperture_field's own convention (x' along A, y' = y, z' boresight)."""
+    th, D = config.THETA_INC, config.DIST_ANT
+    return (np.array([-np.cos(th), 0.0, np.sin(th)]), np.array([0.0, 1.0, 0.0]),
+            np.array([-np.sin(th), 0.0, -np.cos(th)]),
+            np.array([D * np.sin(th), 0.0, D * np.cos(th)]))
+
+
 def local_to_global(x, y, z):
     """Local horn coordinates -> rail3D's global frame (aperture_field's own)."""
-    th, D = config.THETA_INC, config.DIST_ANT
-    ex = np.array([-np.cos(th), 0.0, np.sin(th)])
-    ey = np.array([0.0, 1.0, 0.0])
-    ez = np.array([-np.sin(th), 0.0, -np.cos(th)])
-    c = np.array([D * np.sin(th), 0.0, D * np.cos(th)])
+    ex, ey, ez, c = frame()
     pts = (c + np.multiply.outer(np.asarray(x, float), ex) + np.multiply.outer(np.asarray(y, float), ey)
            + np.multiply.outer(np.asarray(z, float), ez))
     return pts, ez
+
+
+def global_to_local(P: np.ndarray) -> np.ndarray:
+    """(N, 3) global points -> (N, 3) local (x', y', z'). y' = y, so E_y is the
+    same component in both frames."""
+    ex, ey, ez, c = frame()
+    d = np.asarray(P, float) - c
+    return np.stack([d @ ex, d @ ey, d @ ez], -1)
+
+
+def slab_monitor(z_plane: float | None = None, level_db: float = 20.0, dx: float = 2.5) -> dict:
+    """Local box over where the global plane z = z_plane cuts the horn's beam.
+
+    The global plane is tilted 55 deg in the horn's frame, so recording it in
+    FDTD (monitors are axis-aligned) takes a 3D monitor over the slab it passes
+    through. Covers the model field above -level_db of that plane's peak, plus
+    one wavelength. Sizing only: a 2.5 mm grid and the 20x20 aperture.
+    Default plane: the horn's lowest edge, i.e. the metasurface height -- the
+    first horizontal plane every ray leaving the horn crosses.
+    """
+    import torch
+    lam = config.WVL
+    z_plane = config.HORN_LOWER_EDGE_Z if z_plane is None else z_plane
+    cx = config.DIST_ANT * np.sin(config.THETA_INC)
+    xs = np.arange(cx - 220.0, cx + 40.0, dx)
+    ys = np.arange(-120.0, 120.0 + 1e-9, dx)
+    X, Y = np.meshgrid(xs, ys, indexing="ij")
+    f = field3d.horn_to_plane(torch.tensor(X)[None], torch.tensor(Y)[None], z_plane, lam,
+                              config.THETA_INC, config.SIZE_ANT, config.DIST_ANT,
+                              config.RESOL_ANT).numpy()
+    I = np.abs(f) ** 2
+    lit = I > I.max() * 10 ** (-level_db / 10)
+    loc = global_to_local(np.stack([X[lit], Y[lit], np.full(lit.sum(), z_plane)], -1))
+    lo, hi = loc.min(0) - lam, loc.max(0) + lam
+    snap = lambda u, up: float((np.ceil if up else np.floor)(u * 2) / 2)    # noqa: E731
+    yh = max(abs(lo[1]), abs(hi[1]))
+    return {"x": [snap(lo[0], False), snap(hi[0], True)], "y": [-snap(yh, True), snap(yh, True)],
+            "z": [max(0.0, snap(lo[2], False)), snap(hi[2], True)],
+            "global_plane_z_mm": z_plane, "level_dB": -level_db,
+            "global_footprint_mm": {"x": [float(X[lit].min()), float(X[lit].max())],
+                                    "y": [float(Y[lit].min()), float(Y[lit].max())]},
+            "power_in_footprint": float(I[lit].sum() / I.sum())}
 
 
 def far_field_cuts(E: np.ndarray, x_mm: np.ndarray, y_mm: np.ndarray, wvl=None,
@@ -242,8 +289,27 @@ E = getresult("mon_near", "E");
 Ey = pinch(E.Ey);  x = E.x;  y = E.y;
 matlabsavelegacy(case_dir + "/horn_near.mat", Ey, x, y);
 ?"wrote horn_aperture.mat and horn_near.mat in " + case_dir;
+
+# the 3D slab under the horn (mon_slab, E_y only): optional -- skipped with a
+# note if the monitor was not added
+slab_ok = 0;
+try {
+    Ey = pinch(getdata("mon_slab", "Ey"));
+    x = getdata("mon_slab", "x");  y = getdata("mon_slab", "y");  z = getdata("mon_slab", "z");
+    matlabsavelegacy(case_dir + "/horn_slab.mat", Ey, x, y, z);
+    slab_ok = 1;
+    ?"wrote horn_slab.mat (3D E_y where the global z = 150 plane passes under the horn)";
+} catch(slab_err);
+if (slab_ok == 0) {
+    ?"no horn_slab.mat: mon_slab missing or not recording Ey (" + slab_err + ")";
+}
+
+cmd = "  python fdtd_agreement.py --horn '" + case_dir + "/horn_aperture.mat' --horn-near '" + case_dir + "/horn_near.mat'";
+if (slab_ok == 1) {
+    cmd = cmd + " --horn-slab '" + case_dir + "/horn_slab.mat'";
+}
 ?"next, in rail3D/:";
-?"  python fdtd_agreement.py --horn '" + case_dir + "/horn_aperture.mat' --horn-near '" + case_dir + "/horn_near.mat'";
+?cmd;
 """
 
 
@@ -255,10 +321,16 @@ def plan(size_ant=None, wall: float = WALL, wg_len: float = WG_LEN) -> dict:
               "z": 0.5}
     mon_nr = {"x": [-(A / 2 + 4 * lam), A / 2 + 4 * lam], "y": [-(B / 2 + 4 * lam), B / 2 + 4 * lam],
               "z": z_near}
+    slab = slab_monitor() if size_ant is None else None
     pad = 1.6 * lam
     region = {"x": [round(mon_nr["x"][0] - pad, 2), round(mon_nr["x"][1] + pad, 2)],
               "y": [round(mon_nr["y"][0] - pad, 2), round(mon_nr["y"][1] + pad, 2)],
               "z": [round(-L - 10.0, 2), round(z_near + pad, 2)]}
+    if slab:                                   # grow the box to hold the 3D monitor
+        for k, i in (("x", 0), ("y", 0)):
+            region[k][i] = round(min(region[k][i], slab[k][0] - pad), 2)
+        for k in ("x", "y", "z"):
+            region[k][1] = round(max(region[k][1], slab[k][1] + pad), 2)
     ext = np.array([region[k][1] - region[k][0] for k in ("x", "y", "z")])
     meshes = {}
     for div in (15, 20):
@@ -267,6 +339,9 @@ def plan(size_ant=None, wall: float = WALL, wg_len: float = WG_LEN) -> dict:
         meshes[f"lambda_over_{div}"] = {"dx_mm": round(dx, 4), "cells_M": round(cells / 1e6, 1),
                                         "est_RAM_GB": round(cells * 100 / 1e9, 1),
                                         "wall_cells": round(wall / dx, 1)}
+        if slab:
+            pts = float(np.prod([np.ceil((slab[k][1] - slab[k][0]) / dx) for k in "xyz"]))
+            meshes[f"lambda_over_{div}"]["mon_slab_Ey_export_MB"] = round(pts * 16 / 1e6)
     neff = float(np.sqrt(1 - (lam / (2 * a)) ** 2))
     src_z = round(-L - 6.0, 2)
     return {
@@ -301,11 +376,23 @@ def plan(size_ant=None, wall: float = WALL, wg_len: float = WG_LEN) -> dict:
                                  purpose="the aperture field itself (0.1 lambda in front)"),
             "mon_near": dict(mon_nr, type="frequency-domain field, 2D Z-normal",
                              purpose="the radiated field 3 lambda out -- what travels to the rail"),
+            **({"mon_slab": {
+                "x": slab["x"], "y": slab["y"], "z": slab["z"],
+                "type": ("frequency-domain field, 3D; Data to record: Ey ONLY (untick Ex, "
+                         "Ez, Hx, Hy, Hz, power) to keep the export small"),
+                "purpose": (f"the global plane z = {slab['global_plane_z_mm']:g} mm -- the "
+                            "first plane below the horn, the metasurface height -- which "
+                            "is tilted 55 deg here, so it is recorded as a volume and "
+                            "resampled (fdtd_agreement.py --horn-slab)"),
+                "covers": {k: slab[k] for k in ("global_plane_z_mm", "level_dB",
+                                                "global_footprint_mm", "power_in_footprint")},
+            }} if slab else {}),
         },
-        "export": ("run export_horn.lsf -> horn_aperture.mat, horn_near.mat in this folder "
-                   "(matlabsavelegacy, which scipy reads); it prints the next command"),
+        "export": ("run export_horn.lsf -> horn_aperture.mat, horn_near.mat (and "
+                   "horn_slab.mat if mon_slab exists) in this folder (matlabsavelegacy, "
+                   "which scipy reads); it prints the next command"),
         "then": ("python fdtd_agreement.py --horn <this folder>/horn_aperture.mat "
-                 "--horn-near <this folder>/horn_near.mat"),
+                 "--horn-near <this folder>/horn_near.mat --horn-slab <this folder>/horn_slab.mat"),
     }
 
 
@@ -340,6 +427,11 @@ def main() -> int:
         print(f"  {k_}: {v_['cells_M']} M cells, ~{v_['est_RAM_GB']} GB, walls {v_['wall_cells']} cells")
     print(f"  Mode source at z' = {p['mode_source']['z_mm']} mm: expect neff "
           f"{p['mode_source']['check_effective_index']} (TE10)")
+    s = p["monitors"].get("mon_slab")
+    if s:
+        print(f"  mon_slab (3D, Ey only) x' {s['x']} y' {s['y']} z' {s['z']} mm: the global "
+              f"z = {s['covers']['global_plane_z_mm']:g} plane, {s['covers']['level_dB']:g} dB "
+              f"footprint, {100 * s['covers']['power_in_footprint']:.0f}% of its power")
     print(f"  -> {Path(args.out)}  (horn_body.stl, horn_case.json, export_horn.lsf)")
     return 0
 

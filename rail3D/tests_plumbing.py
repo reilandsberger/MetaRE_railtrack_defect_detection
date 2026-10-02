@@ -1,6 +1,6 @@
 """Plumbing gates: the non-physics assumptions that have actually broken runs.
 
-    python tests_plumbing.py          # ~25 s, CPU, no dataset, no GPU
+    python tests_plumbing.py          # ~1 min, CPU, no dataset, no GPU
 
 tests_physics_3d.py guards the solver. This guards the things AROUND it -- how
 results are addressed, read back and compared -- which is where the last three
@@ -39,6 +39,11 @@ run rather than here:
       check written into the script passes on both ways in and FAILS on a
       conjugated, transposed or real-only load; export_horn saves with
       matlabsavelegacy, which scipy can read.
+  P6  the three-plane source verification (README finding 32) on synthetic
+      exports built from the model in Lumerical's layout (metres, column
+      vectors, an arbitrary complex gain): rung -1's aperture, near, z = 150
+      slab (3D, resampled through the envelope) and Import-plane scores, and
+      rung 0's injected-plane score, must all round-trip to ~1 and ~0 dB.
 
 Every check runs the real code path on tiny synthetic inputs. Add one here
 whenever a run dies on something that was not physics.
@@ -420,7 +425,9 @@ def p5_horn_source() -> dict:
                                       and "case_dir = here;" in ex and "case_dir = pwd;" in ex
                                       and ex.count("{") == ex.count("}"))
         out["export_lsf_scipy_readable"] = ("matlabsave(" not in ex and ex.count(
-            'matlabsavelegacy(case_dir + "/horn_') == 2)
+            'matlabsavelegacy(case_dir + "/horn_') == 3)              # aperture, near, slab
+        out["export_lsf_slab_optional"] = ('getdata("mon_slab", "Ey")' in ex
+                                           and "catch(slab_err);" in ex)
         # a rebuild must replace the text copy, never leave the previous one
         (tmp / hs.TXT_DIR / "stale.txt").write_text("1\n")
         hs.build(tmp, dev, sample=1.0, check=False)
@@ -431,6 +438,102 @@ def p5_horn_source() -> dict:
         out["pass"] = all(v for v in out.values() if isinstance(v, (bool, np.bool_)))
         return out
     finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def p6_source_verification() -> dict:
+    """The three-plane source verification, scored on synthetic exports built
+    from rail3D's own model (README finding 32): every comparison must come
+    back ~1 -- anything less is the scorer, not physics."""
+    import functools
+    import sys as _sys
+    from scipy.io import savemat
+    import fdtd_agreement as fa
+    import horn_fdtd_case as hf
+    import horn_source as hs
+    from rail3d import field3d
+
+    tmp = Path(tempfile.mkdtemp())
+    saved = (config.FIGURE_DIR, config.GENERATED_DIR, list(_sys.argv), hs.source_plane_reference)
+    config.FIGURE_DIR = config.GENERATED_DIR = tmp
+    gain = 3.7e-4 * np.exp(1j * 0.9)                     # an export is in V/m, not model units
+    col = lambda v: (np.asarray(v) * 1e-3)[:, None]       # noqa: E731  (Lumerical: metres, columns)
+    try:
+        p = hf.plan()
+        m = p["monitors"]["mon_aperture"]
+        xa = np.arange(m["x"][0], m["x"][1] + 1e-9, 0.25)
+        ya = np.arange(m["y"][0], m["y"][1] + 1e-9, 0.25)
+        savemat(str(tmp / "ap.mat"), {"Ey": gain * hf.model_aperture(xa, ya), "x": col(xa), "y": col(ya)})
+        n_ = p["monitors"]["mon_near"]
+        xn = np.arange(n_["x"][0], n_["x"][1] + 1e-9, 0.5)
+        yn = np.arange(n_["y"][0], n_["y"][1] + 1e-9, 0.5)
+        savemat(str(tmp / "near.mat"), {"Ey": gain * hf.model_plane(xn, yn, n_["z"]), "x": col(xn),
+                                        "y": col(yn)})
+        # a small core of mon_slab (the z = 150 plane passes through it), the
+        # model radiated in the horn frame exactly as model_plane does
+        A, B = config.SIZE_ANT[:2]
+        xs3, ys3, zs3 = (np.arange(-6.0, 6.0 + 1e-9, 0.5), np.arange(-5.0, 5.0 + 1e-9, 0.5),
+                         np.arange(6.0, 28.0 + 1e-9, 0.5))
+        u = field3d.aperture_axis(A, 40, "midpoint").double().numpy()
+        v = field3d.aperture_axis(B, 40, "midpoint").double().numpy()
+        U, V = np.meshgrid(u, v, indexing="ij")
+        q = np.stack([U.ravel(), V.ravel(), np.zeros(U.size)], 1)
+        G = np.stack(np.meshgrid(xs3, ys3, zs3, indexing="ij"), -1).reshape(-1, 3)
+        e3 = hf.radiate(field3d.aperture_distribution(U, V, config.SIZE_ANT, config.WVL), q,
+                        field3d.aperture_weight(A, B, 40, "midpoint"), np.array([0.0, 0, 1]), G)
+        savemat(str(tmp / "slab.mat"), {"Ey": gain * e3.reshape(len(xs3), len(ys3), len(zs3)),
+                                        "x": col(xs3), "y": col(ys3), "z": col(zs3)})
+        _sys.argv = ["fdtd_agreement.py", "--horn", str(tmp / "ap.mat"), "--horn-near",
+                     str(tmp / "near.mat"), "--horn-slab", str(tmp / "slab.mat"), "--profile", "cpu"]
+        rc_h = fa.main()
+        h = json.loads((tmp / "fdtd_horn_agreement.json").read_text(encoding="utf-8"))
+
+        # rung 0: z = 0 on the scorer's own grid, and the injected plane at 1 mm
+        # (the 0.25 mm production grid costs ~20 s here and tests nothing more)
+        hs.source_plane_reference = functools.partial(saved[3], sample=1.0)
+        g0 = dict(__import__("compare_wavefronts").geom_now(), h_ms=0.0, nx=48, ny=56)
+        x0 = (np.arange(48) + 0.5) * g0["dx"] - 48 * g0["dx"] / 2
+        y0 = (np.arange(56) + 0.5) * g0["dx"] - 56 * g0["dx"] / 2
+        savemat(str(tmp / "z0.mat"), {"Ey": gain * hs.horn_field(x0, y0, 0.0, torch.device("cpu")),
+                                      "x": col(x0), "y": col(y0)})
+        ref, xs_s, ys_s, _ = hs.source_plane_reference(hs.Z_SRC - 0.5, torch.device("cpu"))
+        savemat(str(tmp / "src.mat"), {"Ey": gain * ref, "x": col(xs_s), "y": col(ys_s)})
+        _sys.argv = ["fdtd_agreement.py", "--injection", str(tmp / "z0.mat"), "--injection-src",
+                     str(tmp / "src.mat"), "--profile", "cpu"]
+        rc_0 = fa.main()
+        r0 = json.loads((tmp / "fdtd_rung0.json").read_text(encoding="utf-8"))
+
+        slab = h.get("slab", [{}])[0]
+        res = {
+            "horn_exit_ok": rc_h == 0,
+            "aperture_corr": round(h["aperture"]["complex_corr"], 5),
+            "near_corr": round(h["near"]["complex_corr"], 5),
+            "slab_plane_z": slab.get("global_z_mm"),
+            "slab_points": slab.get("points"),
+            "slab_fdtd_vs_rsi": slab.get("fdtd_vs_rsi_of_fdtd_aperture"),
+            "slab_fdtd_vs_model": slab.get("fdtd_vs_model"),
+            "slab_level_dB": slab.get("level_fdtd_over_model_dB"),
+            "source_plane_corr": h["source_plane"]["full_wave_horn_vs_source"],
+            "source_plane_level_dB": h["source_plane"]["level_fdtd_over_model_dB"],
+            "ms_direction_deg": h["aperture"]["metasurface_direction"]["theta_from_boresight_deg"],
+            "rung0_exit_ok": rc_0 == 0,
+            "rung0_src_corr": round(r0["source_plane"]["complex_corr"], 5),
+        }
+        res.update({
+            "slab_scored_at_ms_height": slab.get("global_z_mm") == config.HORN_LOWER_EDGE_Z
+            and (slab.get("points") or 0) > 200,
+            "slab_roundtrip": (slab.get("fdtd_vs_rsi_of_fdtd_aperture") or 0) > 0.995
+            and (slab.get("fdtd_vs_model") or 0) > 0.995 and abs(slab.get("level_fdtd_over_model_dB", 9)) < 0.2,
+            "source_plane_roundtrip": res["source_plane_corr"] > 0.999
+            and abs(res["source_plane_level_dB"]) < 0.1,
+            "rung0_src_roundtrip": res["rung0_src_corr"] > 0.9999,
+        })
+        res["pass"] = all(v for v in res.values() if isinstance(v, (bool, np.bool_)))
+        return res
+    finally:
+        config.FIGURE_DIR, config.GENERATED_DIR = saved[0], saved[1]
+        _sys.argv[:] = saved[2]
+        hs.source_plane_reference = saved[3]
         shutil.rmtree(tmp, ignore_errors=True)
 
 
@@ -503,7 +606,8 @@ def main() -> int:
                      ("P2_zero_phase_is_baseline", p2_zero_phase_is_baseline),
                      ("P3_slm_profile", p3_slm_profile),
                      ("P4_fdtd_agreement_roundtrip", p4_fdtd_agreement_roundtrip),
-                     ("P5_horn_source", p5_horn_source)]:
+                     ("P5_horn_source", p5_horn_source),
+                     ("P6_source_verification", p6_source_verification)]:
         t0 = time.time()
         try:
             res = fn()

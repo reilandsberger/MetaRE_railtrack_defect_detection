@@ -9,10 +9,10 @@ Everything needed is in this repo, plus the external paths listed at the end.*
 
 1. **This file** — state, next commands, open items, landmines.
 2. `CLAUDE.md` (repo root) — ground rules and the dated state sections.
-3. `rail3D/README.md` — §4 conventions, §6 hard-won findings (**31 = horn
-   placement + upward-only input, newest**; 30 = Lumerical file I/O; 29 = the
-   horn; 24–26 = the prelim result; 27–28 = Lumerical), §7 current state, §8
-   limitations.
+3. `rail3D/README.md` — §4 conventions, §6 hard-won findings (**32 = the
+   three-plane source verification, newest**; 31 = horn placement + upward-only
+   input; 30 = Lumerical file I/O; 29 = the horn; 24–26 = the prelim result;
+   27–28 = Lumerical), §7 current state, §8 limitations.
 4. As needed: `rail3D/SETUP_LAB.md` (lab runbook — **§7e is the next run**),
    `rail3D/LUMERICAL.md` (FDTD, rungs −1…3), `rail3D/READING_RESULTS.md` (what
    every output field means, and how each has been misread).
@@ -43,8 +43,14 @@ legacy reference — do not modify).
   3.5–4.9 dB of signal per unit drive, and creates two unmodelled stray paths:
   horn light skimming the metasurface plane (−4.4 dB of the rail's power) and
   a direct horn → detector line (−17 dB of the rail's light there; was −41).
-  Baffles are the rig's answer. The user has these numbers; whether the
-  placement stays is their call. New prelim root `L5_prelim_6a5b8f`.
+  Baffles are the rig's answer. The user saw these numbers and kept the
+  placement (2026-10-02). New prelim root `L5_prelim_6a5b8f`.
+- **Source verification at three planes (2026-10-02, finding 32), the user's
+  next lab step:** rung −1 with the 3D `mon_slab` (global z = 150 under the
+  horn) and `--horn-slab`; the Import plane z = 15 scored from the same run;
+  rung 0 with `mon_src` and `--injection-src`. LUMERICAL.md §5 has the exact
+  setup; READING_RESULTS §9c how to read it. Nothing has run in Lumerical
+  yet except the Import-source load (finding 30).
 
 - **Pipeline verified at λ = 5** on the lab RTX 5090 (V0–V8, 2026-09-04),
   shadow guard settled 2026-09-11 (`min_t` 0.05, `normal_offset` 0.3).
@@ -105,12 +111,10 @@ and unchanged). Then Lumerical: rung −1 → rung 0 → plate → intact → cr
 
 - **Rung-3 difference-field scorer** (crack − intact) in `fdtd_agreement.py` —
   the real FDTD result for cracks (LUMERICAL.md §5).
-- **Plumbing test P6** for `fdtd_agreement --horn` and `horn_source
-  --aperture-from`. Both were verified only by scratch round trips (ideal
-  export passes, flat-phase horn fails; aperture-from corr 0.99987 at offset 0,
-  0.99975 at 0.5 mm, flat phase 0.909) — worth folding into
-  `tests_plumbing.py`.
-- **SEG_LEN re-check script** (defect-signal cosine, 120 vs 240 mm) for the
+- ~~Plumbing test P6~~ **done 2026-10-02** (finding 32): the three-plane
+  source verification round-trips on synthetic exports.
+- ~~SEG_LEN re-check script~~ now `term_budget.py`'s
+  `intact_field_change_seg_120_to_240` (finding 31). Original note: (defect-signal cosine, 120 vs 240 mm) for the
   new beam — rail ends now lit 0.32 vs 0.28 of peak.
 - **`HORN_CRITERIA`** (rung −1 thresholds) are proposed; revisit after the
   first real run.
@@ -164,7 +168,7 @@ Outside the repo (read-only references):
   lab tracebacks. Report measured numbers, never extrapolated estimates.
 - **But** for quick deliverables (slides, explanations) the user has asked to
   minimise checking and go fast — match the request.
-- `python tests_plumbing.py` (~25 s) after touching anything that addresses,
+- `python tests_plumbing.py` (~1 min) after touching anything that addresses,
   reads back or compares results; `python check_notebook.py` (~1 s) after any
   notebook edit.
 - Give shell commands one per fenced `bash` block (the user runs them from Git

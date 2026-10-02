@@ -1,7 +1,8 @@
 # Reading rail3D's validation output
 
 *Last updated: 2026-10-02 · λ = 5 mm (60 GHz) · horn = RFspin H-A75-W20 at 278.5 mm
-(V9 extended with placement + upward-only checks; `term_budget.json` added;
+(rung −1 scores three source planes, rung 0 the injected plane — §9c;
+V9 extended with placement + upward-only checks; `term_budget.json` added;
 `fdtd_agreement`'s horn reference is upward-only, so psi2 = 0 at z = 30) —
 bump this line in any commit that changes a gate, a threshold, or what a field
 means.*
@@ -407,9 +408,31 @@ flat-phase horn deliberately built to FAIL), not from Lumerical. A real run is
 - `pass.fdtd_gain_in_part_spec` — the FDTD directivity inside 19–21 dBi (±0.3):
   the full-wave horn is the part.
 - `near.complex_corr` — 3λ out, what travels to the rail; gated at **0.98**.
+- `aperture.metasurface_direction` — the H-plane pattern 32.5° off boresight
+  (toward the metasurface centre), model vs FDTD, dB re boresight. A
+  far-field figure read at a near-field distance: a guide to finding 31's
+  sideways light, not a gate.
+- `slab[]` (with `--horn-slab`) — the global plane z = 150 under the horn
+  (gated) and z = 140 where the 3D monitor reaches it (reported).
+  **Read the three correlations as three different questions**:
+  `fdtd_vs_rsi_of_fdtd_aperture` (≥ 0.98) asks whether *our propagator* is
+  right — same input, so the aperture model cannot be blamed;
+  `fdtd_vs_model` (≥ 0.95) asks whether *the aperture model* is right there;
+  `model_20x20_vs_80x80` is the production quadrature (expect ≥ 0.9999).
+  If the first is low and the second high, suspect the resampling or the
+  slab export, not the physics. `level_fdtd_over_model_dB` is absolute (the
+  aperture-fit gain is carried, not refitted); `points` excludes z′ < 2 mm.
+- `source_plane` — the Import plane z = 15: the full-wave horn (FDTD
+  aperture carried down by RS-I) vs the **production** source, gated at 0.98.
+  This is the number that says whether the injected source is the real horn's
+  field at the rail.
 - The alignment line: `as-is` expected (Lumerical is exp(−iωt)); a real-valued
   or uncorrelated field reads `ambiguous`, and the conjugation warning is then
   suppressed on purpose.
+
+`fdtd_rung0.json` (rung 0) gains `source_plane` with `--injection-src`: FDTD
+0.5 mm below the Import plane vs what `horn_source.py` wrote, gated at
+**0.99** — Lumerical's import and injection, isolated.
 
 The thresholds are `HORN_CRITERIA`, marked *proposed*: revisit them after the
 first real run rather than tuning a run to them.
