@@ -40,11 +40,12 @@ next lab commands, open items, landmines. Then this file, then
   the full-wave horn. LUMERICAL.md §5.
 - **Lumerical file I/O (2026-09-29, finding 30).** The first lab run of
   `load_horn_source.lsf` stopped at `matlabload` ("cannot be opened … MATLAB
-  v7 or higher"), a message that does not distinguish missing from
-  unreadable, and the cause is not established. The loader now uses absolute
-  paths, falls back to `horn_txt/` via `readdata` (always written), and
-  creates the source only after checking sizes, E/H power and the peak E_y
-  sample. Exports use `matlabsavelegacy` (plain `matlabsave` = v7.3, which
+  v7 or higher"). The loader now uses absolute paths, falls back to
+  `horn_txt/` via `readdata` (always written), and creates the source only
+  after checking sizes, E/H power and the peak E_y sample. **Settled the same
+  day:** the lab's Lumerical found the file and still could not read
+  scipy-written `.mat`. The text copy loaded, verified and created the
+  source, so the printed `Error:` line is expected. Exports use `matlabsavelegacy` (plain `matlabsave` = v7.3, which
   scipy cannot read). FDTD bundles made before this must be regenerated.
 - `scipy` is now in `requirements.txt` — the lab venv lacked it and
   `compare_wavefronts.py --export-case` died in `horn_source.build`.

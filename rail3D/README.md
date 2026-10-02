@@ -886,8 +886,15 @@ first) · or everything at once with `python lab_report.py`.
       longer shipped on Linux), and a forum thread reports a v241
       `matlabload` regression on files that loaded in v231.
 
-    Which one the lab hit is not established. The new script covers both and
-    reports which way worked.
+    **Settled the same day: unreadable.** The re-run on the lab machine found
+    the file by absolute path, and `matlabload` still refused it: "cannot open
+    file … for reading. Please confirm the file is a MATLAB v7 file or
+    higher". The file *is* the v7 layout. The text copy then loaded and passed
+    the check (523 × 627; E and H power and the peak E_y sample match), and
+    the Import source was created. So this Lumerical build cannot read
+    scipy-written MAT v5 at all, and `readdata` is the route that works. That
+    its reader wants v7.3 (HDF5) is a guess. The absolute path still matters:
+    with a bare name, a not-found and this format refusal look identical.
 
     *The loader now.* It finds `horn_source.mat` by absolute path: first the
     bundle folder, written into the script at build time, then its own folder

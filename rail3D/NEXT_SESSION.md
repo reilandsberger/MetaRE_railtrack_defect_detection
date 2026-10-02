@@ -58,16 +58,16 @@ legacy reference — do not modify).
   `fdtd_agreement.py --horn`); `horn_source.py --aperture-from` feeds the
   full-wave horn into the rail runs. Nothing has been run in Lumerical yet.
 - **First Lumerical session (2026-09-29, finding 30):** `load_horn_source.lsf`
-  stopped at `matlabload` with "cannot be opened … MATLAB v7 or higher". That
-  message covers a missing file and an unreadable one; which it was is **not
-  established**. The loader now finds files by absolute path, falls back to a
-  plain-text copy (`horn_txt/`, always written, read with `readdata`), and
-  **checks what it loaded** (sizes, E/H power, peak E_y sample) before creating
-  the source. Every export Python reads uses **`matlabsavelegacy`** (plain
-  `matlabsave` is v7.3/HDF5, which scipy cannot read). When the user re-runs it,
-  **ask which line it printed**: `loaded and verified (matlabload)` settles
-  the file as readable; `(readdata, the text copy)` means `matlabload` cannot
-  read scipy's MAT v5 on their build.
+  stopped at `matlabload` with "cannot be opened … MATLAB v7 or higher". The
+  loader now finds files by absolute path, falls back to a plain-text copy
+  (`horn_txt/`, always written, read with `readdata`), and **checks what it
+  loaded** (sizes, E/H power, peak E_y sample) before creating the source.
+  **Re-run the same day: the file was found and `matlabload` still refused it.
+  The text copy loaded, verified (523 × 627), and the Import source was
+  created.** So the lab's Lumerical cannot read scipy-written `.mat` at all.
+  The `Error:` line it prints on every run is the caught `matlabload` failure
+  and is expected. Every export Python reads uses **`matlabsavelegacy`**
+  (plain `matlabsave` is v7.3/HDF5, which scipy cannot read).
 - **scipy** was missing from `requirements.txt`; the lab venv lacked it and
   `compare_wavefronts.py --export-case` crashed in `horn_source.build`. Fixed
   (commit 8c0c724); `preflight.py` now names missing packages.

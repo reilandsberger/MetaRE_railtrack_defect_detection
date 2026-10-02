@@ -263,7 +263,10 @@ Script File Editor and **Run**. The working directory does not matter. It:
 
 A good run prints `loaded and verified (matlabload)` or `loaded and verified
 (readdata, the text copy)`, then `created Import source 'horn_source' at z = 15
-mm`. `NO SOURCE CREATED` lists every folder it looked in. `CHECK FAILED` prints
+mm`. **On the lab machine it is always the text copy.** Its Lumerical cannot
+read scipy-written `.mat` (settled 2026-09-29, README finding 30), so every run
+first prints the caught `matlabload` error ("cannot open file … for reading …
+MATLAB v7 file or higher"). That line is expected, not a failure. `NO SOURCE CREATED` lists every folder it looked in. `CHECK FAILED` prints
 the loaded and expected numbers: send that output back. A bundle generated
 before 2026-09-29 has the old script, a bare `matlabload("horn_source.mat")`
 with no fallback and no check: regenerate it (§0).
@@ -471,7 +474,7 @@ having: PO failing on a sub-wavelength feature. Report it; do not tune it away.
 
 | symptom | cause |
 |---|---|
-| `matlabload`: "cannot be opened … MATLAB v7 or higher" | Lumerical gives this for a file it cannot find **and** for one it cannot read. Regenerate the bundle: the current `load_horn_source.lsf` uses absolute paths, falls back to `horn_txt/` and says which happened (README finding 30) |
+| `matlabload`: "cannot be opened … MATLAB v7 or higher" | Lumerical gives this for a file it cannot find **and** for one it cannot read. On the lab machine it is the second: that Lumerical cannot read scipy-written `.mat`. The current `load_horn_source.lsf` catches it and loads `horn_txt/` instead. With an older bundle, regenerate it (README finding 30) |
 | `fdtd_agreement.py` stops: "… is a MATLAB v7.3 (HDF5) file" | saved with `matlabsave`; save again with `matlabsavelegacy`, same arguments [matlabsavelegacy] |
 | `load_horn_source.lsf` prints CHECK FAILED | the load does not match what `horn_source.py` wrote (sizes, power, or the peak sample's phase). Send the printed numbers back; do not run with `VERIFY = 0` unless told to |
 | Rail is tiny, or huge | STL has no units; set File → Units → Length = mm **before** importing, or `stlimport(..., 1e-3)` [STL, stlimport] |
