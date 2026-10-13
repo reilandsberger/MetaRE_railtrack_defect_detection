@@ -184,6 +184,7 @@ field, plus parameter histograms.
 | `preflight.py` | **run before anything**: code freshness, GPU, CSVs, active geometry, every dataset with λ/date/commit, shard consistency, checkpoint stamps |
 | `generate_dataset_3d.py` | CLI generator (`--profile lab`, `--name`, `--smoke [--smoke-n N]`, `--status`; resumable shards; refuses mixed-geometry roots) |
 | `inspect_dataset.py` | review a dataset before/after generation (re-derives geometry from seeds; warns on provenance mismatch) |
+| `sample_fields.py` | one sample per class + intact, 5 × 4: d(s, y) → \|ψ\|² → phase → change vs mean intact, at the metasurface plane. Default computes FRESH for the current geometry through the generator's own `sample_meshes` / `solve_fields` (augmented, shadowed); `--root` reads a dataset's stored fields for the same seeds |
 | `tests_physics_3d.py` | V0, V0b, V0c, V1–V4 and **V9 (horn)** automated gates (CPU-safe) |
 | `validation_3d.py` | V5–V7 gates + figures (includes the 2D Hankel reference solver); `--min-t/--normal-offset` runs the V6b guard sweep, which is a study, not a gate |
 | `v8_smoke_test.py` | V8 end-to-end + kill-and-resume bit-identity + refusal/regression guards |

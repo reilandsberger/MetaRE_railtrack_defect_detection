@@ -51,6 +51,60 @@ def plan_counts(args) -> dict[str, int]:
     return counts
 
 
+def sample_meshes(section, class_name: str, i: int, files, n_arc_fine: int,
+                  n_arc_coarse: int, faces_fine=None, faces_coarse=None):
+    """Sample i of a class exactly as it goes into the dataset: the λ/8 mesh,
+    the λ/2 ray-cast occluder and the shard metadata. Shared with
+    sample_fields.py so a figure can recompute a sample the generator wrote.
+
+    Returns (v, f, v_occ, f_occ, meta)."""
+    seed = config.sample_seed(class_name, i)
+    defect = None
+    if files is not None:
+        defect = sections.match_reference_width(
+            sections.load_vertices_from_csv(files[i]), section)
+    # defect params drawn ONCE at the canonical (fine) resolution, then
+    # rendered on both grids -> fine sim mesh and coarse ray-cast occluder
+    # describe the same physical defect
+    params, aug = mesh3d.defect_params_for_sample(
+        section, class_name, defect, seed, n_arc=n_arc_fine)
+    v, f = mesh3d.sweep_rail_mesh(
+        section, defect_params=params,
+        slice_ds=config.MESH_DS, arc_ds=config.MESH_DS, n_arc=n_arc_fine,
+        roll_deg=aug["roll_deg"],
+        jitter_xz=(aug["jitter_x"], aug["jitter_z"]),
+        faces=faces_fine)
+    v_occ, f_occ = mesh3d.sweep_rail_mesh(
+        section, defect_params=params,
+        slice_ds=config.OCCLUDER_DS, arc_ds=config.OCCLUDER_DS,
+        n_arc=n_arc_coarse,
+        roll_deg=aug["roll_deg"],
+        jitter_xz=(aug["jitter_x"], aug["jitter_z"]),
+        faces=faces_coarse)
+    meta = {k2: val for k2, val in params.items()
+            if k2 not in ("profile_v", "profile_d", "csv_dev", "csv_s")}
+    meta.update(aug)
+    meta["seed"] = seed
+    meta["csv_index"] = i
+    meta["class"] = class_name
+    return v, f, v_occ, f_occ, meta
+
+
+def solve_fields(v_b, f, v_occ_b, f_occ, device, chunk_faces):
+    """(psi1, psi2) at the metasurface plane with production shadowing."""
+    X, Y = config.plane_grid(device)
+    return field3d.scattered_fields(
+        v_b, f.to(device), X, Y, config.H_MS, config.WVL, config.THETA_INC,
+        config.SIZE_ANT, config.DIST_ANT, config.RESOL_ANT,
+        chunk_faces=chunk_faces,
+        shadow=config.SHADOW_MODE,
+        shadow_occluders=(v_occ_b, f_occ.to(device)),
+        shadow_min_t=config.SHADOW_MIN_T,
+        shadow_normal_offset=config.SHADOW_NORMAL_OFFSET,
+        upward_only=True,          # only light coming UP through the metasurface
+    )
+
+
 def generate_class(
     class_name: str,
     n_samples: int,
@@ -68,10 +122,6 @@ def generate_class(
              if class_name in config.DATASET_DIRS else None)
     if files is not None and n_samples > len(files):
         raise ValueError(f"{class_name}: requested {n_samples} but only {len(files)} CSVs")
-
-    X, Y = config.plane_grid(device)
-    solve_args = (X, Y, config.H_MS, config.WVL, config.THETA_INC,
-                  config.SIZE_ANT, config.DIST_ANT, config.RESOL_ANT)
 
     faces_fine = faces_coarse = None
     B = profile.batch_meshes
@@ -91,52 +141,17 @@ def generate_class(
             vs, vs_occ = [], []
             batch_meta = []
             for i in range(start, stop):
-                seed = config.sample_seed(class_name, i)
-                defect = None
-                if files is not None:
-                    defect = sections.match_reference_width(
-                        sections.load_vertices_from_csv(files[i]), section)
-                # defect params drawn ONCE at the canonical (fine) resolution,
-                # then rendered on both grids -> fine sim mesh and coarse
-                # ray-cast occluder describe the same physical defect
-                params, aug = mesh3d.defect_params_for_sample(
-                    section, class_name, defect, seed, n_arc=n_arc_fine)
-                v, f = mesh3d.sweep_rail_mesh(
-                    section, defect_params=params,
-                    slice_ds=config.MESH_DS, arc_ds=config.MESH_DS, n_arc=n_arc_fine,
-                    roll_deg=aug["roll_deg"],
-                    jitter_xz=(aug["jitter_x"], aug["jitter_z"]),
-                    faces=faces_fine)
-                faces_fine = f
-                v_occ, f_occ = mesh3d.sweep_rail_mesh(
-                    section, defect_params=params,
-                    slice_ds=config.OCCLUDER_DS, arc_ds=config.OCCLUDER_DS,
-                    n_arc=n_arc_coarse,
-                    roll_deg=aug["roll_deg"],
-                    jitter_xz=(aug["jitter_x"], aug["jitter_z"]),
-                    faces=faces_coarse)
-                faces_coarse = f_occ
-                meta = {k2: val for k2, val in params.items()
-                        if k2 not in ("profile_v", "profile_d", "csv_dev", "csv_s")}
-                meta.update(aug)
-                meta["seed"] = seed
-                meta["csv_index"] = i
-                meta["class"] = class_name
+                v, faces_fine, v_occ, faces_coarse, meta = sample_meshes(
+                    section, class_name, i, files, n_arc_fine, n_arc_coarse,
+                    faces_fine, faces_coarse)
                 vs.append(v)
                 vs_occ.append(v_occ)
                 batch_meta.append(meta)
 
             v_b = torch.stack(vs).to(device)
             v_occ_b = torch.stack(vs_occ).to(device)
-            psi1, psi2 = field3d.scattered_fields(
-                v_b, faces_fine.to(device), *solve_args,
-                chunk_faces=profile.chunk_faces,
-                shadow=config.SHADOW_MODE,
-                shadow_occluders=(v_occ_b, faces_coarse.to(device)),
-                shadow_min_t=config.SHADOW_MIN_T,
-                shadow_normal_offset=config.SHADOW_NORMAL_OFFSET,
-                upward_only=True,          # only light coming UP through the metasurface
-            )
+            psi1, psi2 = solve_fields(v_b, faces_fine, v_occ_b, faces_coarse,
+                                      device, profile.chunk_faces)
             psis.append(torch.stack([psi1, psi2], dim=-1).cpu())
             metas.extend(batch_meta)
             n_done_new += stop - start

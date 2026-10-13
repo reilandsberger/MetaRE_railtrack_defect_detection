@@ -515,7 +515,9 @@ count / MS→detector distance), `slm_profile.py` (the trained mask: wrapped pha
 draws a labelled TARGET), `lumerical_mockup.py` (the target setup drawn into a
 Layout-window screenshot), `rail3D_pipeline.ipynb` (narrated end to end), `defect_sections.py` (CPU:
 dataset defects as red-filled cross-sections — all wear variants, and
-above-average samples of every class).
+above-average samples of every class), `sample_fields.py` (one sample per
+class + intact: geometry, |ψ|², phase and change vs intact at the metasurface;
+fresh for the current geometry, or `--root` for stored fields).
 
 ## Dataset hygiene (2026-08-17)
 
