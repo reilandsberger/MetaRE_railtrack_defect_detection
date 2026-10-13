@@ -358,7 +358,7 @@ WEAR_GAUGE_RADIUS_RANGE = (150.0, 600.0)  # worn-facet radius (mm)
 # Crown component, in a WEAR_CROWN_PROB share of wear samples: a near-flat
 # cut that lowers the running band (head loss), its depth a fraction of the
 # gauge depth so the gauge corner always carries the deepest wear.
-WEAR_CROWN_PROB = 0.4
+WEAR_CROWN_PROB = 0.5                  # crown wear is common (user, 2026-10-13)
 WEAR_CROWN_ANGLE_RANGE = (-3.0, 3.0)   # normal angle at the cut (deg)
 WEAR_CROWN_RADIUS_RANGE = (500.0, 2000.0)  # worn-crown radius (mm), near flat
 WEAR_CROWN_DEPTH_RATIO = (0.2, 0.6)    # crown depth / gauge depth

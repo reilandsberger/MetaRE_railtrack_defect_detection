@@ -173,7 +173,7 @@ its sampled depth (±5%), so crown wear never outranks the gauge corner.
 had a 6.6 mm cliff there). `wear_max_turn_deg_per_step` < 30: no crease. Compare it
 with `intact_max_turn_deg_per_step` (~7°); ~17° is the rounded seam where the
 crown and gauge cuts meet. `wear_crown_share` must be strictly between 0 and 1
-(the configured share is 0.4).
+(the configured share is 0.5).
 
 **V0 `resolution_consistency_mm`** — the same depth field rendered at λ/8 and at
 the occluder step, compared. This is what guarantees the simulation mesh and the

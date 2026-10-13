@@ -3,7 +3,7 @@
 *Last updated: 2026-10-13 · λ = 5 mm (60 GHz) · horn = RFspin H-A75-W20 (finding 29) at
 278.5 mm, lowest edge level with the metasurface; upward-only metasurface input (finding 31); the
 Import source verified at three planes by rungs −1 and 0 (finding 32) · wear is a smooth
-parametric gauge-corner cut in every sample, crown wear in 40% (finding 33) · V0–V8
+parametric gauge-corner cut in every sample, crown wear in 50% (finding 33) · V0–V8
 measured on the 5090 with the PREVIOUS horn and placement; V0–V4 and V9 re-run on the laptop with the
 new ones · Lumerical file I/O: absolute paths, text fallback, load check, `matlabsavelegacy` (finding 30)
 — bump this line in any commit that changes behaviour this file describes.*
@@ -80,7 +80,7 @@ Figs 14/23/24) and Ye et al. 2023 (*IEEE TIM*, Figs 7/9):
 |---|---|---|---|
 | `crack` | **box** divot (flat bottom, steep walls), 10–50 mm long × **1.5–3 mm** wide; longitudinal / transverse / oblique (20–70°); **always a group of 3 parallel lines**, gap = **1.6–2.2 × width** | 4–8 mm | running band + gauge corner |
 | `dent` | 2D super-Gaussian, 10–30 mm (y) × 10–30 mm (s); 20% chance of a 2–4 pit chain | 1.5–8 mm | running band |
-| `wear` | **parametric cut** (finding 33): the gauge corner flattened into a slightly convex facet (R 150–600 mm) at 30–60° from vertical in **every** sample; + a near-flat crown cut (R 500–2000 mm, depth 0.2–0.6 × the gauge depth) in **40%**; edges rounded; × y-envelope of 300–900 mm — **the whole modelled segment is worn**, only a slight end taper | 2–8 mm at the gauge corner | gauge corner (+ crown) |
+| `wear` | **parametric cut** (finding 33): the gauge corner flattened into a slightly convex facet (R 150–600 mm) at 30–60° from vertical in **every** sample; + a near-flat crown cut (R 500–2000 mm, depth 0.2–0.6 × the gauge depth) in **50%**; edges rounded; × y-envelope of 300–900 mm — **the whole modelled segment is worn**, only a slight end taper | 2–8 mm at the gauge corner | gauge corner (+ crown) |
 | `shell` | **parametric** (no CSVs): Fourier-modulated ellipse 8–20 mm + ragged interior; 30% chance of a second lobe | 1–5 mm | **gauge corner only**, centre x ∈ 20–30 mm |
 
 **Revised 2026-09-12** (user operating ranges, and the reason each class is in
@@ -197,6 +197,7 @@ field, plus parameter histograms.
 | `run_stage.py` | generate → gate → train → analyse as ONE resumable command (`--stage prelim/full`, `--with-baseline`, `--fresh`, `--bundle`); refuses short or mismatched datasets |
 | `ablate_surface.py` | 2×2 over SLM init × `w_capture` + the no-MS control (finding 24); resumable, writes `surface_ablation.json` |
 | `slm_profile.py` | the trained mask: wrapped phase, \|t\|, incident light, change from init |
+| `defect_sections.py` | rail-head cross-sections of dataset samples, removed material in red, slide-ready: `wear_sections.png` (wear seeds 0–23 in order, crown share visible) and `defect_sections.png` (4 ABOVE-AVERAGE samples per class, cut where deepest, zoom insets for crack/shell — not representative of the size spread). CPU, ~15 s |
 | `detector_layout.py` | where the trained detectors ended up — wide, slide-ready: one panel per run (SLM vs no-MS side by side) on the 150 × 75 mm detector plane, numbered windows over the defect-signal (or intact) light rebuilt through the run's own metasurface and dataset; flags a checkpoint still above the detector budget |
 | `tests_plumbing.py` | P0–P6 non-physics plumbing tests (~1 min CPU): dataset-root resolution, history schema, zero-phase ≡ baseline, slm_profile, FDTD round trip, horn source, three-plane source verification |
 | `check_notebook.py` | fresh-kernel name-ordering check for `rail3D_pipeline.ipynb` (~1 s) |
@@ -1085,7 +1086,7 @@ first) · or everything at once with `python lab_report.py`.
     capped at depth/2 so the sampled depth is realised exactly.
     - **Gauge cut, every sample:** angle 30–60°, R 150–600 mm (a slightly
       convex facet; the intact corner is R ≈ 14), depth 2–8 mm.
-    - **Crown cut, 40% of samples:** angle ±3°, R 500–2000 mm (near flat:
+    - **Crown cut, 50% of samples:** angle ±3°, R 500–2000 mm (near flat:
       head loss), depth 0.2–0.6 × the gauge depth, so the gauge corner is
       always deepest.
     - **The two are joined by a p = 4 smooth max.**
@@ -1096,12 +1097,12 @@ first) · or everything at once with `python lab_report.py`.
 
     *Measured over 400 samples:*
     - Peak at x 30.7–35.9, z −9.2…−4.0, i.e. on the gauge corner in every
-      sample. Crown share 0.38.
+      sample. Crown share 0.47 (configured 0.5).
     - Nothing on the underside. ≤ 0.03 mm on the field side for gauge-only
       samples.
     - Depth at the end of each worn run ≤ 0.04 mm (no step).
     - d·κ ≤ 0.63, so the displaced surface cannot fold.
-    - Worst surface turn per mesh step: median 7.5° vs the intact head's
+    - Worst surface turn per mesh step: median 7.8° vs the intact head's
       7.0°; ≤ 18° where the crown and gauge cuts meet.
 
     *Rejected on measurement, in order:*
@@ -1122,7 +1123,7 @@ first) · or everything at once with `python lab_report.py`.
     `analyze_results.py` breaks wear down by depth, gauge angle, crown depth
     and L. The CSVs still enumerate wear samples (seed per CSV index) but no
     longer shape them. Every dataset and checkpoint made before this is
-    refused; the prelim root is now `L5_prelim_a4feca`.
+    refused; the prelim root is now `L5_prelim_689da5`.
 
 
 ## 6b. Objective & metrics (rev. 2)
@@ -1182,8 +1183,8 @@ Done and committed on **`3D_railhead_upgrade`**:
   Import plane z = 15 against the full-wave horn; rung 0 gains `mon_src`
   (what Lumerical injected). Plumbing P6 round-trips both scorers.
 - **Wear is a smooth parametric cut (2026-10-13, finding 33):** gauge-corner
-  wear in every sample, crown wear in 40%; the CSV shape and its x = 15 cliff
-  are gone. New provenance keys → new prelim root **`L5_prelim_a4feca`**
+  wear in every sample, crown wear in 50%; the CSV shape and its x = 15 cliff
+  are gone. New provenance keys → new prelim root **`L5_prelim_689da5`**
   (replaces `6a5b8f`). V0 gates the wear shape.
 - Overview deck updated with horn / FDTD / prelim slides
   (`data/generated/rail3D_overview.pptx`, gitignored; builders in

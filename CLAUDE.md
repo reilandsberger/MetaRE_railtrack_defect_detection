@@ -5,7 +5,7 @@
 with the metasurface, metasurface input upward-only (finding 31, 2026-10-02);
 Import source verified at three planes by rungs −1/0 (finding 32) ·
 rev.3 defect model, wear rebuilt as a smooth gauge-corner cut (finding 33,
-2026-10-13; prelim root `L5_prelim_a4feca`) · prelim run 2026-09-11 on
+2026-10-13; prelim root `L5_prelim_689da5`) · prelim run 2026-09-11 on
 L5_prelim_9d5878 with the PREVIOUS horn — README findings 24 (the baseline beats
 the metasurface: an optimization failure), 25 (s0 is the dominant variable), 26
 (stale gate blocks) · Lumerical horn Import source + rung −1 — findings 27–29 ·
@@ -27,14 +27,14 @@ next lab commands, open items, landmines. Then this file, then
   sample, relatively smooth, some crown wear accepted.
 - `mesh3d._wear_cut`: each component is a circle cut (a wheel wears the
   rail). Gauge: 30–60° from vertical, R 150–600 mm, 2–8 mm deep, in EVERY
-  sample. Crown: ±3°, R 500–2000 mm, 0.2–0.6 × the gauge depth, in 40%. Edges
+  sample. Crown: ±3°, R 500–2000 mm, 0.2–0.6 × the gauge depth, in 50%. Edges
   rounded (C1, `WEAR_EDGE_SOFT`), joined by a p = 4 smooth max, band
   `"facing"` (no x mask). The CSV no longer shapes wear.
 - Measured limits, do not "simplify": R < ~120 spills across the crown; a
   normal-pushed bump carves a groove; angles to 70° truncate into a 1.8 mm
   step; p = 8 leaves a 28° crease. V0 gates peak location, run-end depth,
   turn per step and crown share.
-- `WEAR_*` constants are provenance keys → root `L5_prelim_a4feca` (was
+- `WEAR_*` constants are provenance keys → root `L5_prelim_689da5` (was
   `6a5b8f`). `analyze_results.py` breaks wear down by depth, gauge angle,
   crown depth and L. The old wear recall 0.99 may have been the cliff.
 
@@ -55,7 +55,7 @@ next lab commands, open items, landmines. Then this file, then
   creates (sideways horn light at the plane −4.4 dB, horn → detector plane
   −17 dB vs the rail's light; laptop look, no shadowing). psi2 was already
   −42 dB before the move. Signal per unit drive −3.5 to −4.9 dB.
-- New prelim root `L5_prelim_6a5b8f` (now `a4feca`, wear model); FDTD bundles + Import source must be
+- New prelim root `L5_prelim_6a5b8f` (now `689da5`, wear model); FDTD bundles + Import source must be
   rebuilt (new window/region in LUMERICAL.md). Lab: SETUP_LAB §7e.
 - **Source verification at three planes (finding 32):** rung −1 now carries a
   3D `mon_slab` (Ey only) so `fdtd_agreement.py --horn-slab` scores the
@@ -513,7 +513,9 @@ count / MS→detector distance), `slm_profile.py` (the trained mask: wrapped pha
 `fdtd_agreement.py` (Lumerical vs rail3D at z = 30 and the MS plane, horn by default;
 `--horn` is rung −1; `--injection` is rung 0; `--target`
 draws a labelled TARGET), `lumerical_mockup.py` (the target setup drawn into a
-Layout-window screenshot), `rail3D_pipeline.ipynb` (narrated end to end).
+Layout-window screenshot), `rail3D_pipeline.ipynb` (narrated end to end), `defect_sections.py` (CPU:
+dataset defects as red-filled cross-sections — all wear variants, and
+above-average samples of every class).
 
 ## Dataset hygiene (2026-08-17)
 

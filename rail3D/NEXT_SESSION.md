@@ -1,7 +1,7 @@
 # rail3D — session handoff, 2026-10-13
 
 *Last updated: 2026-10-13 (wear is a smooth parametric gauge-corner cut, finding
-33; new prelim root `L5_prelim_a4feca`) · 2026-10-02 (horn moved out to 278.5 mm,
+33; new prelim root `L5_prelim_689da5`) · 2026-10-02 (horn moved out to 278.5 mm,
 upward-only metasurface input, finding 31; Lumerical file I/O 2026-09-29, finding 30). Rewritten for a
 cold start on a new Claude account: no chat history or auto-memory is assumed.
 Everything needed is in this repo, plus the external paths listed at the end.*
@@ -39,9 +39,9 @@ legacy reference — do not modify).
   crown wear, so masking them to the gauge band left a 0 → 6.6 mm cliff at
   x = 15 and an untouched gauge corner. Wear is now a parametric cut: a
   flattened gauge corner (30–60°, R 150–600 mm, 2–8 mm deep) in **every**
-  sample, plus a near-flat crown cut in 40%, edges rounded, no step or
+  sample, plus a near-flat crown cut in 50%, edges rounded, no step or
   crease (V0 gates it). New provenance keys → prelim root
-  **`L5_prelim_a4feca`**. The old wear recall (0.99) may have been the cliff.
+  **`L5_prelim_689da5`**. The old wear recall (0.99) may have been the cliff.
   Check the new run's wear numbers before quoting them.
 - **Horn moved (2026-10-02, finding 31):** slid out along the 55° axis until
   its lowest edge is level with the metasurface (z = 150): `DIST_ANT` = 278.51
@@ -54,7 +54,7 @@ legacy reference — do not modify).
   a direct horn → detector line (−17 dB of the rail's light there; was −41).
   Baffles are the rig's answer. The user saw these numbers and kept the
   placement (2026-10-02). (Its prelim root `6a5b8f` is superseded by
-  `a4feca`, finding 33.)
+  `689da5`, finding 33.)
 - **Source verification at three planes (2026-10-02, finding 32), the user's
   next lab step:** rung −1 with the 3D `mon_slab` (global z = 150 under the
   horn) and `--horn-slab`; the Import plane z = 15 scored from the same run;
@@ -110,7 +110,7 @@ On the 5090, in order: `git pull` → `pip install -r rail3D/requirements.txt`
 (V9 must pass) → `validation_3d.py` (V5–V7 under the new horn and placement)
 → `term_budget.py --profile lab` (finding-31 table with shadowing, includes the
 SEG_LEN 120 → 240 mm check) → `run_stage.py --stage prelim --fresh
---with-baseline --bundle` (must choose `L5_prelim_a4feca`; old datasets are
+--with-baseline --bundle` (must choose `L5_prelim_689da5`; old datasets are
 refused by design) → `ablate_surface.py --stage prelim --long` → optional
 `scan_geometry.py`. Re-export the Lumerical bundles (`fdtd_intact`,
 `fdtd_crack`: the horn moved, so the Import source, window and region all
