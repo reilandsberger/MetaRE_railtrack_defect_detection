@@ -1,6 +1,6 @@
 # rail3D — Lab Workstation Setup (RTX 5090)
 
-*Last updated: 2026-10-02 · λ = 5 mm (60 GHz), V0–V8 measured on the 5090 · horn changed to the
+*Last updated: 2026-10-13 · λ = 5 mm (60 GHz), V0–V8 measured on the 5090 · horn changed to the
 RFspin H-A75-W20 on 2026-09-24 and moved out to 278.5 mm on 2026-10-02 (README
 finding 31) — re-run per §7e · Lumerical file I/O fixed 2026-09-29 (README
 finding 30): regenerate the FDTD bundles · bump this line in any
@@ -631,6 +631,14 @@ python ablate_surface.py --stage prelim --long 2>&1 | tee ../ablation_newhorn.lo
 
 Optional: `python scan_geometry.py` — H = 30λ was chosen under the old beam.
 Send back the stage bundle, `surface_ablation.json` and the two logs.
+
+Figures (gitignored, so a `git pull` never refreshes them — regenerate):
+`python setup_diagram.py` redraws `data/figures/setup_diagram.png` from the
+current config; `python detector_layout.py` draws the trained detector
+windows of the stage's SLM and no-MS runs side by side
+(`data/figures/detector_layout_*.png`). For runs from an earlier root, name
+them, e.g. `python detector_layout.py --run-name ms3d_slm_l5_prelim_9d5878
+ms3d_none_l5_prelim_9d5878`.
 
 **Lumerical** (LUMERICAL.md §5): rung −1 (`python horn_fdtd_case.py --out
 data/generated/fdtd_horn`, then `fdtd_agreement.py --horn … --horn-near …

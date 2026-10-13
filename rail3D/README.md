@@ -1,6 +1,6 @@
 # rail3D — 3D diffraction simulation + metasurface training for rail defect detection
 
-*Last updated: 2026-10-02 · λ = 5 mm (60 GHz) · horn = RFspin H-A75-W20 (finding 29) at
+*Last updated: 2026-10-13 · λ = 5 mm (60 GHz) · horn = RFspin H-A75-W20 (finding 29) at
 278.5 mm, lowest edge level with the metasurface; upward-only metasurface input (finding 31); the
 Import source verified at three planes by rungs −1 and 0 (finding 32) · V0–V8
 measured on the 5090 with the PREVIOUS horn and placement; V0–V4 and V9 re-run on the laptop with the
@@ -196,6 +196,7 @@ field, plus parameter histograms.
 | `run_stage.py` | generate → gate → train → analyse as ONE resumable command (`--stage prelim/full`, `--with-baseline`, `--fresh`, `--bundle`); refuses short or mismatched datasets |
 | `ablate_surface.py` | 2×2 over SLM init × `w_capture` + the no-MS control (finding 24); resumable, writes `surface_ablation.json` |
 | `slm_profile.py` | the trained mask: wrapped phase, \|t\|, incident light, change from init |
+| `detector_layout.py` | where the trained detectors ended up — wide, slide-ready: one panel per run (SLM vs no-MS side by side) on the 150 × 75 mm detector plane, numbered windows over the defect-signal (or intact) light rebuilt through the run's own metasurface and dataset; flags a checkpoint still above the detector budget |
 | `tests_plumbing.py` | P0–P6 non-physics plumbing tests (~1 min CPU): dataset-root resolution, history schema, zero-phase ≡ baseline, slm_profile, FDTD round trip, horn source, three-plane source verification |
 | `check_notebook.py` | fresh-kernel name-ordering check for `rail3D_pipeline.ipynb` (~1 s) |
 | `target_figures.py` | what a successful result would look like — labelled TARGET, never a measurement |

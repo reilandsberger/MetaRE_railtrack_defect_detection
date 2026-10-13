@@ -53,7 +53,7 @@ def setup_diagram(save_path=None, show=False):
     side_xlim = (min(x_lo, -rail_w / 2) - margin, horn_c[0] + margin)
     side_ylim = (config.Z_CUT - margin, z_det + margin)
 
-    fig = plt.figure(figsize=(15, 5.5))
+    fig = plt.figure(figsize=(17, 5.5))     # 15 wide put the 3D z-label onto the side view's
 
     # --- 3D view -----------------------------------------------------------
     ax = fig.add_subplot(1, 3, 1, projection="3d")
@@ -86,9 +86,12 @@ def setup_diagram(save_path=None, show=False):
             label=f"horn (A={config.SIZE_ANT[0]:.1f} mm)")
     ax.annotate("", xy=(0, 0), xytext=(horn_c[0], horn_c[2]),
                 arrowprops=dict(arrowstyle="->", color="tab:red", lw=0.9))
-    ax.text(horn_c[0] * 0.55, horn_c[2] * 0.62,
-            f"{config.DIST_ANT:.0f} mm @ {np.degrees(config.THETA_INC):.0f}°",
-            fontsize=8, color="tab:red")
+    # label beside the beam, not on it: offset perpendicular to it, below-right
+    nrm = np.array([np.cos(config.THETA_INC), -np.sin(config.THETA_INC)])
+    lx, lz = np.array([horn_c[0], horn_c[2]]) * 0.5 + 14 * nrm
+    ax.text(lx, lz, f"{config.DIST_ANT:.1f} mm @ {np.degrees(config.THETA_INC):.0f}°",
+            fontsize=8, color="tab:red", ha="left", va="top",
+            rotation=np.degrees(np.arctan2(horn_c[2], horn_c[0])), rotation_mode="anchor")
     x_ann = x_lo - 15
     ax.annotate("", xy=(x_ann, z_ms), xytext=(x_ann, 0),
                 arrowprops=dict(arrowstyle="<->", lw=0.8))
@@ -131,12 +134,15 @@ def setup_diagram(save_path=None, show=False):
     fig.suptitle(
         f"rail3D simulated setup — λ={config.WVL:.1f} mm ({freq_ghz:.1f} GHz), "
         f"dx={config.DX:.1f} mm, grid {config.NX}x{config.NY}, horn "
-        f"{config.DIST_ANT:.0f} mm @ {np.degrees(config.THETA_INC):.0f}°, "
+        f"{config.DIST_ANT:.1f} mm @ {np.degrees(config.THETA_INC):.0f}° (lowest edge at "
+        f"z={config.HORN_LOWER_EDGE_Z:.0f}), "
         f"crown→MS {z_ms:.0f} mm, MS→det {d_det:.0f} mm, "
         f"segment {config.SEG_LEN:.0f} mm",
         fontsize=10,
     )
-    fig.tight_layout(rect=(0, 0, 1, 0.95))
+    # explicit margins: tight_layout ignores the 3D axes' z-label (it landed on
+    # the side view's) and clipped the side view's x-label
+    fig.subplots_adjust(left=0.02, right=0.99, bottom=0.11, top=0.86, wspace=0.3)
     if save_path:
         fig.savefig(save_path, dpi=200)
     if show:
