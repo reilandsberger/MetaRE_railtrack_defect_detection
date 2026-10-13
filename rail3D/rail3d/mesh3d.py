@@ -90,9 +90,14 @@ def region_band(geom: dict, band: str) -> np.ndarray:
 
     'crack'  — running band + gauge corner: upward-facing surface (n_z high),
                excluding the steep sides ("approximately the top", user spec).
-    'gauge'  — horn-facing (+x) shoulder/corner band for wear & shelling.
+    'gauge'  — horn-facing (+x) shoulder/corner band for shelling.
+    'facing' — every surface that does not face downward (crown, both
+               corners, both vertical faces), no x window: for wear, whose
+               profile places itself and must not be clipped into a step.
     """
     x, nz = geom["x"], geom["normal"][:, 1]
+    if band == "facing":
+        return np.clip((nz + 0.15) / 0.15, 0, 1)
     if band == "crack":
         w = _smooth_window(x, -config.CROWN_HALF_WIDTH, config.GAUGE_X_MAX, 4.0)
         return w * np.clip((nz - 0.25) / 0.15, 0, 1)     # fade out on steep sides
@@ -172,6 +177,56 @@ def _u(gen, lo, hi):
     return float(torch.empty(1).uniform_(lo, hi, generator=gen))
 
 
+def _wear_cut(geom: dict, angle_deg: float, depth: float, radius: float,
+              soft: float = config.WEAR_EDGE_SOFT) -> tuple[np.ndarray, float]:
+    """One wear cut: (depth along the inward normal per arc point, s of the cut).
+
+    The worn surface is a circle of ``radius`` whose outward normal at its
+    deepest point is at ``angle_deg`` from vertical, lying ``depth`` inside the
+    intact head's support line in that direction; the lens of head outside it
+    goes.
+    Each arc point moves along -n until it lands on the circle. The cut's edge
+    is rounded by a C1 quadratic ramp over +-``soft`` mm of radial excess, so
+    the profile has neither a step nor a crease where the cut meets the head.
+
+    The support point is refined parabolically between arc samples, so the
+    fine mesh and the coarse occluder (different arc grids) render the SAME
+    cut -- the resolution-independence V0(c) asks of every class."""
+    soft = min(soft, 0.5 * depth)                     # keep the sampled depth
+    a = math.radians(angle_deg)
+    m = np.array([math.sin(a), math.cos(a)])          # cut normal (x, z)
+    mt = np.array([m[1], -m[0]])                      # along the cut
+    pts, n = geom["pts"], geom["normal"]
+    facing = n[:, 1] > -0.05                          # never the underside
+    h = np.where(facing, pts @ m, -np.inf)
+    i = int(np.clip(np.argmax(h), 1, len(h) - 2))
+    h0, h1, h2 = h[i - 1], h[i], h[i + 1]
+    den = h0 - 2 * h1 + h2
+    f = 0.0 if not np.isfinite(den) or den >= 0 else float(np.clip(0.5 * (h0 - h2) / den, -1, 1))
+    h_star = h1 - 0.25 * (h0 - h2) * f if f else h1
+    j = i + f
+    t_star = float(np.interp(j, np.arange(len(h)), pts @ mt))
+    s_cut = float(np.interp(j, np.arange(len(h)), geom["s"]))
+    centre = (h_star - depth - radius) * m + t_star * mt
+    rel = pts - centre
+    r = np.linalg.norm(rel, axis=1)
+    g = r - radius                                    # > 0: outside the worn surface
+    # Only the LENS the circle bites off: the contiguous run around the cut
+    # point. Further round the head the profile can lie outside the circle
+    # again (it is not a supporting circle of the whole head), and that is
+    # not wear.
+    lo = hi = i
+    while lo > 0 and g[lo - 1] > -soft and facing[lo - 1]:
+        lo -= 1
+    while hi < len(g) - 1 and g[hi + 1] > -soft and facing[hi + 1]:
+        hi += 1
+    lens = np.zeros(len(g), dtype=bool)
+    lens[lo:hi + 1] = True
+    ramp = np.where(g > soft, g, np.where(g < -soft, 0.0, (g + soft) ** 2 / (4 * soft)))
+    cos_nr = np.einsum("ij,ij->i", n, rel / r[:, None])
+    return np.where(lens, ramp / np.clip(cos_nr, 0.25, 1.0), 0.0), s_cut
+
+
 def sample_defect_params(class_name: str, gen: torch.Generator,
                          geom: dict, csv_profile: dict | None = None) -> dict:
     """Draw one defect instance. All lengths in mm; angles in radians.
@@ -181,8 +236,10 @@ def sample_defect_params(class_name: str, gen: torch.Generator,
             in. Across-line profile = measured CSV notch (unit-normalized);
             depth from the CSV, clipped to the measured 2-6.9 mm range.
     dent  : super-Gaussian pit(s); footprint/depth per Ye 2018 Table 1 rows 4-5.
-    wear  : CSV cross-section deviation masked to the gauge band, long
-            super-Gaussian y-envelope (unchanged philosophy).
+    wear  : smooth parametric cross-section -- a gauge-corner cut in every
+            sample, plus a near-flat crown cut in a WEAR_CROWN_PROB share
+            (_wear_cut) -- times a long super-Gaussian y-envelope. Does not
+            consume the CSV (README finding 33).
     shell : parametric ragged patch on the gauge shoulder (no CSVs exist);
             Fourier-modulated ellipse + interior roughness per Ye 2023 Fig 9.
     """
@@ -216,7 +273,7 @@ def sample_defect_params(class_name: str, gen: torch.Generator,
         # a quarter of a mesh cell, i.e. as vertical as the lambda/8 grid can
         # carry; a true discontinuity would only alias. Flat bottom, so the
         # divot is a rectangular prism.
-        # NOTE: crack no longer consumes csv_profile. The CSVs still drive wear.
+        # NOTE: crack no longer consumes csv_profile (nor, since 2026-10-13, wear).
         half = 0.5 * w_hair
         edge = 0.25 * config.MESH_DS
         v = np.array([-half - edge, -half, half, half + edge])
@@ -252,22 +309,28 @@ def sample_defect_params(class_name: str, gen: torch.Generator,
 
     elif class_name == "wear":
         L = _u(gen, *config.DEFECT_LENGTH_RANGE["wear"])
-        # The CSV supplies the worn cross-section SHAPE (normalized to unit
-        # peak); the depth is sampled, so wear no longer inherits raw CSV
-        # depths that reached 12.5 mm.
-        # Normalize by the peak INSIDE the gauge band, not the global peak: many
-        # wear CSVs have their deepest point on the crown or field side, which
-        # the band mask removes — normalizing globally then left the realized
-        # depth far below the sampled value (measured 0.34 mm for a 2-8 mm draw).
-        dev = csv_profile["dev"].copy() if csv_profile else None
-        if dev is not None:
-            peak_in_band = float((dev * region_band(geom, "gauge")).max())
-            if peak_in_band > 1e-6:
-                dev = dev / peak_in_band
-        p.update(L=L, band="gauge",
-                 csv_dev=dev,
-                 csv_s=csv_profile["s_dev"] if csv_profile else None,
-                 depth=_u(gen, *config.WEAR_DEPTH_RANGE))
+        # Parametric since 2026-10-13 (README finding 33). The measured CSV
+        # shape is NOT used: 90% of the wear CSVs are worn deepest on the
+        # crown, so masking them to the gauge band left a step at x = 15 and
+        # nothing at the corner. Every draw below happens for every sample,
+        # crown or not, so the RNG stream (and the augmentation drawn after
+        # it) does not depend on the crown coin.
+        ang = _u(gen, *config.WEAR_GAUGE_ANGLE_RANGE)
+        radius = _u(gen, *config.WEAR_GAUGE_RADIUS_RANGE)
+        depth = _u(gen, *config.WEAR_DEPTH_RANGE)
+        crown = _u(gen, 0, 1) < config.WEAR_CROWN_PROB
+        c_ang = _u(gen, *config.WEAR_CROWN_ANGLE_RANGE)
+        c_radius = _u(gen, *config.WEAR_CROWN_RADIUS_RANGE)
+        ratio = _u(gen, *config.WEAR_CROWN_DEPTH_RATIO)
+        # the cuts are rebuilt on each render grid (_wear_cut); s0 / crown_s0
+        # are where they bite on THIS grid, kept for analysis only
+        p.update(L=L, band="facing", depth=depth, gauge_angle_deg=ang,
+                 gauge_radius=radius,
+                 s0=_wear_cut(geom, ang, depth, radius)[1],
+                 crown=bool(crown), crown_angle_deg=c_ang, crown_radius=c_radius,
+                 crown_depth=ratio * depth if crown else 0.0,
+                 crown_s0=_wear_cut(geom, c_ang, ratio * depth, c_radius)[1]
+                 if crown else None)
 
     elif class_name == "shell":
         r_s = _u(gen, *config.SHELL_RADIUS_RANGE)     # semi-axes (mm)
@@ -349,10 +412,15 @@ def render_depth_field(p: dict, geom: dict, y_slices: np.ndarray) -> np.ndarray:
             d = np.maximum(d, scale * p["depth"] * np.exp(-k * r2))
 
     elif cls == "wear":
-        if p.get("csv_dev") is not None:
-            dev = p["depth"] * np.interp(s, p["csv_s"], p["csv_dev"])
-        else:
-            dev = p["depth"] * np.ones_like(s)
+        dev, _ = _wear_cut(geom, p["gauge_angle_deg"], p["depth"], p["gauge_radius"])
+        if p["crown_depth"] > 0:
+            dc, _ = _wear_cut(geom, p["crown_angle_deg"], p["crown_depth"],
+                              p["crown_radius"])
+            # smooth union of the two cuts: = max where one dominates, rounded
+            # where they cross. p = 4 measured best: the worst surface turn
+            # per mesh step is 18 deg (p = 8: 28; intact head: 7) for at most
+            # 0.7 mm extra depth, only in the blend (2**(1/4) where equal)
+            dev = (dev ** 4 + dc ** 4) ** 0.25
         g_y = np.exp(-math.log(2) * (2 * Y[:, 0] / p["L"]) ** 8)
         d = g_y[:, None] * dev[None, :]
 
@@ -518,7 +586,7 @@ def build_sample_mesh(
     geom = arc_geometry(section_intact, n_arc if n_arc is not None
                         else default_arc_count(section_intact, arc_ds or slice_ds))
     csv_profile = None
-    if section_defect is not None and class_name in ("crack", "dent", "wear"):
+    if section_defect is not None and class_name in ("crack", "dent"):
         csv_profile = extract_csv_profile(section_intact, section_defect, geom["n_arc"])
 
     params = sample_defect_params(class_name, gen, geom, csv_profile)
@@ -551,7 +619,7 @@ def defect_params_for_sample(
     gen.manual_seed(seed)
     geom = arc_geometry(section_intact, n_arc)
     csv_profile = None
-    if section_defect is not None and class_name in ("crack", "dent", "wear"):
+    if section_defect is not None and class_name in ("crack", "dent"):
         csv_profile = extract_csv_profile(section_intact, section_defect, geom["n_arc"])
     params = sample_defect_params(class_name, gen, geom, csv_profile)
     aug = sample_augmentation(gen)

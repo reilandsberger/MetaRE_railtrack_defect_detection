@@ -1,10 +1,11 @@
 # CLAUDE.md — MetaRE railtrack defect detection
 
-*Last updated: 2026-10-02 · λ = 5 mm (60 GHz) · horn = physical RFspin H-A75-W20
+*Last updated: 2026-10-13 · λ = 5 mm (60 GHz) · horn = physical RFspin H-A75-W20
 (README finding 29, 2026-09-24), moved out to 278.5 mm with its lowest edge level
 with the metasurface, metasurface input upward-only (finding 31, 2026-10-02);
 Import source verified at three planes by rungs −1/0 (finding 32) ·
-rev.3 defect model · prelim run 2026-09-11 on
+rev.3 defect model, wear rebuilt as a smooth gauge-corner cut (finding 33,
+2026-10-13; prelim root `L5_prelim_a4feca`) · prelim run 2026-09-11 on
 L5_prelim_9d5878 with the PREVIOUS horn — README findings 24 (the baseline beats
 the metasurface: an optimization failure), 25 (s0 is the dominant variable), 26
 (stale gate blocks) · Lumerical horn Import source + rung −1 — findings 27–29 ·
@@ -16,9 +17,28 @@ offset 0.3).*
 
 **Read `rail3D/NEXT_SESSION.md` first** — the current handoff: state, the exact
 next lab commands, open items, landmines. Then this file, then
-`rail3D/README.md` (§4 conventions, §6 findings — 32 is the newest).
+`rail3D/README.md` (§4 conventions, §6 findings — 33 is the newest).
 
-## Horn move (2026-10-02) — the newest state
+## Wear model (2026-10-13) — the newest state
+
+- The 40 wear CSVs are 90% **crown** wear (deepest at median x ≈ −10), so
+  masking them to the gauge band (x 15–38) left a 0 → 6.6 mm cliff at x = 15
+  and an untouched gauge corner. User decision: gauge-head wear in every
+  sample, relatively smooth, some crown wear accepted.
+- `mesh3d._wear_cut`: each component is a circle cut (a wheel wears the
+  rail). Gauge: 30–60° from vertical, R 150–600 mm, 2–8 mm deep, in EVERY
+  sample. Crown: ±3°, R 500–2000 mm, 0.2–0.6 × the gauge depth, in 40%. Edges
+  rounded (C1, `WEAR_EDGE_SOFT`), joined by a p = 4 smooth max, band
+  `"facing"` (no x mask). The CSV no longer shapes wear.
+- Measured limits, do not "simplify": R < ~120 spills across the crown; a
+  normal-pushed bump carves a groove; angles to 70° truncate into a 1.8 mm
+  step; p = 8 leaves a 28° crease. V0 gates peak location, run-end depth,
+  turn per step and crown share.
+- `WEAR_*` constants are provenance keys → root `L5_prelim_a4feca` (was
+  `6a5b8f`). `analyze_results.py` breaks wear down by depth, gauge angle,
+  crown depth and L. The old wear recall 0.99 may have been the cliff.
+
+## Horn move (2026-10-02)
 
 - **The horn slid out along its 55° axis until its lowest point (outer lower
   aperture edge) is level with the metasurface**: `config.HORN_LOWER_EDGE_Z =
@@ -35,7 +55,7 @@ next lab commands, open items, landmines. Then this file, then
   creates (sideways horn light at the plane −4.4 dB, horn → detector plane
   −17 dB vs the rail's light; laptop look, no shadowing). psi2 was already
   −42 dB before the move. Signal per unit drive −3.5 to −4.9 dB.
-- New prelim root `L5_prelim_6a5b8f`; FDTD bundles + Import source must be
+- New prelim root `L5_prelim_6a5b8f` (now `a4feca`, wear model); FDTD bundles + Import source must be
   rebuilt (new window/region in LUMERICAL.md). Lab: SETUP_LAB §7e.
 - **Source verification at three planes (finding 32):** rung −1 now carries a
   3D `mon_slab` (Ey only) so `fdtd_agreement.py --horn-slab` scores the
@@ -360,8 +380,8 @@ Read the section top to bottom before changing physics, geometry or the objectiv
   sampled, never clipped. `y0` is ±10 mm on purpose (the sensor rides the train
   along y, so defects pass the beam center); `s0` stays broadly sampled.
 - Known quirks to keep: `extract_csv_profile` needs its 20th-percentile baseline
-  correction (width-matching inflates loops); wear's CSV shape is normalized by
-  its peak *inside the gauge band*, not globally; shell samples may land on the
+  correction (width-matching inflates loops); (wear's CSV shape is no longer
+  used — finding 33); shell samples may land on the
   vertical head side (x≈38.5) — geometrically intended; on tiny smoke splits the
   calibrated FPR is degenerate (3 intact val samples), fine on the real set.
 

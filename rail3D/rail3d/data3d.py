@@ -91,6 +91,10 @@ PROVENANCE_KEYS = ("WVL", "DX", "NX", "NY", "H_MS", "PLANE_X_CENTER", "SEG_LEN",
                    "DENT_FOOTPRINT_Y", "DENT_FOOTPRINT_S",
                    "SHELL_RADIUS_RANGE", "SHELL_DEPTH_RANGE",
                    "WEAR_DEPTH_RANGE",
+                   "WEAR_GAUGE_ANGLE_RANGE", "WEAR_GAUGE_RADIUS_RANGE",
+                   "WEAR_CROWN_PROB", "WEAR_CROWN_ANGLE_RANGE",
+                   "WEAR_CROWN_RADIUS_RANGE", "WEAR_CROWN_DEPTH_RATIO",
+                   "WEAR_EDGE_SOFT",
                    "CRACK_LINE_COUNT", "CRACK_LINE_GAP_FACTOR",
                    "SHELL_GAUGE_X_RANGE")
 

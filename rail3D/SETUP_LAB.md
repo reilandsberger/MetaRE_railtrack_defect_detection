@@ -2,7 +2,8 @@
 
 *Last updated: 2026-10-13 · λ = 5 mm (60 GHz), V0–V8 measured on the 5090 · horn changed to the
 RFspin H-A75-W20 on 2026-09-24 and moved out to 278.5 mm on 2026-10-02 (README
-finding 31) — re-run per §7e · Lumerical file I/O fixed 2026-09-29 (README
+finding 31) — re-run per §7e · wear rebuilt as a smooth gauge-corner cut on
+2026-10-13 (README finding 33; root `L5_prelim_a4feca`) · Lumerical file I/O fixed 2026-09-29 (README
 finding 30): regenerate the FDTD bundles · bump this line in any
 commit that changes behaviour this file describes. Timings are now MEASURED
 at λ=5 on the lab 5090 (2026-09-04), not extrapolated.*
@@ -575,14 +576,16 @@ init` line.
 
 ---
 
-## 7e. After the horn change (2026-09-24) and the horn move (2026-10-02) — the lab re-run
+## 7e. After the horn change (2026-09-24), the horn move (2026-10-02) and the wear model (2026-10-13) — the lab re-run
 
 The horn is now the physical **RFspin H-A75-W20** (README finding 29), and since
 2026-10-02 it sits 278.5 mm out with its lowest edge level with the metasurface
-(finding 31). `SIZE_ANT`, `HORN_FLARE_K`, `HORN_SAMPLING` and `DIST_ANT` are
+(finding 31). Since 2026-10-13 wear is a smooth parametric gauge-corner cut
+(+ crown wear in 40%), not a masked CSV profile (finding 33). `SIZE_ANT`,
+`HORN_FLARE_K`, `HORN_SAMPLING`, `DIST_ANT` and the `WEAR_*` constants are
 provenance keys, so every dataset and checkpoint made before is **refused, by
 design**, and the next stage run generates into a fresh auto-suffixed root
-(`L5_prelim_6a5b8f`). In order:
+(`L5_prelim_a4feca`). In order:
 
 ```bash
 cd ~/Documents/Rei/MetaRE_railtrack_defect_detection && git pull && pip install -r rail3D/requirements.txt
@@ -622,8 +625,11 @@ mid-span). Send back `data/generated/term_budget.json` and the log.
 python run_stage.py --stage prelim --fresh --with-baseline --bundle 2>&1 | tee ../prelim_newhorn.log
 ```
 
-~0.6 h + ~6 min of training. The banner must name `L5_prelim_6a5b8f` (not
-`L5_prelim_9d5878`, and not `ee8367`, which was the 140 mm placement). Then the open optimiser question (§7c) on that root:
+~0.6 h + ~6 min of training. The banner must name `L5_prelim_a4feca` (not
+`L5_prelim_9d5878`; not `ee8367`, the 140 mm placement; not `6a5b8f`, the CSV
+wear model). Wear is no longer guaranteed to be the easy class: in
+`analyze_results.py` read its recall against `gauge_angle_deg` and
+`crown_depth`. Then the open optimiser question (§7c) on that root:
 
 ```bash
 python ablate_surface.py --stage prelim --long 2>&1 | tee ../ablation_newhorn.log

@@ -190,9 +190,37 @@ def test_v0_geometry() -> dict:
         if (nz < -0.3).any():
             band_ok = False
             res[f"{cls}_on_underside"] = True
-        if cls in ("wear", "shell") and geom["x"][cols].min() < config.GAUGE_X_MIN - 5:
+        if cls == "shell" and geom["x"][cols].min() < config.GAUGE_X_MIN - 5:
             band_ok = False
             res[f"{cls}_off_gauge_band"] = True
+    # wear (README finding 33): crown wear is allowed now, so the band test is
+    # on the PEAK -- every sample's deepest point on the gauge corner -- plus
+    # the two ways the old CSV model went wrong: a step where the worn region
+    # ends (it had a 6.6 mm cliff at x = 15), and a crease in the worn surface.
+    wear_ok, worst_end, worst_turn, n_crown = True, 0.0, 0.0, 0
+    t0 = np.diff(geom["pts"], axis=0)
+    turn0 = np.degrees(np.abs(np.diff(np.unwrap(np.arctan2(t0[:, 1], t0[:, 0]))))).max()
+    for k in range(40):
+        p, _ = mesh3d.defect_params_for_sample(section, "wear", None,
+                                               config.sample_seed("wear", k),
+                                               n_arc=geom["n_arc"])
+        d = mesh3d.render_depth_field(p, geom, np.array([0.0]))[0]
+        n_crown += int(p["crown"])
+        on = np.flatnonzero(d > 1e-6)
+        worst_end = max(worst_end, float(d[on[0]]), float(d[on[-1]]))
+        tw = np.diff(geom["pts"] - d[:, None] * geom["normal"], axis=0)
+        worst_turn = max(worst_turn, float(np.degrees(np.abs(np.diff(
+            np.unwrap(np.arctan2(tw[:, 1], tw[:, 0]))))).max()))
+        if (geom["x"][int(np.argmax(d))] < config.GAUGE_X_MIN
+                or abs(d.max() - p["depth"]) > 0.05 * p["depth"]):
+            wear_ok = False
+    res["wear_peak_on_gauge_corner"] = bool(wear_ok)
+    res["wear_max_end_depth_mm"] = worst_end
+    res["wear_max_turn_deg_per_step"] = worst_turn
+    res["intact_max_turn_deg_per_step"] = float(turn0)
+    res["wear_crown_share"] = n_crown / 40
+    band_ok = (band_ok and wear_ok and worst_end < 0.1 and worst_turn < 30.0
+               and 0 < n_crown < 40)
     res["bands_ok"] = bool(band_ok)
 
     # (c) resolution independence + seed reproducibility (shell has the most

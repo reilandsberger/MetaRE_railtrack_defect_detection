@@ -2,7 +2,8 @@
 
 *Last updated: 2026-10-13 · λ = 5 mm (60 GHz) · horn = RFspin H-A75-W20 (finding 29) at
 278.5 mm, lowest edge level with the metasurface; upward-only metasurface input (finding 31); the
-Import source verified at three planes by rungs −1 and 0 (finding 32) · V0–V8
+Import source verified at three planes by rungs −1 and 0 (finding 32) · wear is a smooth
+parametric gauge-corner cut in every sample, crown wear in 40% (finding 33) · V0–V8
 measured on the 5090 with the PREVIOUS horn and placement; V0–V4 and V9 re-run on the laptop with the
 new ones · Lumerical file I/O: absolute paths, text fallback, load check, `matlabsavelegacy` (finding 30)
 — bump this line in any commit that changes behaviour this file describes.*
@@ -79,7 +80,7 @@ Figs 14/23/24) and Ye et al. 2023 (*IEEE TIM*, Figs 7/9):
 |---|---|---|---|
 | `crack` | **box** divot (flat bottom, steep walls), 10–50 mm long × **1.5–3 mm** wide; longitudinal / transverse / oblique (20–70°); **always a group of 3 parallel lines**, gap = **1.6–2.2 × width** | 4–8 mm | running band + gauge corner |
 | `dent` | 2D super-Gaussian, 10–30 mm (y) × 10–30 mm (s); 20% chance of a 2–4 pit chain | 1.5–8 mm | running band |
-| `wear` | CSV cross-section shape × y-envelope of 300–900 mm — i.e. **the whole modelled segment is worn**, only a slight end taper | 2–8 mm | horn-facing shoulder |
+| `wear` | **parametric cut** (finding 33): the gauge corner flattened into a slightly convex facet (R 150–600 mm) at 30–60° from vertical in **every** sample; + a near-flat crown cut (R 500–2000 mm, depth 0.2–0.6 × the gauge depth) in **40%**; edges rounded; × y-envelope of 300–900 mm — **the whole modelled segment is worn**, only a slight end taper | 2–8 mm at the gauge corner | gauge corner (+ crown) |
 | `shell` | **parametric** (no CSVs): Fourier-modulated ellipse 8–20 mm + ragged interior; 30% chance of a second lobe | 1–5 mm | **gauge corner only**, centre x ∈ 20–30 mm |
 
 **Revised 2026-09-12** (user operating ranges, and the reason each class is in
@@ -90,7 +91,8 @@ the simulation):
   sharp edge is the feature distinguishing a crack from the smooth
   super-Gaussian `dent`, which is exactly the discrimination the first
   classifier failed (it collapsed 55% of dents into "crack"). Crack no longer
-  consumes a CSV profile at all; the CSVs still drive `wear`.
+  consumes a CSV profile at all. (Since 2026-10-13 neither does `wear` —
+  finding 33 — so no class uses the CSV profile shape any more.)
 - **`crack` is always a group of three**, not a 30% chance of 2–3. Hairline
   cracks form in clusters in locally worn regions, never singly. The three
   lines share shape, depth, length and orientation and are offset
@@ -124,11 +126,9 @@ the simulation):
 `CRACK_LINE_COUNT`, `CRACK_LINE_GAP_RANGE` and `SHELL_GAUGE_X_RANGE` are
 **provenance keys**, so every dataset generated before this change is refused.
 
-All depths are **sampled uniformly** from the ranges above; for `wear` the CSV
-supplies the across-defect profile *shape* only. For wear the shape is normalized by its peak
-**inside the gauge band** — normalizing globally left realized depth far below the
-sampled value, because many wear CSVs have their deepest point on the crown or
-field side, which the band mask removes.
+All depths are **sampled uniformly** from the ranges above. (Until 2026-10-13 the
+wear CSV supplied wear's across-head *shape*, masked to the gauge band; finding
+33 has why that produced a cliff instead of gauge wear.)
 
 ### Where the numbers come from
 
@@ -141,8 +141,8 @@ ragged and multi-lobed; Fig. 7 shows squat chains and two-lobe shelling.
 
 The ranges in the table above are the **operating ranges for this system**,
 widened from those measurements to cover the severities it must handle. Neither
-paper characterizes gauge-corner wear, so wear's extent and depth are set from
-domain knowledge, not measurement.
+paper characterizes gauge-corner wear, so wear's extent, depth and shape are set
+from domain knowledge, not measurement.
 
 **`y0` (along-track defect position) is near zero by construction** — ±10 mm,
 not spread over the aperture. The horn boresights the crown at y = 0 and the
@@ -158,10 +158,11 @@ the coarse ray-cast occluder (λ/2) render the *same* physical defect.
 (crack median 7.8 mm, p95 10.8; dent median 2.5, p95 3.7) overshoot the
 measured ranges, so clipping them pinned 66% of cracks at exactly 6.9 mm and
 49% of dents at 2.5 mm — destroying depth diversity. The CSV supplies the
-across-defect profile *shape*; depth is drawn uniformly from the operating
-range (`config.py`, one block — wear included, `WEAR_DEPTH_RANGE`; its raw
-CSV depths reached ~12.5 mm, which only made the easiest class easier).
-Wear remains by far the strongest signal; expect it to separate first.
+across-defect profile *shape* (no class uses it since 2026-10-13); depth is drawn
+uniformly from the operating range (`config.py`, one block — wear included,
+`WEAR_DEPTH_RANGE`; its raw CSV depths reached ~12.5 mm, which only made the
+easiest class easier). Wear was by far the strongest signal under the CSV
+model — partly, perhaps, because of the cliff (finding 33); re-check it.
 
 Check any dataset with `python inspect_dataset.py [--root ...]`: it re-derives
 each stored sample's geometry from its seed and shows it next to the stored
@@ -1061,6 +1062,68 @@ first) · or everything at once with `python lab_report.py`.
     both scorers: aperture 0.9999, z = 150 slab 0.9997 / 1.0000 at +0.01 dB,
     Import plane 0.9999 at +0.05 dB, injection 1.0000.
 
+33. **Wear is a parametric cut at the gauge corner, not a masked CSV
+    profile.** (2026-10-13, user request: gauge-head wear in more of the
+    real runs, "relatively smooth", some crown wear still accepted.)
+
+    *What was wrong.* Wear took its across-head shape from a measured wear
+    CSV, multiplied by the `gauge` band mask (x 15–38). Across the 40 wear
+    CSVs the deepest point sits at median **x ≈ −10 mm**, and 90% are deepest
+    left of x = 15, so they are **crown** wear. The mask therefore kept the
+    tail of a crown profile: a cliff from 0 to ~6.6 mm within ~3 mm at x = 15
+    (the "one strip" in the d(s, y) map), a bumpy dashed edge, and the gauge
+    corner and face themselves untouched. The prelim run's wear recall of
+    0.99 may be partly that cliff, which is an untested hypothesis. Read
+    the new run's wear numbers without assuming they carry over.
+
+    *The model* (`mesh3d._wear_cut`, constants in one `config.py` block, all
+    provenance keys). A wheel wears a rail by cutting it, so each wear
+    component is a circle of radius R lying `depth` inside the head's support
+    line at a normal angle from vertical. The lens of head outside the circle
+    is removed: each arc point moves along −n̂ until it lands on the circle.
+    The cut edges are rounded by a C1 ramp over ±2 mm of radial excess,
+    capped at depth/2 so the sampled depth is realised exactly.
+    - **Gauge cut, every sample:** angle 30–60°, R 150–600 mm (a slightly
+      convex facet; the intact corner is R ≈ 14), depth 2–8 mm.
+    - **Crown cut, 40% of samples:** angle ±3°, R 500–2000 mm (near flat:
+      head loss), depth 0.2–0.6 × the gauge depth, so the gauge corner is
+      always deepest.
+    - **The two are joined by a p = 4 smooth max.**
+
+    The cut is rebuilt on each render grid, and the support point is
+    refined parabolically, so the λ/8 mesh and the λ/2 occluder carry the
+    same wear (≤ 0.11 mm apart in d).
+
+    *Measured over 400 samples:*
+    - Peak at x 30.7–35.9, z −9.2…−4.0, i.e. on the gauge corner in every
+      sample. Crown share 0.38.
+    - Nothing on the underside. ≤ 0.03 mm on the field side for gauge-only
+      samples.
+    - Depth at the end of each worn run ≤ 0.04 mm (no step).
+    - d·κ ≤ 0.63, so the displaced surface cannot fold.
+    - Worst surface turn per mesh step: median 7.5° vs the intact head's
+      7.0°; ≤ 18° where the crown and gauge cuts meet.
+
+    *Rejected on measurement, in order:*
+    1. A raised-cosine bump pushed in along the normal. On the convex corner
+       it carves a GROOVE, not a flat.
+    2. Gauge R < ~120 mm. The circle cannot clear the flat crown, and its
+       lens spills across the head to the field side.
+    3. Angles up to 70°. Deep cuts run down the face into the under-head
+       turn and are truncated, leaving a 1.8 mm step at z ≈ −35.
+    4. A p = 8 union. It leaves a 28° crease where the cuts cross.
+
+    *Guards.* V0 renders 40 wear seeds and requires:
+    - peak on the gauge corner at the sampled depth (±5%);
+    - run-end depth < 0.1 mm;
+    - worst turn < 30° per step;
+    - a crown share strictly between 0 and 1.
+
+    `analyze_results.py` breaks wear down by depth, gauge angle, crown depth
+    and L. The CSVs still enumerate wear samples (seed per CSV index) but no
+    longer shape them. Every dataset and checkpoint made before this is
+    refused; the prelim root is now `L5_prelim_a4feca`.
+
 
 ## 6b. Objective & metrics (rev. 2)
 
@@ -1083,7 +1146,7 @@ threshold, **balanced accuracy** at the swept optimum
 (`losses3d.best_threshold`, Face3D's argmin(FN+FP)), class accuracy, plus
 ROC / noise / alignment curves in `full_evaluation`.
 
-## 7. Current state / what remains (2026-10-02)
+## 7. Current state / what remains (2026-10-13)
 
 **Picking this up cold: read `NEXT_SESSION.md` first** — the short handoff with
 the exact next commands.
@@ -1118,6 +1181,10 @@ Done and committed on **`3D_railhead_upgrade`**:
   gains the 3D `mon_slab` (global z = 150 under the horn) and scores the
   Import plane z = 15 against the full-wave horn; rung 0 gains `mon_src`
   (what Lumerical injected). Plumbing P6 round-trips both scorers.
+- **Wear is a smooth parametric cut (2026-10-13, finding 33):** gauge-corner
+  wear in every sample, crown wear in 40%; the CSV shape and its x = 15 cliff
+  are gone. New provenance keys → new prelim root **`L5_prelim_a4feca`**
+  (replaces `6a5b8f`). V0 gates the wear shape.
 - Overview deck updated with horn / FDTD / prelim slides
   (`data/generated/rail3D_overview.pptx`, gitignored; builders in
   `presentation/`).

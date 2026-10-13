@@ -1,6 +1,6 @@
 # Reading rail3D's validation output
 
-*Last updated: 2026-10-02 · λ = 5 mm (60 GHz) · horn = RFspin H-A75-W20 at 278.5 mm
+*Last updated: 2026-10-13 (V0 wear fields, README finding 33) · 2026-10-02 · λ = 5 mm (60 GHz) · horn = RFspin H-A75-W20 at 278.5 mm
 (rung −1 scores three source planes, rung 0 the injected plane — §9c;
 V9 extended with placement + upward-only checks; `term_budget.json` added;
 `fdtd_agreement`'s horn reference is upward-only, so psi2 = 0 at z = 30) —
@@ -165,6 +165,15 @@ Every entry carries `pass` and `seconds`. The pass rules, from the code:
 **V0 `long_extent_y_mm` / `long_extent_s_mm`** — orientation is asserted
 *physically*, not by eye: a longitudinal crack must span >15 mm along y and
 <5 mm along s; a transverse one the reverse; an oblique one >10 mm in both.
+
+**V0 `wear_*` (since 2026-10-13, README finding 33)** — 40 wear seeds.
+`wear_peak_on_gauge_corner`: every sample's deepest point at x ≥ 15 and equal to
+its sampled depth (±5%), so crown wear never outranks the gauge corner.
+`wear_max_end_depth_mm` < 0.1: no step where the worn region ends (the CSV model
+had a 6.6 mm cliff there). `wear_max_turn_deg_per_step` < 30: no crease. Compare it
+with `intact_max_turn_deg_per_step` (~7°); ~17° is the rounded seam where the
+crown and gauge cuts meet. `wear_crown_share` must be strictly between 0 and 1
+(the configured share is 0.4).
 
 **V0 `resolution_consistency_mm`** — the same depth field rendered at λ/8 and at
 the occluder step, compared. This is what guarantees the simulation mesh and the

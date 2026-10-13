@@ -327,7 +327,42 @@ SHELL_RADIUS_RANGE = (4.0, 10.0)      # semi-axes (mm) -> 8-20 mm footprints
 SHELL_DEPTH_RANGE = (1.0, 5.0)        # sampled (mm)
 # Wear depth is now sampled too (was: raw CSV, which reached 12.5 mm). Deeper
 # wear only increases the barcode distance, so training does not need it.
+# Since 2026-10-13 this is the depth of the GAUGE-CORNER wear, at its centre.
 WEAR_DEPTH_RANGE = (2.0, 8.0)         # sampled (mm)
+
+# Wear profile, parametric and smooth (2026-10-13, README finding 33). It used
+# to be a measured CSV cross-section masked to the gauge band -- but 90% of
+# those CSVs are worn deepest on the crown (x < 15), so the mask kept only a
+# cliff at x = 15 and left the gauge corner itself untouched. Now EVERY wear
+# sample carries gauge-corner wear, and a subset adds crown wear on top.
+#
+# Each component is a CUT, the way a wheel wears a rail: the worn surface is a
+# circular arc of radius R lying `depth` inside the intact head, tangent-
+# parallel to it where the head's outward normal makes `angle` with vertical
+# (0 = crown top, 90 = vertical gauge face), and everything outside the arc is
+# removed (only the lens around the cut point). R far larger than the head's
+# own radius there (14 mm at the gauge corner) FLATTENS the corner into a
+# slightly convex facet, which is what worn profiles show. Measured limits:
+# below R ~ 120 mm the gauge circle cannot clear the flat crown and its lens
+# spills across the head to the field side; and a bump pushed in along the
+# normal instead of a cut carves a GROOVE into the convex corner -- both
+# rejected. The cut's edges are rounded over WEAR_EDGE_SOFT (capped at half
+# the depth), so the worn profile has no step and no crease; the two cuts are
+# joined by a smooth max.
+#
+# Gauge component: 30-70 deg spans the gauge corner from its crown-side
+# shoulder to where it turns into the face, i.e. corner wear through to side
+# wear on curves.
+WEAR_GAUGE_ANGLE_RANGE = (30.0, 60.0)  # normal angle at the cut (deg)
+WEAR_GAUGE_RADIUS_RANGE = (150.0, 600.0)  # worn-facet radius (mm)
+# Crown component, in a WEAR_CROWN_PROB share of wear samples: a near-flat
+# cut that lowers the running band (head loss), its depth a fraction of the
+# gauge depth so the gauge corner always carries the deepest wear.
+WEAR_CROWN_PROB = 0.4
+WEAR_CROWN_ANGLE_RANGE = (-3.0, 3.0)   # normal angle at the cut (deg)
+WEAR_CROWN_RADIUS_RANGE = (500.0, 2000.0)  # worn-crown radius (mm), near flat
+WEAR_CROWN_DEPTH_RATIO = (0.2, 0.6)    # crown depth / gauge depth
+WEAR_EDGE_SOFT = 2.0                   # edge rounding of each cut (mm)
 
 # Surface region bands (arc positions, mm in section coords)
 CROWN_HALF_WIDTH = 25.0               # running band: |x| <= 25

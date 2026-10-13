@@ -40,7 +40,7 @@ from rail3d import config, data3d, losses3d, mesh3d, sections, train3d
 PARAMS = {
     "crack": ["depth", "L", "theta", "s0"],
     "dent": ["depth", "fw_y", "fw_s", "s0"],
-    "wear": ["depth", "L"],
+    "wear": ["depth", "gauge_angle_deg", "crown_depth", "L"],
     "shell": ["depth", "r_s", "r_y", "s0"],
 }
 UNITS = {"theta": "deg"}
