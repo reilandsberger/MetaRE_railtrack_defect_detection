@@ -79,6 +79,98 @@ def fresh_fields(index: int, n_intact: int, profile_name: str):
     return out, torch.stack(pool)
 
 
+def term_fields(index: int, profile_name: str):
+    """{cls: dict} with every term at the metasurface plane, both WITH the
+    upward-only rule (what a dataset stores) and WITHOUT it (all light that
+    crosses z = H_MS, in any direction -- what the pre-finding-31 figures
+    summed). psi1 does not depend on the rule; psi0 and psi2 do."""
+    device = config.get_device(profile_name)
+    profile = config.PROFILES[profile_name]
+    section = sections.load_reference_section()
+    n_fine = mesh3d.default_arc_count(section, config.MESH_DS)
+    n_coarse = mesh3d.default_arc_count(section, config.OCCLUDER_DS)
+    X, Y = config.plane_grid(device)
+    hargs = (X, Y, config.H_MS, config.WVL, config.THETA_INC, config.SIZE_ANT,
+             config.DIST_ANT, config.RESOL_ANT)
+    psi0_up = field3d.horn_to_plane(*hargs, upward_only=True).cpu()
+    psi0_all = field3d.horn_to_plane(*hargs, upward_only=False).cpu()
+    out = {}
+    for cls in ROWS:
+        files = sections.get_dataset_files(cls) if cls in config.DATASET_DIRS else None
+        t0 = time.time()
+        v, f, vo, fo, meta = gen.sample_meshes(section, cls, index, files, n_fine, n_coarse)
+        v, vo = v[None].to(device), vo[None].to(device)
+        p1, p2_up = gen.solve_fields(v, f, vo, fo, device, profile.chunk_faces)
+        p1b, p2_all = gen.solve_fields(v, f, vo, fo, device, profile.chunk_faces,
+                                       upward_only=False)
+        assert torch.equal(p1, p1b), "psi1 must not depend on the upward-only rule"
+        out[cls] = {"meta": meta, "psi1": p1[0].cpu(),
+                    "psi0_up": psi0_up, "psi2_up": p2_up[0].cpu(),
+                    "psi0_all": psi0_all, "psi2_all": p2_all[0].cpu()}
+        print(f"  {cls} #{index}: solved (x2) in {time.time() - t0:.1f} s")
+    return out
+
+
+def _x_period(I: np.ndarray) -> float:
+    """Dominant fringe period across the rail (x), mm: FFT of the y-mean.
+    Periods above WX/5 (the slow brightness envelope) are not fringes."""
+    prof = I.mean(axis=1) - I.mean()
+    spec = np.abs(np.fft.rfft(prof))
+    spec[:5] = 0
+    return config.WX / int(np.argmax(spec))
+
+
+def _db(a, b):
+    return 10 * np.log10(max(a, 1e-30) / max(b, 1e-30))
+
+
+def draw_terms(fields, out_png):
+    X, Y = config.plane_grid("cpu")
+    X, Y = X[0].numpy() + config.PLANE_X_CENTER, Y[0].numpy()
+    fig, axs = plt.subplots(len(ROWS), 4, figsize=(17, 2.95 * len(ROWS)))
+    heads = ["|ψ0|²  direct horn light\n(ALL of it crossing the plane)",
+             "|ψ1|²  single bounce off the rail\n= the stored metasurface input",
+             "|ψ2|²  rail → horn → plane\n(ALL of it crossing the plane)",
+             "|ψ0 + ψ1 + ψ2|²  without the upward-only rule\n"
+             "= how the OLD figures defined ψ_tot"]
+    report = {}
+    for r, cls in enumerate(ROWS):
+        F = fields[cls]
+        tot_all = F["psi0_all"] + F["psi1"] + F["psi2_all"]
+        tot_up = F["psi0_up"] + F["psi1"] + F["psi2_up"]
+        I1 = (F["psi1"].abs() ** 2).numpy()
+        P1 = I1.sum()
+        terms = [F["psi0_all"], F["psi1"], F["psi2_all"], tot_all]
+        rep = {"psi0_vs_psi1_dB": _db((F["psi0_all"].abs() ** 2).sum().item(), P1),
+               "psi2_vs_psi1_dB": _db((F["psi2_all"].abs() ** 2).sum().item(), P1),
+               "stored_input_equals_psi1": bool(torch.equal(tot_up, F["psi1"])),
+               "x_period_tot_all_mm": _x_period((tot_all.abs() ** 2).numpy())}
+        report[cls] = rep
+        notes = [f"{rep['psi0_vs_psi1_dB']:+.1f} dB vs ψ1; upward-only → 0",
+                 f"stored input (upward-only ψ0+ψ1+ψ2) == ψ1: {rep['stored_input_equals_psi1']}",
+                 f"{rep['psi2_vs_psi1_dB']:+.1f} dB vs ψ1; upward-only → 0",
+                 f"fringes ≈ {rep['x_period_tot_all_mm']:.1f} mm apart across x "
+                 f"(λ = {config.WVL:g}, pixel {config.DX:g})"]
+        for c, (psi, note) in enumerate(zip(terms, notes)):
+            ax = axs[r][c]
+            im = ax.pcolormesh(X, Y, (psi.abs() ** 2).numpy(), cmap="inferno",
+                               shading="nearest")
+            fig.colorbar(im, ax=ax, fraction=0.046, pad=0.03)
+            ax.set_aspect("equal")
+            ax.tick_params(labelsize=7)
+            ax.set_title((heads[c] + "\n" if r == 0 else "") + note, fontsize=8)
+            ax.set_xlabel("x (mm) across the rail", fontsize=7)
+        axs[r][0].set_ylabel(f"{_label(cls, F['meta'])}\ny (mm)", fontsize=8)
+    fig.suptitle(f"Field terms at the metasurface plane (z = {config.H_MS:.0f} mm, "
+                 f"λ = {config.WVL:g} mm, horn {config.DIST_ANT:.1f} mm out, lowest edge "
+                 f"at z = {config.HORN_LOWER_EDGE_Z:.0f}). Each panel on its own scale. "
+                 "Columns as in the old field_maps.png", fontsize=11)
+    fig.tight_layout(rect=(0, 0, 1, 0.975))
+    fig.savefig(out_png, dpi=150)
+    plt.close(fig)
+    return report
+
+
 def stored_fields(root: Path, index: int):
     psi0 = torch.load(data3d.psi0_path(root=root), map_location="cpu", weights_only=False)
     out = {}
@@ -189,8 +281,22 @@ def main() -> int:
     ap.add_argument("--n-intact", type=int, default=4,
                     help="FRESH mode: intact samples in the mean (each is one solve)")
     ap.add_argument("--profile", default="laptop", choices=list(config.PROFILES))
+    ap.add_argument("--terms", action="store_true",
+                    help="instead: psi0 | psi1 | psi2 | psi_tot per class, with and "
+                         "without the upward-only rule (sample_fields_terms.png)")
     a = ap.parse_args()
     config.ensure_dirs()
+    if a.terms:
+        print(f"[rail3d] field terms, FRESH (geometry {data3d.geometry_tag()})")
+        out = config.FIGURE_DIR / "sample_fields_terms.png"
+        rep = draw_terms(term_fields(a.index, a.profile), out)
+        for cls, r in rep.items():
+            print(f"  {cls:7s} psi0 {r['psi0_vs_psi1_dB']:+6.1f} dB, psi2 "
+                  f"{r['psi2_vs_psi1_dB']:+6.1f} dB vs psi1 | stored input == psi1: "
+                  f"{r['stored_input_equals_psi1']} | psi0+psi1+psi2 fringes "
+                  f"{r['x_period_tot_all_mm']:.1f} mm apart across x")
+        print(f"  -> {out}")
+        return 0
     if a.root:
         root = Path(a.root)
         print(data3d.describe_dataset(root))

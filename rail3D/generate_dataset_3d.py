@@ -90,8 +90,9 @@ def sample_meshes(section, class_name: str, i: int, files, n_arc_fine: int,
     return v, f, v_occ, f_occ, meta
 
 
-def solve_fields(v_b, f, v_occ_b, f_occ, device, chunk_faces):
-    """(psi1, psi2) at the metasurface plane with production shadowing."""
+def solve_fields(v_b, f, v_occ_b, f_occ, device, chunk_faces, upward_only=True):
+    """(psi1, psi2) at the metasurface plane with production shadowing.
+    upward_only=False only for figures showing what the rule removes."""
     X, Y = config.plane_grid(device)
     return field3d.scattered_fields(
         v_b, f.to(device), X, Y, config.H_MS, config.WVL, config.THETA_INC,
@@ -101,7 +102,7 @@ def solve_fields(v_b, f, v_occ_b, f_occ, device, chunk_faces):
         shadow_occluders=(v_occ_b, f_occ.to(device)),
         shadow_min_t=config.SHADOW_MIN_T,
         shadow_normal_offset=config.SHADOW_NORMAL_OFFSET,
-        upward_only=True,          # only light coming UP through the metasurface
+        upward_only=upward_only,   # only light coming UP through the metasurface
     )
 
 
