@@ -239,6 +239,8 @@ def assemble(out_dir: Path, band) -> None:
                                                        n_arc=geom["n_arc"])
                 p["y0"] = float(y)
                 depth[k] = mesh3d.render_depth_field(p, geom, np.array([0.0])).max()
+        if spec["class"] == "wear":       # report the stretch's LEADING EDGE, +60 -> -60
+            y0 = y0 - meta["L"] / 2
         reads.append((spec, meta, y0, d8, d130, depth))
     intact = [r for r in reads if r[0]["class"] == "intact"]
     ref = float(np.mean([r[3].mean() for r in intact])) if intact else float(reads[0][3].mean())
@@ -268,6 +270,8 @@ def assemble(out_dir: Path, band) -> None:
                       "x_axis": "across the rail, +x = gauge side (the horn side)"},
         "frames": {"axis": ("y_mm = position of the defect relative to the beam centre "
                             "along the rail; time t = (y_end - y) / train speed"),
+                   "wear_axis": ("for wear passes y_mm is the worn stretch's LEADING EDGE "
+                                 "(+60 = still ahead of the segment, -60 = segment fully worn)"),
                    "defect_step_mm": STEP, "wear_step_mm": WEAR_STEP,
                    "sampling_note": ("fields vary smoothly at this step (see the trace "
                                      "spectra); interpolate to the frame rate you need"),
