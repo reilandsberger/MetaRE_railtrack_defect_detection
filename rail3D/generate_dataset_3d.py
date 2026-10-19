@@ -52,10 +52,13 @@ def plan_counts(args) -> dict[str, int]:
 
 
 def sample_meshes(section, class_name: str, i: int, files, n_arc_fine: int,
-                  n_arc_coarse: int, faces_fine=None, faces_coarse=None):
+                  n_arc_coarse: int, faces_fine=None, faces_coarse=None, y0=None):
     """Sample i of a class exactly as it goes into the dataset: the λ/8 mesh,
     the λ/2 ray-cast occluder and the shard metadata. Shared with
     sample_fields.py so a figure can recompute a sample the generator wrote.
+
+    y0 (mm) overrides the defect's along-rail position, everything else kept
+    -- passover.py slides one defect through the beam this way.
 
     Returns (v, f, v_occ, f_occ, meta)."""
     seed = config.sample_seed(class_name, i)
@@ -68,6 +71,8 @@ def sample_meshes(section, class_name: str, i: int, files, n_arc_fine: int,
     # describe the same physical defect
     params, aug = mesh3d.defect_params_for_sample(
         section, class_name, defect, seed, n_arc=n_arc_fine)
+    if y0 is not None:
+        params["y0"] = float(y0)
     v, f = mesh3d.sweep_rail_mesh(
         section, defect_params=params,
         slice_ds=config.MESH_DS, arc_ds=config.MESH_DS, n_arc=n_arc_fine,
@@ -90,7 +95,8 @@ def sample_meshes(section, class_name: str, i: int, files, n_arc_fine: int,
     return v, f, v_occ, f_occ, meta
 
 
-def solve_fields(v_b, f, v_occ_b, f_occ, device, chunk_faces, upward_only=True):
+def solve_fields(v_b, f, v_occ_b, f_occ, device, chunk_faces, upward_only=True,
+                 compute_psi2=True):
     """(psi1, psi2) at the metasurface plane with production shadowing.
     upward_only=False only for figures showing what the rule removes."""
     X, Y = config.plane_grid(device)
@@ -103,6 +109,7 @@ def solve_fields(v_b, f, v_occ_b, f_occ, device, chunk_faces, upward_only=True):
         shadow_min_t=config.SHADOW_MIN_T,
         shadow_normal_offset=config.SHADOW_NORMAL_OFFSET,
         upward_only=upward_only,   # only light coming UP through the metasurface
+        compute_psi2=compute_psi2,
     )
 
 
