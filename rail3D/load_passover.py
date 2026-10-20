@@ -81,6 +81,45 @@ def resample(p: dict, speed_m_s: float, rate_hz: float):
     return t_new, det
 
 
+def load_fields(folder: str | Path = ".", plane: str = "detector") -> dict:
+    """Raw complex fields from passover_fields.npz, for choosing your OWN detectors.
+
+    plane: "detector" (z = 250 mm, where the CSV's 8 windows sit; no metasurface,
+    just free propagation from the metasurface plane) or "metasurface" (z = 150 mm,
+    the light arriving where a metasurface would go).
+    Returns {"x_mm": (60,), "y_mm": (30,), "pixel_mm", "power_unit", "z_mm",
+             "passes": {pass_id: {"y_mm": (n_frames,), "field": (n_frames, 60, 30) complex}}}
+    Frames are the same, in the same order, as the CSV rows of that pass.
+    """
+    z = np.load(Path(folder) / "passover_fields.npz")
+    key = {"detector": "field_detector", "metasurface": "field_metasurface"}[plane]
+    pids = sorted({k.split("__")[0] for k in z.files if "__" in k})
+    return {"x_mm": z["x_mm"], "y_mm": z["y_mm_grid"], "pixel_mm": float(z["pixel_mm"]),
+            "power_unit": float(z["power_unit"]), "plane": plane,
+            "z_mm": float(z["z_detector_mm"] if plane == "detector" else z["z_metasurface_mm"]),
+            "passes": {p: {"y_mm": z[f"{p}__y_mm"], "field": z[f"{p}__field_{plane}"]} for p in pids}}
+
+
+def readout(fields: dict, field: np.ndarray, centres_mm, window_mm=(11.375, 7.0)) -> np.ndarray:
+    """Detector powers for windows of your choice, in the CSV's units.
+
+    field: (n_frames, 60, 30) from load_fields(...)["passes"][pid]["field"].
+    centres_mm: list of (x, y) window centres in mm, on the plane of `fields`.
+    A window collects |E|^2 over the pixels whose centres lie inside it, times
+    the pixel area -- the same rule that made d1..d8 -- divided by the CSV's
+    power unit, so readout(load_fields(...), f, <the 8 CSV centres>) on the
+    detector plane reproduces passover_clean.csv.
+    Returns (n_frames, n_windows)."""
+    x, y, dx = fields["x_mm"], fields["y_mm"], fields["pixel_mm"]
+    I = np.abs(field) ** 2
+    out = []
+    for cx, cy in centres_mm:
+        mx = np.abs(x - cx) < window_mm[0] / 2
+        my = np.abs(y - cy) < window_mm[1] / 2
+        out.append(I[:, mx][:, :, my].sum(axis=(1, 2)) * dx * dx)
+    return np.stack(out, 1) / fields["power_unit"]
+
+
 def main() -> int:
     folder = Path(sys.argv[1]) if len(sys.argv) > 1 and not sys.argv[1].startswith("--") else Path(".")
     noise = sys.argv[sys.argv.index("--noise") + 1] if "--noise" in sys.argv else "low"

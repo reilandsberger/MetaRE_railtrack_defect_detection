@@ -228,7 +228,7 @@ def assemble(out_dir: Path, band) -> None:
     dn = dense.numpy()
     mirror130 = [int(np.argmin(np.abs(dn - [c[0], -c[1]]).sum(1))) for c in dn]
     assert np.allclose(dn[mirror130], dn * [1, -1]), "dense lattice is not y-symmetric"
-    reads = []
+    reads, fields = [], {}
     for spec, meta, y0, psi in rows:
         d8, d130 = readout(psi, DET8), readout(psi, dense)
         n = 81 if spec["class"] == "intact" else len(y0)     # intact: repeat the one field
@@ -250,6 +250,13 @@ def assemble(out_dir: Path, band) -> None:
             y0 = -(y0 - meta["L"] / 2)
             d8 = d8[:, [4, 5, 6, 7, 0, 1, 2, 3]]
             d130 = d130[:, mirror130]
+        # the raw field, frame for frame with the CSV rows: intact repeated, wear
+        # mirrored the same way as its detector columns (y axis = last axis)
+        fms = np.repeat(psi, n, 0) if spec["class"] == "intact" else psi
+        if spec["class"] == "wear":
+            fms = fms[:, :, ::-1]
+        assert np.allclose(readout(np.ascontiguousarray(fms[:3]), DET8), d8[:3], rtol=1e-4),             f"{spec['pass_id']}: stored field does not reproduce its detector readings"
+        fields[spec["pass_id"]] = (y0, np.ascontiguousarray(fms))
         reads.append((spec, meta, y0, d8, d130, depth))
     intact = [r for r in reads if r[0]["class"] == "intact"]
     ref = float(np.mean([r[3].mean() for r in intact])) if intact else float(reads[0][3].mean())
@@ -338,9 +345,22 @@ def assemble(out_dir: Path, band) -> None:
                 for k in range(len(y0)):
                     fh.write(f"{spec['pass_id']},{spec['class']},{CLASSES.index(spec['class'])},{k},"
                              f"{y0[k]:.2f},{depth[k]:.4f}," + ",".join(f"{v:.6f}" for v in det[k]) + "\n")
-    np.savez_compressed(out_dir / "passover_fields.npz",
-                        **{r[0]["pass_id"]: r[3] for r in rows},
-                        **{r[0]["pass_id"] + "_y_mm": r[2] for r in rows})
+    # raw fields for choosing other detector positions: at the metasurface plane
+    # and at the detector plane (no metasurface: free propagation), same frames
+    # and order as the CSV, plus the pixel grid and the power unit of the CSV
+    onn = optics3d.ONN3D(surface="none", noise=False).eval()
+    X, Y = config.plane_grid("cpu")
+    out = {"x_mm": X[0, :, 0].numpy(), "y_mm_grid": Y[0, 0, :].numpy(),
+           "pixel_mm": np.float64(config.DX), "power_unit": np.float64(ref),
+           "z_metasurface_mm": np.float64(config.H_MS),
+           "z_detector_mm": np.float64(config.H_MS + config.LAYER_DISTANCES[-1])}
+    for pid, (y0, fms) in fields.items():
+        with torch.no_grad():
+            fdet = onn.propagate(torch.from_numpy(fms)).numpy().astype(np.complex64)
+        out[f"{pid}__y_mm"] = y0
+        out[f"{pid}__field_metasurface"] = fms.astype(np.complex64)
+        out[f"{pid}__field_detector"] = fdet
+    np.savez_compressed(out_dir / "passover_fields.npz", **out)
     (out_dir / "passover_labels.json").write_text(json.dumps(labels, indent=2, default=_jsonable),
                                                   encoding="utf-8")
     plot(sets["clean"], sets["high"], labels, out_dir / "passover_traces.png")
