@@ -225,6 +225,9 @@ def assemble(out_dir: Path, band) -> None:
     rows.sort(key=lambda r: (order[r[0]["class"]], r[0]["pass_id"]))
 
     dense = config.dense_detector_centers()
+    dn = dense.numpy()
+    mirror130 = [int(np.argmin(np.abs(dn - [c[0], -c[1]]).sum(1))) for c in dn]
+    assert np.allclose(dn[mirror130], dn * [1, -1]), "dense lattice is not y-symmetric"
     reads = []
     for spec, meta, y0, psi in rows:
         d8, d130 = readout(psi, DET8), readout(psi, dense)
@@ -239,8 +242,14 @@ def assemble(out_dir: Path, band) -> None:
                                                        n_arc=geom["n_arc"])
                 p["y0"] = float(y)
                 depth[k] = mesh3d.render_depth_field(p, geom, np.array([0.0])).max()
-        if spec["class"] == "wear":       # report the stretch's LEADING EDGE, +60 -> -60
-            y0 = y0 - meta["L"] / 2
+        if spec["class"] == "wear":
+            # solved with the stretch moving -y (edge +60 -> -60). The scene is
+            # mirror-symmetric in y (horn in the x-z plane, TE10 even in y, pose
+            # and wear even in y), so mirror it EXACTLY into the same direction of
+            # travel as every other pass: y -> -y, detector rows y<0 <-> y>0.
+            y0 = -(y0 - meta["L"] / 2)
+            d8 = d8[:, [4, 5, 6, 7, 0, 1, 2, 3]]
+            d130 = d130[:, mirror130]
         reads.append((spec, meta, y0, d8, d130, depth))
     intact = [r for r in reads if r[0]["class"] == "intact"]
     ref = float(np.mean([r[3].mean() for r in intact])) if intact else float(reads[0][3].mean())
@@ -268,10 +277,12 @@ def assemble(out_dir: Path, band) -> None:
                       "centres_mm_x_y": DET8.tolist(),
                       "order": "d1..d8 = row y < 0 then y > 0, each row x from -x to +x",
                       "x_axis": "across the rail, +x = gauge side (the horn side)"},
-        "frames": {"axis": ("y_mm = position of the defect relative to the beam centre "
-                            "along the rail; time t = (y_end - y) / train speed"),
-                   "wear_axis": ("for wear passes y_mm is the worn stretch's LEADING EDGE "
-                                 "(+60 = still ahead of the segment, -60 = segment fully worn)"),
+        "frames": {"axis": "y_mm = position of the defect relative to the beam centre along the rail",
+                   "direction": ("every pass moves toward +y: rows are in time order, "
+                                 "t = (y_mm - y_mm[first frame]) / train speed"),
+                   "wear_axis": ("for wear passes y_mm is the worn stretch's LEADING EDGE, "
+                                 "-60 -> +60 (worn rail lies behind it, at y < y_mm): -60 = "
+                                 "segment unworn, +60 = segment fully worn"),
                    "defect_step_mm": STEP, "wear_step_mm": WEAR_STEP,
                    "sampling_note": ("fields vary smoothly at this step (see the trace "
                                      "spectra); interpolate to the frame rate you need"),
@@ -301,7 +312,7 @@ def assemble(out_dir: Path, band) -> None:
             "parameters": {k: v for k, v in meta.items()
                            if k not in ("offsets", "profile_v", "profile_d", "fourier", "lobes",
                                         "pits", "rough_seed", "band", "csv_index", "seed", "class",
-                                        "roll_deg", "jitter_x", "jitter_z")},
+                                        "roll_deg", "jitter_x", "jitter_z", "y0")},
             "pose": {"roll_deg": meta.get("roll_deg"), "lateral_mm": meta.get("jitter_x"),
                      "vertical_mm": meta.get("jitter_z")},
             "y_mm_range": [float(y0[0]), float(y0[-1])],
@@ -361,8 +372,6 @@ def plot(clean, noisy, labels, png):
                 ax2 = ax.twinx()
                 ax2.fill_between(y0, 0, depth, color="0.6", alpha=0.25, lw=0)
                 ax2.set_yticks([])
-            if cls == "wear":
-                ax.invert_xaxis()
             d = desc[spec["pass_id"]]
             ax.set_title(f"{spec['pass_id']} ({d['visibility'].replace('_', ' ')})\n"
                          f"peak change {100 * d['peak_change_vs_intact']:.0f}% vs intact", fontsize=7.5)
