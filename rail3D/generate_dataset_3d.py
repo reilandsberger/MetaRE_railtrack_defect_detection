@@ -52,13 +52,16 @@ def plan_counts(args) -> dict[str, int]:
 
 
 def sample_meshes(section, class_name: str, i: int, files, n_arc_fine: int,
-                  n_arc_coarse: int, faces_fine=None, faces_coarse=None, y0=None):
+                  n_arc_coarse: int, faces_fine=None, faces_coarse=None, y0=None,
+                  params_aug=None):
     """Sample i of a class exactly as it goes into the dataset: the λ/8 mesh,
     the λ/2 ray-cast occluder and the shard metadata. Shared with
     sample_fields.py so a figure can recompute a sample the generator wrote.
 
     y0 (mm) overrides the defect's along-rail position, everything else kept
     -- passover.py slides one defect through the beam this way.
+    params_aug = (params, aug) uses an already drawn defect instead of the
+    seed's own (passover_big.py: narrowed parameter ranges).
 
     Returns (v, f, v_occ, f_occ, meta)."""
     seed = config.sample_seed(class_name, i)
@@ -69,8 +72,11 @@ def sample_meshes(section, class_name: str, i: int, files, n_arc_fine: int,
     # defect params drawn ONCE at the canonical (fine) resolution, then
     # rendered on both grids -> fine sim mesh and coarse ray-cast occluder
     # describe the same physical defect
-    params, aug = mesh3d.defect_params_for_sample(
-        section, class_name, defect, seed, n_arc=n_arc_fine)
+    if params_aug is None:
+        params, aug = mesh3d.defect_params_for_sample(
+            section, class_name, defect, seed, n_arc=n_arc_fine)
+    else:
+        params, aug = dict(params_aug[0]), dict(params_aug[1])
     if y0 is not None:
         params["y0"] = float(y0)
     v, f = mesh3d.sweep_rail_mesh(

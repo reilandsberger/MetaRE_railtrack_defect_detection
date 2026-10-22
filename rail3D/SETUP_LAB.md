@@ -1,6 +1,7 @@
 # rail3D — Lab Workstation Setup (RTX 5090)
 
-*Last updated: 2026-10-13 · λ = 5 mm (60 GHz), V0–V8 measured on the 5090 · horn changed to the
+*Last updated: 2026-10-22 (§7f: the 130-window pass-over set for the reservoir-computing
+collaborator) · 2026-10-13 · λ = 5 mm (60 GHz), V0–V8 measured on the 5090 · horn changed to the
 RFspin H-A75-W20 on 2026-09-24 and moved out to 278.5 mm on 2026-10-02 (README
 finding 31) — re-run per §7e · wear rebuilt as a smooth gauge-corner cut on
 2026-10-13 (README finding 33; root `L5_prelim_689da5`) · Lumerical file I/O fixed 2026-09-29 (README
@@ -671,6 +672,39 @@ python horn_fdtd_case.py --out data/generated/fdtd_horn
 ```
 
 ---
+
+## 7f. Pass-over data, 130-window set (reservoir-computing collaborator, 2026-10-22)
+
+`passover_big.py`: 1205 passes (5 intact + 200 each of transverse / oblique /
+longitudinal cracks, dents, wear, shells), all on the gauge shoulder with
+narrowed sizes, read out on all 130 windows. 93,205 field solves: **about 6–7 h
+on the 5090** (estimated from the prelim's 4.07 solves/s; the script prints the
+measured rate and hours left after every pass). Resumable: re-running the same
+command skips finished passes, so an interruption costs at most one pass.
+
+```bash
+cd ~/Documents/Rei/MetaRE_railtrack_defect_detection && git pull
+```
+```bash
+cd rail3D && python passover_big.py --smoke --profile lab
+```
+
+The smoke run (7 short passes, ~1 min) must end with `assembled 7 passes`;
+check `data/generated/passover130_smoke/README.md` opens with its tables
+filled in. Then the real run, logged:
+
+```bash
+python passover_big.py --profile lab 2>&1 | tee ../passover130.log
+```
+
+Watch the first few `frames/s | ~N h left` lines. When it finishes, the
+deliverable is `data/generated/passover130/` minus `passes/` (raw per-pass
+files, ~1.4 GB, only needed to re-assemble). To add the frame-matched raw
+fields (~2.7 GB) afterwards, without re-solving:
+
+```bash
+python passover_big.py --profile lab --assemble-only --fields
+```
 
 ## 8. Generate the dataset
 

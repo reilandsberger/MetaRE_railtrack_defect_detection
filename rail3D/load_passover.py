@@ -8,7 +8,7 @@ Needs only numpy and the Python standard library.
     from load_passover import load_passover, to_time, resample
     sensor_data = load_passover("path/to/folder", noise="low")
     p = sensor_data["passes"]["crack_0"]
-    p["detectors"]          # (n_frames, 8) array, columns d1..d8
+    p["detectors"]          # (n_frames, n_channels): d1..d8, or d001..d130 for passover130
     p["y_mm"]               # (n_frames,) defect position along the rail, mm
     t = to_time(p["y_mm"], speed_m_s=20.0)            # seconds, starts at 0
     t_new, det_new = resample(p, speed_m_s=20.0, rate_hz=50e3)
@@ -34,14 +34,20 @@ import numpy as np
 CHANNELS = [f"d{k}" for k in range(1, 9)]
 
 
-def load_passover(folder: str | Path = ".", noise: str = "low") -> dict:
-    """noise: "clean", "low" or "high" -- which passover_<noise>.csv to read."""
+def load_passover(folder: str | Path = ".", noise: str = "low", name: str | None = None) -> dict:
+    """noise: "clean", "low" or "high" -- which <name>_<noise>.csv to read.
+    name: "passover" (8 detectors) or "passover130" (130 detectors); found
+    automatically when the folder holds only one of them."""
     folder = Path(folder)
-    labels = json.loads((folder / "passover_labels.json").read_text(encoding="utf-8"))
+    if name is None:
+        name = next(n for n in ("passover130", "passover") if (folder / f"{n}_labels.json").exists())
+    labels = json.loads((folder / f"{name}_labels.json").read_text(encoding="utf-8"))
     info = {p["pass_id"]: p for p in labels["passes"]}
     rows: dict[str, list] = {}
-    with open(folder / f"passover_{noise}.csv", newline="", encoding="utf-8") as fh:
-        for r in csv.DictReader(fh):
+    with open(folder / f"{name}_{noise}.csv", newline="", encoding="utf-8") as fh:
+        reader = csv.DictReader(fh)
+        channels = [c for c in reader.fieldnames if c[0] == "d" and c[1:].isdigit()]
+        for r in reader:
             rows.setdefault(r["pass_id"], []).append(r)
     passes = {}
     for pid, rs in rows.items():
@@ -49,17 +55,18 @@ def load_passover(folder: str | Path = ".", noise: str = "low") -> dict:
         p = info[pid]
         passes[pid] = {
             "class": p["class"], "class_index": p["class_index"],
-            "visibility": p["visibility"], "description": p["description"],
+            "subtype": p.get("subtype", p["class"]),
+            "visibility": p.get("visibility", "near_visible_band"), "description": p["description"],
             "parameters": p["parameters"], "pose": p["pose"],
             "peak_change_vs_intact": p["peak_change_vs_intact"],
             "frame": np.array([int(r["frame"]) for r in rs]),
             "y_mm": np.array([float(r["y_mm"]) for r in rs]),
             "depth_under_beam_mm": np.array([float(r["depth_under_beam_mm"]) for r in rs]),
-            "detectors": np.array([[float(r[c]) for c in CHANNELS] for r in rs]),
+            "detectors": np.array([[float(r[c]) for c in channels] for r in rs]),
         }
     meta = {k: v for k, v in labels.items() if k != "passes"}
     meta["noise_set"] = noise
-    return {"meta": meta, "channels": CHANNELS, "passes": passes}
+    return {"meta": meta, "channels": channels, "passes": passes}
 
 
 def to_time(y_mm: np.ndarray, speed_m_s: float) -> np.ndarray:
@@ -91,8 +98,19 @@ def load_fields(folder: str | Path = ".", plane: str = "detector") -> dict:
              "passes": {pass_id: {"y_mm": (n_frames,), "field": (n_frames, 60, 30) complex}}}
     Frames are the same, in the same order, as the CSV rows of that pass.
     """
-    z = np.load(Path(folder) / "passover_fields.npz")
+    folder = Path(folder)
     key = {"detector": "field_detector", "metasurface": "field_metasurface"}[plane]
+    if not (folder / "passover_fields.npz").exists() and (folder / "fields").is_dir():
+        # the 130-window set: one file per pass in fields/ (passover_big.py --fields)
+        x = (np.arange(60) + 0.5) * 2.5 - 75.0
+        y = (np.arange(30) + 0.5) * 2.5 - 37.5
+        labels = json.loads((folder / "passover130_labels.json").read_text(encoding="utf-8"))
+        unit = float(labels["units"].split("absolute model value ")[1].split(")")[0])
+        zs = {f.stem: np.load(f) for f in sorted((folder / "fields").glob("*.npz"))}
+        return {"x_mm": x, "y_mm": y, "pixel_mm": 2.5, "power_unit": unit, "plane": plane,
+                "z_mm": 250.0 if plane == "detector" else 150.0,
+                "passes": {p: {"y_mm": z["y_mm"], "field": z[key]} for p, z in zs.items()}}
+    z = np.load(folder / "passover_fields.npz")
     pids = sorted({k.split("__")[0] for k in z.files if "__" in k})
     return {"x_mm": z["x_mm"], "y_mm": z["y_mm_grid"], "pixel_mm": float(z["pixel_mm"]),
             "power_unit": float(z["power_unit"]), "plane": plane,
@@ -124,11 +142,13 @@ def main() -> int:
     folder = Path(sys.argv[1]) if len(sys.argv) > 1 and not sys.argv[1].startswith("--") else Path(".")
     noise = sys.argv[sys.argv.index("--noise") + 1] if "--noise" in sys.argv else "low"
     sd = load_passover(folder, noise)
-    print(f"{len(sd['passes'])} passes, noise set '{noise}', channels {sd['channels']}")
-    print(f"{'pass_id':9s} {'class':7s} {'frames':>6s} {'y_mm':>15s}  {'peak change':>11s}  visibility")
+    ch = sd["channels"]
+    print(f"{len(sd['passes'])} passes, noise set '{noise}', {len(ch)} channels ({ch[0]} .. {ch[-1]})")
+    w = max(len(k) for k in sd["passes"])
+    print(f"{'pass_id':{w}s} {'subtype':18s} {'frames':>6s} {'y_mm':>15s}  {'peak change':>11s}")
     for pid, p in sd["passes"].items():
-        print(f"{pid:9s} {p['class']:7s} {len(p['y_mm']):6d} {p['y_mm'][0]:7.1f}..{p['y_mm'][-1]:<6.1f}"
-              f"  {100 * p['peak_change_vs_intact']:10.0f}%  {p['visibility']}")
+        print(f"{pid:{w}s} {p['subtype']:18s} {len(p['y_mm']):6d} {p['y_mm'][0]:7.1f}..{p['y_mm'][-1]:<6.1f}"
+              f"  {100 * p['peak_change_vs_intact']:10.0f}%")
     return 0
 
 

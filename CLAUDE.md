@@ -515,7 +515,8 @@ count / MS→detector distance), `slm_profile.py` (the trained mask: wrapped pha
 draws a labelled TARGET), `lumerical_mockup.py` (the target setup drawn into a
 Layout-window screenshot), `rail3D_pipeline.ipynb` (narrated end to end), `defect_sections.py` (CPU:
 dataset defects as red-filled cross-sections — all wear variants, and
-above-average samples of every class), `passover.py` (train pass-over detector time series for the
+above-average samples of every class), `passover_big.py` (the 130-window, 1205-pass version; SETUP_LAB §7f),
+`passover.py` (train pass-over detector time series for the
 reservoir-computing collaborator; no metasurface, 8 fixed windows, resumable),
 `sample_fields.py` (one sample per
 class + intact: geometry, |ψ|², phase and change vs intact at the metasurface;
