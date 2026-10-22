@@ -1,6 +1,7 @@
 # Validating rail3D against Ansys Lumerical FDTD — horn Import source
 
-*Last updated: 2026-10-02 · λ = 5 mm (59.9585 GHz) · written for Lumerical FDTD
+*Last updated: 2026-10-22 (rung −1 Mode source span: inside the waveguide wall, never outside it) ·
+2026-10-02 · λ = 5 mm (59.9585 GHz) · written for Lumerical FDTD
 2025 R1 (modern UI). Horn Import-source design, no TFSF. The horn is now the
 physical RFspin H-A75-W20 (README finding 29), and rung −1 simulates it
 full-wave (§5). File I/O (README finding 30): the horn loader finds its files
@@ -397,7 +398,11 @@ It writes `horn_body.stl`, `horn_case.json` (every number below) and
    2.6 GB) for a quick first look. (The box reaches z = 84.5 and x = 51 only to
    hold `mon_slab`, step 4; without it, x ±39.4, y ±36.4, z −38…23 is enough.)
 3. **Source → Mode**: injection axis **z**, direction **Forward**, at
-   **z = −34 mm**, x −3.38…3.38, y −2.44…2.44 mm (the waveguide + 1.5 mm),
+   **z = −34 mm**, x **−2.13…2.13**, y **−1.19…1.19** mm: the guide's inside
+   (3.7592 × 1.8796 mm) plus half the 0.5 mm wall per side, so the source's
+   edges sit in the metal and never outside the waveguide. (Spanning past the
+   outer wall adds an air annulus that, with a metal source edge, is a coaxial
+   line whose TEM mode has neff = 1 and would win "fundamental mode".)
    frequency **59.9585 GHz**, mode selection **fundamental mode**. Before
    running, the mode solver must show **neff ≈ 0.7468** (= β_g/k, Nikolova eq.
    18.4) and E along y′ with a cos(πx′/a) profile across the broad wall. WR-15

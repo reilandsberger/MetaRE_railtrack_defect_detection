@@ -362,8 +362,15 @@ def plan(size_ant=None, wall: float = WALL, wg_len: float = WG_LEN) -> dict:
         "mode_source": {
             "name": "wg_mode", "injection_axis": "z", "direction": "Forward",
             "z_mm": src_z,
-            "x_mm": [-(a / 2 + wall + 1.0), a / 2 + wall + 1.0],
-            "y_mm": [-(b / 2 + wall + 1.0), b / 2 + wall + 1.0],
+            # the guide's INSIDE plus half the wall: the source edge sits in the
+            # metal, never past the outer face. Spanning outside the horn adds an
+            # air annulus between the wall and the source edge, which (with a
+            # metal edge) is a coaxial line whose TEM mode has neff = 1 > 0.7468:
+            # "fundamental mode" would then inject the WRONG mode, outside the guide.
+            "x_mm": [-round(a / 2 + wall / 2, 3), round(a / 2 + wall / 2, 3)],
+            "y_mm": [-round(b / 2 + wall / 2, 3), round(b / 2 + wall / 2, 3)],
+            "span_rule": ("inner cross-section + wall/2 per side: edges inside the PEC wall, "
+                          "never outside the waveguide"),
             "mode_selection": "fundamental mode",
             "why_fundamental_is_TE10": ("WR-15 is single-mode at 60 GHz (TE10 cutoff 39.9 GHz; "
                                         "TE20/TE01 79.7 GHz), so the largest-effective-index "
