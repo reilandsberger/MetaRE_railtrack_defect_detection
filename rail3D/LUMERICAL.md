@@ -440,6 +440,11 @@ python fdtd_agreement.py --horn data/generated/fdtd_horn/horn_aperture.mat --hor
 | same plane | model 20 × 20 vs 80 × 80 | the production quadrature is too coarse there |
 | Import plane z = 15 near the rail | the full-wave horn (FDTD aperture → RS-I) vs the production source | the source we inject differs from the real horn's field at the rail |
 
+**Goal metrics and a target figure:** `HORN_RUNG-1_TARGETS.md` has every printed
+number with its pass threshold, what good looks like and what a failure suggests;
+`python fdtd_agreement.py --horn-target` draws `fdtd_horn_target.png`, a TARGET-labelled
+preview of a passing run (the model plus a stated set of imperfections).
+
 Every FDTD-derived field carries the gain fitted at the aperture, so the
 `level` numbers on the later planes are absolute — they test how the field
 decays with distance, not just its shape. Points within 2 mm of the aperture

@@ -13,6 +13,7 @@ SOURCE VERIFICATION, three planes (LUMERICAL.md section 5, README finding 32):
     python fdtd_agreement.py --sample plate --external data/generated/fdtd_intact/plate_z30.mat   # rung 1
     python fdtd_agreement.py --external data/generated/fdtd_intact/intact_z30.mat   # a REAL Lumerical run
     python fdtd_agreement.py --target                       # the TARGET figure
+    python fdtd_agreement.py --horn-target                  # rung -1's TARGET figure
 
 The .mat files come from Lumerical's matlabsave (v7.3, read with h5py) or
 matlabsavelegacy (v7, read with scipy) -- README finding 30, revised 2026-10-26.
@@ -449,6 +450,21 @@ HORN_CRITERIA = {                  # rung -1, proposed -- revisit after the firs
 SLAB_NEAR_LIP_MM = 2.0             # z' < 2 mm of the aperture plane is not scored: the
                                    # RS-I sum from the 0.5 mm monitor plane and the
                                    # Kirchhoff rim both fail there (README finding 32)
+# --horn-target: the "FDTD" side synthesized from rail3D's horn model with the
+# imperfections a PASSING full-wave run is expected to show. A specification of
+# what good agreement looks like, not a prediction; every output is titled TARGET.
+HORN_TARGET_MODEL = {
+    "rim_blur_mm": 0.6,            # fringing past the opening: the aperture model's
+                                   # "zero outside the mouth" assumption, softened
+    "amp_rms": 0.04,               # smooth amplitude error across the mouth
+    "amp_corr_mm": 6.0,
+    "phase_rms_deg": 5.0,          # smooth phase error across the mouth
+    "phase_corr_mm": 8.0,
+    "dispersion_deg_per_lambda": 1.0,   # FDTD grid phase error along the boresight (lambda/20)
+    "gain": 4e-4,                  # an export is in V/m, not model units
+    "gain_phase_deg": 37.0,
+    "seed": 1,
+}
 
 
 def _corr(a, b) -> float:
@@ -574,8 +590,10 @@ def _source_plane(ap_path, device, rows) -> dict:
     return row
 
 
-def horn_check(args, device) -> int:
-    """RUNG -1: the full-wave horn (horn_fdtd_case.py) vs rail3D's aperture model."""
+def horn_check(args, device, target: dict | None = None) -> int:
+    """RUNG -1: the full-wave horn (horn_fdtd_case.py) vs rail3D's aperture model.
+    target: the HORN_TARGET_MODEL that synthesized the exports (--horn-target);
+    the figure and JSON are then titled TARGET and written under their own names."""
     import horn_fdtd_case as hf
     lam = config.WVL
     p = hf.plan()
@@ -704,17 +722,101 @@ def horn_check(args, device) -> int:
         ax.legend(fontsize=8)
         ax.grid(alpha=0.3)
         sub.suptitle(r["label"], x=0.01, ha="left", fontsize=12)
-    fig.suptitle(f"Rung -1: {config.HORN_SPEC['part']} full-wave vs rail3D aperture model -- "
+    head = "TARGET (synthesized FDTD side) -- " if target else ""
+    fig.suptitle(f"{head}Rung -1: {config.HORN_SPEC['part']} full-wave vs rail3D aperture model -- "
                  f"{'PASS' if out['pass'] else 'FAIL'}", fontsize=14, fontweight="bold")
+    if target:
+        import textwrap
+        note = ("TARGET: the 'FDTD' fields are rail3D's own horn with a STATED perturbation "
+                "(HORN_TARGET_MODEL: " + ", ".join(f"{k} {v}" for k, v in target.items())
+                + ") -- what a passing run should look like, not a result.")
+        # supxlabel: the constrained layout reserves room for it (fig.text overlapped)
+        fig.supxlabel(textwrap.fill(note, 230), fontsize=10, color="#b00020", x=0.01, ha="left")
+        out["target_model"] = target
     config.ensure_dirs()
-    fig_path = config.FIGURE_DIR / "fdtd_horn_agreement.png"
+    stem = "fdtd_horn_target" if target else "fdtd_horn_agreement"
+    fig_path = config.FIGURE_DIR / f"{stem}.png"
     fig.savefig(fig_path, dpi=120)
     plt.close(fig)
     strip = lambda d: {k: v for k, v in d.items()}                       # noqa: E731
-    js = config.GENERATED_DIR / "fdtd_horn_agreement.json"
+    js = config.GENERATED_DIR / f"{stem}.json"
     js.write_text(json.dumps(data3d.stamp(strip(out)), indent=2, default=str), encoding="utf-8")
     print(f"  -> {'PASS' if out['pass'] else 'FAIL'}   ({fig_path.name}, {js.name})")
     return 0 if out["pass"] else 1
+
+
+def _smooth2(shape, corr_mm: float, dx: float, rng) -> np.ndarray:
+    """Unit-RMS Gaussian-correlated random field on a grid of pitch dx (mm)."""
+    kx, ky = np.fft.fftfreq(shape[0], d=dx), np.fft.fftfreq(shape[1], d=dx)
+    KX, KY = np.meshgrid(kx, ky, indexing="ij")
+    f = np.fft.ifft2(np.fft.fft2(rng.standard_normal(shape))
+                     * np.exp(-2 * (np.pi * corr_mm) ** 2 * (KX ** 2 + KY ** 2))).real
+    return f / np.sqrt((f ** 2).mean())
+
+
+def horn_target(args, device) -> int:
+    """--horn-target: synthesize rung -1's three exports from rail3D's horn with
+    HORN_TARGET_MODEL's imperfections, in Lumerical's layout (metres, column
+    vectors, an arbitrary complex gain), and score them with horn_check itself.
+
+    The "full-wave" aperture field is the model softened past the rim and given
+    smooth amplitude / phase errors; the near plane and the 3D slab are that SAME
+    field radiated (horn_fdtd_case.radiate), times the FDTD grid's phase error
+    growing with distance. So the propagator check comes out near 1 (as it
+    should if rail3D's RS-I is right) while the aperture-model checks show the
+    model's real limitation, the rim."""
+    import horn_fdtd_case as hf
+    from scipy.io import savemat
+    from scipy.ndimage import gaussian_filter
+    m = HORN_TARGET_MODEL
+    rng = np.random.default_rng(m["seed"])
+    out = config.GENERATED_DIR / "fdtd_horn_target"
+    out.mkdir(parents=True, exist_ok=True)
+    p = hf.plan()
+    lam, dx = config.WVL, 0.25
+    col = lambda v: (np.asarray(v) * 1e-3)[:, None]                          # noqa: E731
+    gain = m["gain"] * np.exp(1j * np.radians(m["gain_phase_deg"]))
+    disp = lambda z: np.exp(1j * np.radians(m["dispersion_deg_per_lambda"]) * np.asarray(z) / lam)  # noqa: E731
+
+    ma = p["monitors"]["mon_aperture"]
+    xa = np.arange(ma["x"][0], ma["x"][1] + 1e-9, dx)
+    ya = np.arange(ma["y"][0], ma["y"][1] + 1e-9, dx)
+    E0 = hf.model_aperture(xa, ya)
+    s = m["rim_blur_mm"] / dx
+    E = gaussian_filter(E0.real, s) + 1j * gaussian_filter(E0.imag, s)
+    E = E * (1 + m["amp_rms"] * _smooth2(E.shape, m["amp_corr_mm"], dx, rng)) \
+        * np.exp(1j * np.radians(m["phase_rms_deg"]) * _smooth2(E.shape, m["phase_corr_mm"], dx, rng))
+    savemat(str(out / "horn_aperture.mat"), {"Ey": gain * E, "x": col(xa), "y": col(ya)})
+
+    # radiate the imperfect aperture: every sample with any field, at 0.5 mm
+    Xa, Ya = np.meshgrid(xa, ya, indexing="ij")
+    keep = np.zeros(E.shape, bool)
+    keep[::2, ::2] = True
+    keep &= np.abs(E) > 1e-3 * np.abs(E).max()
+    q = np.stack([Xa[keep], Ya[keep], np.zeros(keep.sum())], 1)
+
+    def rad(P):
+        return hf.radiate(E[keep], q, (2 * dx) ** 2, np.array([0.0, 0, 1]), P, device=device)
+
+    mn = p["monitors"]["mon_near"]
+    xn = np.arange(mn["x"][0], mn["x"][1] + 1e-9, 0.5)
+    yn = np.arange(mn["y"][0], mn["y"][1] + 1e-9, 0.5)
+    Xn, Yn = np.meshgrid(xn, yn, indexing="ij")
+    En = rad(np.stack([Xn.ravel(), Yn.ravel(), np.full(Xn.size, mn["z"])], 1)).reshape(Xn.shape)
+    savemat(str(out / "horn_near.mat"), {"Ey": gain * En * disp(mn["z"]), "x": col(xn), "y": col(yn)})
+    msl = p["monitors"]["mon_slab"]
+    xs3, ys3, zs3 = (np.arange(msl[k][0], msl[k][1] + 1e-9, 1.0) for k in ("x", "y", "z"))
+    G = np.stack(np.meshgrid(xs3, ys3, zs3, indexing="ij"), -1).reshape(-1, 3)
+    print(f"[horn-target] radiating the synthesized aperture ({keep.sum()} samples) to "
+          f"{len(G)} slab points on {device} ...", flush=True)
+    E3 = rad(G).reshape(len(xs3), len(ys3), len(zs3)) * disp(zs3)[None, None, :]
+    savemat(str(out / "horn_slab.mat"), {"Ey": gain * E3, "x": col(xs3), "y": col(ys3),
+                                         "z": col(zs3)})
+    print(f"[horn-target] synthetic exports -> {out}", flush=True)
+    args.horn = str(out / "horn_aperture.mat")
+    args.horn_near = str(out / "horn_near.mat")
+    args.horn_slab = str(out / "horn_slab.mat")
+    return horn_check(args, device, target=m)
 
 
 def main() -> int:
@@ -731,6 +833,9 @@ def main() -> int:
                       help="RUNG 0: E_y at z = 0 from the EMPTY-box run")
     mode.add_argument("--horn", default=None,
                       help="RUNG -1: E_y on mon_aperture from the horn_fdtd_case.py run")
+    mode.add_argument("--horn-target", action="store_true",
+                      help="RUNG -1 TARGET: synthesize the three exports from the model with "
+                           "HORN_TARGET_MODEL's imperfections and score them (fdtd_horn_target.png)")
     ap.add_argument("--horn-near", default=None,
                     help="RUNG -1: E_y on mon_near (3 lambda out) from the same run")
     ap.add_argument("--horn-slab", default=None,
@@ -748,6 +853,8 @@ def main() -> int:
     args = ap.parse_args()
 
     device = config.get_device(args.profile)
+    if args.horn_target:
+        return horn_target(args, device)
     if args.horn:
         return horn_check(args, device)
     if args.injection:
