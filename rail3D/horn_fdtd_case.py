@@ -264,10 +264,11 @@ LSF_EXPORT = """# export_horn.lsf -- written by rail3D/horn_fdtd_case.py
 # in BUNDLE (where horn_fdtd_case.py wrote it), then this script's folder, and
 # only then falls back to the working directory.
 #
-# matlabsavelegacy, not matlabsave: Ansys documents matlabsavelegacy as the
-# format "required for Matlab version 7.2 and earlier", which makes plain
-# matlabsave the v7.3 (HDF5) format -- and scipy.io.loadmat, so
-# fdtd_agreement.py, cannot read v7.3. Same arguments; limit 2 GB per matrix.
+# matlabsavelegacy first (v7-readable by scipy). Ansys documents it as the
+# format "required for Matlab version 7.2 and earlier", so plain matlabsave is
+# v7.3 (HDF5) -- and matlabsavelegacy "is only supported when using our MATLAB
+# integration", which the lab's licence lacks. So: legacy if it works, else
+# plain matlabsave, which fdtd_agreement.py reads through h5py. Same arguments.
 BUNDLE = "@BUNDLE@";
 here = "";
 try {
@@ -284,10 +285,22 @@ if (fileexists(case_dir + "/horn_case.json") == 0) {
 }
 E = getresult("mon_aperture", "E");
 Ey = pinch(E.Ey);  x = E.x;  y = E.y;
-matlabsavelegacy(case_dir + "/horn_aperture.mat", Ey, x, y);
+legacy = 0;
+try {
+    matlabsavelegacy(case_dir + "/horn_aperture.mat", Ey, x, y);
+    legacy = 1;
+} catch(save_err);
+if (legacy == 0) {
+    ?"matlabsavelegacy unavailable here (" + save_err + "): writing MATLAB v7.3 with matlabsave instead";
+    matlabsave(case_dir + "/horn_aperture.mat", Ey, x, y);
+}
 E = getresult("mon_near", "E");
 Ey = pinch(E.Ey);  x = E.x;  y = E.y;
-matlabsavelegacy(case_dir + "/horn_near.mat", Ey, x, y);
+if (legacy == 1) {
+    matlabsavelegacy(case_dir + "/horn_near.mat", Ey, x, y);
+} else {
+    matlabsave(case_dir + "/horn_near.mat", Ey, x, y);
+}
 ?"wrote horn_aperture.mat and horn_near.mat in " + case_dir;
 
 # the 3D slab under the horn (mon_slab, E_y only): optional -- skipped with a
@@ -296,7 +309,11 @@ slab_ok = 0;
 try {
     Ey = pinch(getdata("mon_slab", "Ey"));
     x = getdata("mon_slab", "x");  y = getdata("mon_slab", "y");  z = getdata("mon_slab", "z");
-    matlabsavelegacy(case_dir + "/horn_slab.mat", Ey, x, y, z);
+    if (legacy == 1) {
+        matlabsavelegacy(case_dir + "/horn_slab.mat", Ey, x, y, z);
+    } else {
+        matlabsave(case_dir + "/horn_slab.mat", Ey, x, y, z);
+    }
     slab_ok = 1;
     ?"wrote horn_slab.mat (3D E_y where the global z = 150 plane passes under the horn)";
 } catch(slab_err);
@@ -397,7 +414,8 @@ def plan(size_ant=None, wall: float = WALL, wg_len: float = WG_LEN) -> dict:
         },
         "export": ("run export_horn.lsf -> horn_aperture.mat, horn_near.mat (and "
                    "horn_slab.mat if mon_slab exists) in this folder (matlabsavelegacy, "
-                   "which scipy reads); it prints the next command"),
+                   "or plain matlabsave = v7.3 where Lumerical lacks the MATLAB "
+                   "integration; fdtd_agreement.py reads both); it prints the next command"),
         "then": ("python fdtd_agreement.py --horn <this folder>/horn_aperture.mat "
                  "--horn-near <this folder>/horn_near.mat --horn-slab <this folder>/horn_slab.mat"),
     }

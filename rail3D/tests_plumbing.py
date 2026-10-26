@@ -26,8 +26,8 @@ run rather than here:
       FDTD-like grid, an arbitrary complex gain, and Lumerical's exp(-i w t)
       convention -- so it must align AS-IS. A conjugated (HFSS/FEKO-style) copy
       must still be detected. The round trip must score ~100% on both planes:
-      anything less is the tool, not physics. A v7.3 (HDF5) .mat -- Lumerical's
-      plain matlabsave -- is refused with the fix, not a scipy traceback.
+      anything less is the tool, not physics. A broken v7.3 (HDF5) .mat ends in
+      a clear message, not a scipy / h5py traceback.
   P5  horn_source.py writes the Import-source file in the layout Lumerical's
       own example uses (x, y column vectors in m, scalar z, (nx, ny) complex
       E/H), with E_y equal to rail3D's windowed horn field, flux going DOWN,
@@ -38,7 +38,8 @@ run rather than here:
       text copy reads back equal to the .mat in readdata's layout; the load
       check written into the script passes on both ways in and FAILS on a
       conjugated, transposed or real-only load; export_horn saves with
-      matlabsavelegacy, which scipy can read.
+      matlabsavelegacy and falls back to plain matlabsave (v7.3) where Lumerical
+      has no MATLAB integration, and a v7.3 file in MATLAB's layout reads back.
   P6  the three-plane source verification (README finding 32) on synthetic
       exports built from the model in Lumerical's layout (metres, column
       vectors, an arbitrary complex gain): rung -1's aperture, near, z = 150
@@ -319,17 +320,17 @@ def p4_fdtd_agreement_roundtrip() -> dict:
             "figure_written": (tmp / "fdtd_agreement_plate.png").exists(),
             "stamped": "_stamp" in out,
         }
-        # a v7.3 (HDF5) .mat -- Lumerical's plain matlabsave -- must be refused
-        # with the fix, not die in scipy (README finding 30). Header only: the
-        # version word 0x0200 at byte 124 is all scipy looks at.
+        # v7.3 (HDF5) .mat files are READ now (README finding 30: the lab's
+        # Lumerical cannot write v7), so a header-only, broken one must end in a
+        # clear message, not a scipy / h5py traceback. P5 round-trips a real one.
         v73 = tmp / "v73.mat"
         v73.write_bytes(b"MATLAB 7.3 MAT-file, Platform: PCWIN64, HDF5 schema 1.00 .".ljust(116)
                         + bytes(8) + b"\x00\x02IM" + bytes(384))
         try:
             cw.load_external(str(v73), gw)
-            res["v73_refused_with_fix"] = False
+            res["broken_v73_clear_message"] = False
         except SystemExit as exc:
-            res["v73_refused_with_fix"] = "matlabsavelegacy" in str(exc)
+            res["broken_v73_clear_message"] = "re-export" in str(exc)
         res["pass"] = all(v for v in res.values() if isinstance(v, bool))
         return res
     finally:
@@ -424,8 +425,27 @@ def p5_horn_source() -> dict:
                                       and "@BUNDLE@" not in ex
                                       and "case_dir = here;" in ex and "case_dir = pwd;" in ex
                                       and ex.count("{") == ex.count("}"))
-        out["export_lsf_scipy_readable"] = ("matlabsave(" not in ex and ex.count(
-            'matlabsavelegacy(case_dir + "/horn_') == 3)              # aperture, near, slab
+        # legacy (v7, scipy) first, plain matlabsave (v7.3) where Lumerical has no
+        # MATLAB integration -- one of each per file (aperture, near, slab)
+        out["export_lsf_legacy_then_v73"] = (
+            ex.count('matlabsavelegacy(case_dir + "/horn_') == 3
+            and ex.count('matlabsave(case_dir + "/horn_') == 3 and "catch(save_err);" in ex)
+        # ... and the v7.3 file the fallback writes must read back: MATLAB's
+        # column-major layout (axes reversed in HDF5) and complex as real/imag
+        import h5py
+        import compare_wavefronts as cw
+        f73 = tmp / "v73.mat"
+        ey = (np.arange(12.0).reshape(3, 4) + 1j * np.arange(12.0).reshape(3, 4) ** 2)
+        xv, yv = np.linspace(-1e-3, 1e-3, 3), np.linspace(-2e-3, 2e-3, 4)
+        cdt = np.dtype([("real", "<f8"), ("imag", "<f8")])
+        with h5py.File(f73, "w") as h:
+            c = np.empty(ey.T.shape, cdt)
+            c["real"], c["imag"] = ey.T.real, ey.T.imag
+            h["Ey"] = c
+            h["x"], h["y"] = xv.reshape(3, 1).T, yv.reshape(4, 1).T
+        fld, (vx, vy) = cw.read_monitor(f73, "Ey", "xy")
+        out["v73_roundtrip"] = bool(np.allclose(fld, ey) and np.allclose(vx, xv * 1e3)
+                                    and np.allclose(vy, yv * 1e3))
         out["export_lsf_slab_optional"] = ('getdata("mon_slab", "Ey")' in ex
                                            and "catch(slab_err);" in ex)
         # a rebuild must replace the text copy, never leave the previous one

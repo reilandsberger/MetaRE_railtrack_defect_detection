@@ -1,6 +1,6 @@
 # CLAUDE.md — MetaRE railtrack defect detection
 
-*Last updated: 2026-10-13 · λ = 5 mm (60 GHz) · horn = physical RFspin H-A75-W20
+*Last updated: 2026-10-26 · λ = 5 mm (60 GHz) · horn = physical RFspin H-A75-W20
 (README finding 29, 2026-09-24), moved out to 278.5 mm with its lowest edge level
 with the metasurface, metasurface input upward-only (finding 31, 2026-10-02);
 Import source verified at three planes by rungs −1/0 (finding 32) ·
@@ -181,8 +181,10 @@ Trainable metasurface + detector "barcode" system for rail defect detection.
   and needs 2025 R1.1+ for Import sources; STL imports as µm unless the length
   unit is mm first. Rung −1 (the horn alone, `fdtd_agreement.py --horn`) and
   rung 0 (empty box, `--injection`) gate everything after them. Anything saved
-  from Lumerical for Python to read uses **`matlabsavelegacy`**, and generated
-  `.lsf` scripts use absolute paths (README finding 30).
+  from Lumerical for Python to read uses `matlabsavelegacy` where it runs, else
+  plain **`matlabsave`** (v7.3, read with h5py): the lab's Lumerical has no MATLAB
+  integration, which `matlabsavelegacy` needs (2026-10-26). Generated `.lsf`
+  scripts use absolute paths (README finding 30).
 - **Interpreting a returned result set: `rail3D/READING_RESULTS.md`.** Pass rules
   for every gate, what each field means, how to tell which commit produced a
   report, and the specific ways each output has been misread. Read it before

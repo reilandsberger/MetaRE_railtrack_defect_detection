@@ -1,11 +1,12 @@
 # rail3D — 3D diffraction simulation + metasurface training for rail defect detection
 
-*Last updated: 2026-10-13 · λ = 5 mm (60 GHz) · horn = RFspin H-A75-W20 (finding 29) at
+*Last updated: 2026-10-26 · λ = 5 mm (60 GHz) · horn = RFspin H-A75-W20 (finding 29) at
 278.5 mm, lowest edge level with the metasurface; upward-only metasurface input (finding 31); the
 Import source verified at three planes by rungs −1 and 0 (finding 32) · wear is a smooth
 parametric gauge-corner cut in every sample, crown wear in 50% (finding 33) · V0–V8
 measured on the 5090 with the PREVIOUS horn and placement; V0–V4 and V9 re-run on the laptop with the
-new ones · Lumerical file I/O: absolute paths, text fallback, load check, `matlabsavelegacy` (finding 30)
+new ones · Lumerical file I/O: absolute paths, text fallback, load check; exports `matlabsavelegacy` or, where
+that needs a MATLAB integration the lab lacks, plain `matlabsave` read via h5py (finding 30, revised 2026-10-26)
 — bump this line in any commit that changes behaviour this file describes.*
 
 **Handoff document.** This README is written so that a future session (any
@@ -935,6 +936,20 @@ first) · or everything at once with `python lab_report.py`.
     8 and the rung exports) now uses `matlabsavelegacy` into an explicit
     folder. `load_external` refuses a v7.3 file with that fix instead of a
     scipy traceback (P4).
+
+    **Revised 2026-10-26: the lab's Lumerical cannot run `matlabsavelegacy`
+    either.** On the first rung −1 export it stopped with "matlabsavelegacy is
+    only supported when using our MATLAB integration", which the lab's licence
+    lacks. So both directions are blocked there in v7: Lumerical cannot read
+    scipy's `.mat`, and cannot write the legacy format scipy reads. The fix is
+    on the Python side. `export_horn.lsf` tries `matlabsavelegacy` once and
+    falls back to plain `matlabsave` (v7.3, HDF5). `compare_wavefronts.read_raw`,
+    used by every `fdtd_agreement.py` mode, reads v7.3 with **h5py** (now in
+    `requirements.txt`), undoing MATLAB's column-major axis order and joining
+    the real/imag compound into complex. P5 round-trips a v7.3 file in MATLAB's
+    own layout (512-byte header, transposed, compound complex); P4 checks that a
+    broken one ends in a clear message. Hand exports (step 8, rung 0) can use
+    plain `matlabsave` too.
 
     One bug was caught on the way. `np.savetxt` writes in text mode, so passing
     `newline=os.linesep` gave `\r\r\n` on Windows: a blank row after every

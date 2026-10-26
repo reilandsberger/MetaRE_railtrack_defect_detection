@@ -229,19 +229,46 @@ def _pick(raw, keys):
 
 
 def read_raw(path) -> dict:
-    """Every variable in a .mat (up to v7) or .npz, names without MATLAB's __ keys."""
+    """Every variable in a .mat (any version) or .npz, without MATLAB's __ keys.
+
+    Up to v7 (Lumerical's matlabsavelegacy) is scipy's; v7.3 (plain matlabsave,
+    an HDF5 file) is read with h5py -- needed where Lumerical has no MATLAB
+    integration, which matlabsavelegacy requires (README finding 30).
+    """
     p = Path(path)
     if p.suffix.lower() == ".mat":
         from scipy.io import loadmat
         try:
             return {k: v for k, v in loadmat(str(p)).items() if not k.startswith("__")}
-        except NotImplementedError as exc:          # scipy's answer to a v7.3 file
-            raise SystemExit(
-                f"{p.name} is a MATLAB v7.3 (HDF5) file -- what Lumerical's plain "
-                "matlabsave writes -- and scipy cannot read it. Save it again with "
-                "matlabsavelegacy(...), same arguments (LUMERICAL.md step 8); "
-                "export_horn.lsf already does.") from exc
+        except (NotImplementedError, ValueError) as exc:   # scipy's answers to v7.3
+            return read_mat73(p, exc)
     return dict(np.load(p, allow_pickle=True))
+
+
+def read_mat73(p: Path, scipy_error=None) -> dict:
+    """A MATLAB v7.3 (HDF5) file as {name: ndarray}, in MATLAB's axis order.
+
+    MATLAB stores arrays column-major, so HDF5 sees the axes reversed (undone
+    with .T), and complex arrays as a compound of 'real' and 'imag'."""
+    try:
+        import h5py
+    except ImportError as exc:
+        raise SystemExit(
+            f"{p.name} is a MATLAB v7.3 (HDF5) file (Lumerical's plain matlabsave). "
+            "Reading it needs h5py: pip install h5py (it is in requirements.txt).") from exc
+    if not h5py.is_hdf5(p):
+        raise SystemExit(f"{p.name}: neither a MATLAB v7 file scipy can read ({scipy_error}) "
+                         "nor a v7.3 (HDF5) one -- re-export it from Lumerical")
+    out = {}
+    with h5py.File(p, "r") as f:
+        for k, ds in f.items():
+            if k.startswith("#") or not isinstance(ds, h5py.Dataset):
+                continue                            # '#refs#' and MATLAB's bookkeeping
+            a = ds[()]
+            if a.dtype.names and {"real", "imag"} <= set(a.dtype.names):
+                a = a["real"] + 1j * a["imag"]
+            out[k] = np.asarray(a).T
+    return out
 
 
 def read_monitor(path, key: str = "Ey", axes: str = "xy"):
@@ -277,9 +304,8 @@ def load_external(path: str, g: dict):
     vectors alongside the field and interpolate onto our grid. Without them the
     array must already match our grid exactly.
 
-    Accepts .npz (numpy) or .mat up to v7 -- what Lumerical's
-    ``matlabsavelegacy`` writes. Plain ``matlabsave`` writes v7.3 (HDF5), which
-    scipy cannot read; that is refused with the fix (README finding 30).
+    Accepts .npz (numpy) or .mat: up to v7 (Lumerical's ``matlabsavelegacy``)
+    via scipy, v7.3 (plain ``matlabsave``, HDF5) via h5py (README finding 30).
     Lumerical field arrays keep singleton dimensions (nx,ny,nz,nf,ncomp), so
     they are squeezed; a surviving 3-component axis is an error rather than a
     guess, because rail3D is scalar and the choice of component is physics.

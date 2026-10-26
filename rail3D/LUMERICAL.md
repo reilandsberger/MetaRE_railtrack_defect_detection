@@ -1,6 +1,7 @@
 # Validating rail3D against Ansys Lumerical FDTD — horn Import source
 
-*Last updated: 2026-10-22 (rung −1 Mode source span: inside the waveguide wall, never outside it) ·
+*Last updated: 2026-10-26 (exports: `matlabsavelegacy` needs a MATLAB integration the lab lacks, so
+`matlabsave` v7.3 + h5py) · 2026-10-22 (rung −1 Mode source span: inside the waveguide wall, never outside it) ·
 2026-10-02 · λ = 5 mm (59.9585 GHz) · written for Lumerical FDTD
 2025 R1 (modern UI). Horn Import-source design, no TFSF. The horn is now the
 physical RFspin H-A75-W20 (README finding 29), and rung −1 simulates it
@@ -350,18 +351,19 @@ cd("C:/Users/ct2443/Documents/Rei/MetaRE_railtrack_defect_detection/rail3D/data/
 E = getresult("mon_z30", "E");
 Ey = pinch(E.Ey);
 x = E.x;  y = E.y;
-matlabsavelegacy("intact_z30.mat", Ey, x, y);
+matlabsave("intact_z30.mat", Ey, x, y);
 ```
 
 `getresult` returns a dataset *"E vs x, y, z, lambda/f"* [getresult], and
 `E.Ey` is its y component [Datasets]. `pinch` drops the singleton z and
 frequency axes. E_y is the s-polarised component rail3D models.
 
-**`matlabsavelegacy`, not `matlabsave`.** Ansys documents the legacy command
-as the format *"required for Matlab version 7.2 and earlier"*
-[matlabsavelegacy]. That makes plain `matlabsave` MATLAB v7.3 (HDF5), which
-scipy cannot read. The arguments are the same. `fdtd_agreement.py` refuses a
-v7.3 file with this fix rather than a traceback. Then, in `rail3D/`:
+**`matlabsave` (v7.3) is fine; `matlabsavelegacy` (v7) is too, where it runs.**
+Plain `matlabsave` writes MATLAB v7.3 (HDF5), which scipy cannot read, so
+`fdtd_agreement.py` reads it with **h5py** (`pip install -r requirements.txt`).
+`matlabsavelegacy` would write v7, but on the lab's Lumerical it stops with
+"only supported when using our MATLAB integration" (README finding 30, revised
+2026-10-26). The arguments are the same. Then, in `rail3D/`:
 
 ```bash
 python fdtd_agreement.py --sample intact --external data/generated/fdtd_intact/intact_z30.mat
@@ -552,7 +554,9 @@ having: PO failing on a sub-wavelength feature. Report it; do not tune it away.
 | symptom | cause |
 |---|---|
 | `matlabload`: "cannot be opened … MATLAB v7 or higher" | Lumerical gives this for a file it cannot find **and** for one it cannot read. On the lab machine it is the second: that Lumerical cannot read scipy-written `.mat`. The current `load_horn_source.lsf` catches it and loads `horn_txt/` instead. With an older bundle, regenerate it (README finding 30) |
-| `fdtd_agreement.py` stops: "… is a MATLAB v7.3 (HDF5) file" | saved with `matlabsave`; save again with `matlabsavelegacy`, same arguments [matlabsavelegacy] |
+| a monitor shows no results after a GPU run (no red dots on its icon in the Objects Tree) while others do | its **simulation type** is not **All**: set it to All on every frequency-domain monitor (found on the lab's rung −1, 2026-10-26). Also: renaming or editing anything after a run clears ALL results, so export first |
+| `matlabsavelegacy is only supported when using our MATLAB integration` | this Lumerical has no MATLAB integration (the lab's). Use plain `matlabsave`; `export_horn.lsf` already falls back to it, and `fdtd_agreement.py` reads v7.3 through h5py |
+| `fdtd_agreement.py` stops: "… Reading it needs h5py" | `pip install -r requirements.txt` (h5py reads the v7.3 `.mat` that `matlabsave` writes) |
 | `load_horn_source.lsf` prints CHECK FAILED | the load does not match what `horn_source.py` wrote (sizes, power, or the peak sample's phase). Send the printed numbers back; do not run with `VERIFY = 0` unless told to |
 | Rail is tiny, or huge | STL has no units; set File → Units → Length = mm **before** importing, or `stlimport(..., 1e-3)` [STL, stlimport] |
 | Script error on the material | name is **PEC (Perfect Electrical Conductor)**, not "Electric" [Materials] |

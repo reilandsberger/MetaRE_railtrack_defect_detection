@@ -205,8 +205,9 @@ Outside the repo (read-only references):
 - **Lumerical is exp(−iωt), like rail3D** — exports compare as-is. STL imports
   as µm unless the length unit is mm first. GPU solver: no TFSF; Import sources
   need 2025 R1.1+. Material name: "PEC (Perfect Electrical Conductor)".
-- **Lumerical file I/O (finding 30):** export with `matlabsavelegacy`, never
-  `matlabsave` (v7.3, unreadable by scipy); `cd` into the bundle folder first, or
+- **Lumerical file I/O (finding 30):** the lab's Lumerical cannot run
+  `matlabsavelegacy` (needs a MATLAB integration), so exports use plain
+  `matlabsave` (v7.3), which Python reads with h5py (2026-10-26); `cd` into the bundle folder first, or
   bake an absolute path into the script. `matlabload`'s "cannot be opened … v7"
   does not say whether the file was missing or unreadable. Running a script
   FILE sets the working directory to its folder (Ansys `cd` page), so do not

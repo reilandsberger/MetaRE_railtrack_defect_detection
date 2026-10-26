@@ -14,8 +14,8 @@ SOURCE VERIFICATION, three planes (LUMERICAL.md section 5, README finding 32):
     python fdtd_agreement.py --external data/generated/fdtd_intact/intact_z30.mat   # a REAL Lumerical run
     python fdtd_agreement.py --target                       # the TARGET figure
 
-The .mat files come from Lumerical's matlabsavelegacy (LUMERICAL.md step 8);
-plain matlabsave writes v7.3, which scipy cannot read (README finding 30).
+The .mat files come from Lumerical's matlabsave (v7.3, read with h5py) or
+matlabsavelegacy (v7, read with scipy) -- README finding 30, revised 2026-10-26.
 
 Both modes run the SAME metrics and draw the SAME figure, so the target is a
 literal preview of what a passing Lumerical run will produce. Only the source of
