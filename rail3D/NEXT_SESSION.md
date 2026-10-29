@@ -1,6 +1,6 @@
 # rail3D — session handoff, 2026-10-13
 
-*Last updated: 2026-10-13 (wear is a smooth parametric gauge-corner cut, finding
+*Last updated: 2026-10-29 (experimental-design study added: `rail3D/DESIGN_STUDY.md`, not yet acted on) · 2026-10-13 (wear is a smooth parametric gauge-corner cut, finding
 33; new prelim root `L5_prelim_689da5`) · 2026-10-02 (horn moved out to 278.5 mm,
 upward-only metasurface input, finding 31; Lumerical file I/O 2026-09-29, finding 30). Rewritten for a
 cold start on a new Claude account: no chat history or auto-memory is assumed.
@@ -118,6 +118,13 @@ changed — LUMERICAL.md has the new numbers; `fdtd_horn` is in the horn frame
 and unchanged). Then Lumerical: rung −1 → rung 0 → plate → intact → crack.
 
 ## Open items (not built / not decided)
+
+- **Experimental design (2026-10-29): `rail3D/DESIGN_STUDY.md`.** Field-level scan of
+  horn angle / azimuth / plane height / metasurface x-extent over the priority arc
+  s 110–170 (crown + gauge corner). Today's setup: robust recall 0.67 (crown 0.50).
+  Extending the metasurface's far edge to x = −190 (same horn): 0.92 (crown 1.00).
+  A 65° horn is the best gauge-corner channel; azimuth is worse than today. Finalists
+  F1–F3 and next steps in its §7 — ablate_surface first, then Tier 2 training.
 
 - **Rung-3 difference-field scorer** (crack − intact) in `fdtd_agreement.py` —
   the real FDTD result for cracks (LUMERICAL.md §5).

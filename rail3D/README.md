@@ -1,6 +1,6 @@
 # rail3D — 3D diffraction simulation + metasurface training for rail defect detection
 
-*Last updated: 2026-10-26 · λ = 5 mm (60 GHz) · horn = RFspin H-A75-W20 (finding 29) at
+*Last updated: 2026-10-29 (experimental-design study: `DESIGN_STUDY.md`) · 2026-10-26 · λ = 5 mm (60 GHz) · horn = RFspin H-A75-W20 (finding 29) at
 278.5 mm, lowest edge level with the metasurface; upward-only metasurface input (finding 31); the
 Import source verified at three planes by rungs −1 and 0 (finding 32) · wear is a smooth
 parametric gauge-corner cut in every sample, crown wear in 50% (finding 33) · V0–V8
@@ -186,6 +186,9 @@ field, plus parameter histograms.
 | `generate_dataset_3d.py` | CLI generator (`--profile lab`, `--name`, `--smoke [--smoke-n N]`, `--status`; resumable shards; refuses mixed-geometry roots) |
 | `inspect_dataset.py` | review a dataset before/after generation (re-derives geometry from seeds; warns on provenance mismatch) |
 | `passover_big.py` | the 130-window pass-over set: 5 intact + 200 each of transverse / oblique / longitudinal cracks, dents, wear and shells, all centred on the well-seen gauge shoulder (s0 140–160) with narrowed sizes; batched solves (~6–7 h on the 5090), streaming assembly, and it writes its own README, pass list (CSV + Markdown) and layout figure. SETUP_LAB §7f |
+| `glint_band.py` | Tier 0 design tool (CPU, seconds): ray-traces which part of the priority arc s 110–170 reflects the horn specularly into a given aperture, for any horn θ / azimuth φ / plane H / aperture x-range; `--figures` writes `DESIGN_STUDY.md` Figs 01, 02, 04, 05 |
+| `coverage_scan.py` | Tier 1 design scan: solves ψ1 on a wide plane (x −300…+100) for 7 horn placements × 52 mid-size defects at s0 110–170 + 16 intact, scores every aperture and two-channel combination against intact pose noise; laptop ~12 min/horn, resumable; `--twins`, `--analyze` (Figs 03, 06, 07). Applies its scene patches (240 mm tapered segment, defect-facet-only ray cast, proven identical) only while it solves |
+| `DESIGN_STUDY.md` | the 2026-10-29 horn / metasurface geometry study: tilt-window physics, the strategy menu, field-level results and finalists |
 | `load_passover.py` | loads either pass-over set into a `sensor_data` dict; `load_fields` / `readout` read any detector layout out of the raw fields |
 | `passover.py` | example time series for a reservoir-computing hardware test: 5 passes per class (+5 intact) slid through the beam at 1 mm steps (wear: entering a worn stretch, 2 mm), pose fixed per pass, NO metasurface, 8 fixed untrained windows (4 × 2). Writes clean / low / high-noise `.npz` + `.csv`, `passover_labels.json` (every parameter, a description, definitions), raw fields and a trace figure into `data/generated/passover/`. Resumable per pass; ~5.8 h on the laptop MX250, minutes on the 5090 (`--profile lab`) |
 | `sample_fields.py` | one sample per class + intact, 5 × 4: d(s, y) → \|ψ\|² → phase → change vs mean intact, at the metasurface plane. Default computes FRESH for the current geometry through the generator's own `sample_meshes` / `solve_fields` (augmented, shadowed); `--root` reads a dataset's stored fields for the same seeds. `--terms`: ψ0 \| ψ1 \| ψ2 \| ψ0+ψ1+ψ2 per class (the old `field_maps.png` columns) with the horn terms shown UNMASKED — what the upward-only rule removes; their sum is how pre-finding-31 figures defined ψ_tot (λ-period fringes from horn × rail interference) |

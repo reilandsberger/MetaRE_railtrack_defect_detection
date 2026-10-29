@@ -1,6 +1,6 @@
 # CLAUDE.md — MetaRE railtrack defect detection
 
-*Last updated: 2026-10-26 · λ = 5 mm (60 GHz) · horn = physical RFspin H-A75-W20
+*Last updated: 2026-10-29 (design study) · 2026-10-26 · λ = 5 mm (60 GHz) · horn = physical RFspin H-A75-W20
 (README finding 29, 2026-09-24), moved out to 278.5 mm with its lowest edge level
 with the metasurface, metasurface input upward-only (finding 31, 2026-10-02);
 Import source verified at three planes by rungs −1/0 (finding 32) ·
@@ -12,6 +12,15 @@ the metasurface: an optimization failure), 25 (s0 is the dominant variable), 26
 Lumerical file I/O (absolute paths, text fallback, load check,
 `matlabsavelegacy`) — finding 30 · shadow guard settled 2026-09-11 (min_t 0.05,
 offset 0.3).*
+
+## Experimental-design study (2026-10-29)
+
+`rail3D/DESIGN_STUDY.md` (tools `glint_band.py`, `coverage_scan.py`; figures in
+`data/figures/design_2026-10-29/`). Priority arc s 110–170 (crown + gauge corner, user
+decision). Field-level, untrained: today 0.67 robust recall (crown 0.50); far edge
+of the metasurface to x = −190 → 0.92; + a 65° time-multiplexed horn → 0.96; a 65° horn
++ a crown-glint surface → 1.00. Horn azimuth is NOT dark field (finite-distance horn)
+and scores worst. Nothing in the pipeline changed; finalists await `ablate_surface.py`.
 
 ## START HERE (cold start, 2026-09-29)
 
