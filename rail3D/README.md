@@ -1,6 +1,6 @@
 # rail3D — 3D diffraction simulation + metasurface training for rail defect detection
 
-*Last updated: 2026-10-29 (experimental-design study: `DESIGN_STUDY.md`) · 2026-10-26 · λ = 5 mm (60 GHz) · horn = RFspin H-A75-W20 (finding 29) at
+*Last updated: 2026-11-02 (rail-reflection targets and the 2D exact-vs-PO study, finding 34: `RAIL_TARGETS.md`) · 2026-10-29 (experimental-design study: `DESIGN_STUDY.md`) · 2026-10-26 · λ = 5 mm (60 GHz) · horn = RFspin H-A75-W20 (finding 29) at
 278.5 mm, lowest edge level with the metasurface; upward-only metasurface input (finding 31); the
 Import source verified at three planes by rungs −1 and 0 (finding 32) · wear is a smooth
 parametric gauge-corner cut in every sample, crown wear in 50% (finding 33) · V0–V8
@@ -188,6 +188,9 @@ field, plus parameter histograms.
 | `passover_big.py` | the 130-window pass-over set: 5 intact + 200 each of transverse / oblique / longitudinal cracks, dents, wear and shells, all centred on the well-seen gauge shoulder (s0 140–160) with narrowed sizes; batched solves (~6–7 h on the 5090), streaming assembly, and it writes its own README, pass list (CSV + Markdown) and layout figure. SETUP_LAB §7f |
 | `glint_band.py` | Tier 0 design tool (CPU, seconds): ray-traces which part of the priority arc s 110–170 reflects the horn specularly into a given aperture, for any horn θ / azimuth φ / plane H / aperture x-range; `--figures` writes `DESIGN_STUDY.md` Figs 01, 02, 04, 05 |
 | `coverage_scan.py` | Tier 1 design scan: solves ψ1 on a wide plane (x −300…+100) for 7 horn placements × 52 mid-size defects at s0 110–170 + 16 intact, scores every aperture and two-channel combination against intact pose noise; laptop ~12 min/horn, resumable; `--twins`, `--analyze` (Figs 03, 06, 07). Applies its scene patches (240 mm tapered segment, defect-facet-only ray cast, proven identical) only while it solves |
+| `po_canonical_2d.py` | 2D EXACT boundary-integral solver (both polarisations, validated against a plate and the PEC-cylinder series) vs rail3D's physical optics on 162 defect cross-sections; predicts rung 3 per class (finding 34). `--validate` in seconds; the study ~45 min CPU |
+| `rail_targets_figs.py` | the figures behind `RAIL_TARGETS.md`: approval ladder, crack waveguide physics, crack error maps, class scorecard, rung-3 summary |
+| `RAIL_TARGETS.md` | rail-reflection rungs 1–3: approval metrics and why, rung-3 targets and per-class predictions |
 | `DESIGN_STUDY.md` | the 2026-10-29 horn / metasurface geometry study: tilt-window physics, the strategy menu, field-level results and finalists |
 | `load_passover.py` | loads either pass-over set into a `sensor_data` dict; `load_fields` / `readout` read any detector layout out of the raw fields |
 | `passover.py` | example time series for a reservoir-computing hardware test: 5 passes per class (+5 intact) slid through the beam at 1 mm steps (wear: entering a worn stretch, 2 mm), pose fixed per pass, NO metasurface, 8 fixed untrained windows (4 × 2). Writes clean / low / high-noise `.npz` + `.csv`, `passover_labels.json` (every parameter, a description, definitions), raw fields and a trace figure into `data/generated/passover/`. Resumable per pass; ~5.8 h on the laptop MX250, minutes on the 5090 (`--profile lab`) |
@@ -212,7 +215,7 @@ field, plus parameter histograms.
 | `target_figures.py` | what a successful result would look like — labelled TARGET, never a measurement |
 | `horn_source.py` | rail3D's horn as a Lumerical **Import source** (E + H as .mat and as text, + a self-checking .lsf) on z = 15 mm; `--aperture-from` builds it from the full-wave horn (rung −1) instead; `--txt DIR` rewrites only the text copy (finding 30) |
 | `horn_fdtd_case.py` | Lumerical **rung −1**: watertight PEC STL of the H-A75-W20 + WR-15 feed, Mode-source/monitor plan incl. the 3D `mon_slab` under the horn (`horn_case.json`), `export_horn.lsf` |
-| `fdtd_agreement.py` | scores Lumerical exports: `--horn` (+ `--horn-near`, `--horn-slab`: rung −1, the source at three planes, finding 32), `--injection` (+ `--injection-src`: rung 0), `--sample … --external` (rungs 1–3, z = 30 and MS plane), `--target` (synthetic target) |
+| `fdtd_agreement.py` | scores Lumerical exports: `--horn` (+ `--horn-near`, `--horn-slab`: rung −1, the source at three planes, finding 32), `--injection` (+ `--injection-src`: rung 0), `--sample … --external` (rungs 1–2, z = 30 and MS plane), `--external` + `--intact-external` (rung 3: the difference field, `DIFF_CRITERIA`), `--target` / `--diff-target all [--predicted]` (synthetic targets; 2D-based predictions, `RAIL_TARGETS.md`) |
 | `lumerical_mockup.py` | draws the target FDTD setup into a Layout-window screenshot, every box from `case.json` |
 | `presentation/` | `deck_figs.py` (horn/result figures computed from the code) + `update_deck.py` (the 2026-09-24 slides) for `data/generated/rail3D_overview.pptx` |
 | notebooks | `rail3D_pipeline` (the whole pipeline, narrated), `design_review_`, `validation_3d_`, `training_3d_ms_`, `training_3d_no_ms_` — all thin wrappers over the modules |
@@ -1146,6 +1149,51 @@ first) · or everything at once with `python lab_report.py`.
     and L. The CSVs still enumerate wear samples (seed per CSV index) but no
     longer shape them. Every dataset and checkpoint made before this is
     refused; the prelim root is now `L5_prelim_689da5`.
+
+34. **Physical optics is exact enough for wear, dents and shells, and
+    not for cracks: a 1.5–3 mm crack is a waveguide, and which waveguide
+    depends on the polarisation.** (2026-11-02, `po_canonical_2d.py`,
+    `RAIL_TARGETS.md`.)
+
+    *How it was measured.* A 2D exact boundary-integral solver (Dirichlet
+    EFIE and Neumann second kind, pulse basis) was validated: flat plate
+    exact in both polarisations, PEC cylinder (ka = 5) within 0.4–0.5% of
+    the Bessel series. It was scored against rail3D's own physical optics
+    (2 (−ψ_inc) ∂G/∂n′ on lit, front-facing segments, 2D ray cast with
+    min_t 0.05 / offset 0.3) on 162 defect cross-sections. Each defect was
+    cut both ways under the horn's polarisation: x-z (E along the cut's
+    axis, Dirichlet, in-plane incidence) and y-z (E in the plane, Neumann,
+    reduced to k_t = k cos θ). The score is the difference field
+    (defect − flat) in the directions that reach the metasurface.
+
+    *Result.*
+    - Wear 100% inside the rung-3 gates (±3 dB, corr ≥ 0.9).
+    - Shells 100%.
+    - Dents 89–94%. Only the narrowest, deepest dents miss: FWHM 10 mm,
+      8 deep, tip radius ~2.3 mm < λ/2, over-predicted by up to 9 dB.
+    - Transverse cracks 67%: the slot carries a TEM mode with no cutoff, a
+      shorted stub. rail3D gets the interference period but not the end
+      correction, so the error swings ±5 dB with depth.
+    - Longitudinal cracks 46%: E ∥ the walls gives a TE mode with cutoff
+      at width λ/2 = 2.5 mm. Below it the slot is dark and rail3D is off by
+      a steady −3.7…+2.5 dB. Above it the mode resonates and rail3D misses
+      by up to 19 dB.
+
+    *What it is not.* It is not "many orders of ray reflection". At
+    0.3–0.6 λ there are no rays inside the slot; the multiple-bounce picture
+    is the ray limit of the same standing wave. A scalar model cannot tell
+    the two orientations apart.
+
+    *Consequences.*
+    - Rung 3 is now gated on the difference field (`DIFF_CRITERIA`; the
+      scorer is `fdtd_agreement.py --intact-external`).
+    - For the lab's seed-0 crack (2.34 × 4.36 mm, three lines) the
+      prediction is +1.6 dB transverse (passes the level gate, signature on
+      its edge) and +4.7 dB longitudinal (fails: rail3D under-counts it).
+    - rail3D's crack training data carries a ±5 dB (transverse) to −19 dB
+      (longitudinal, above cutoff) uncertainty that no correction factor
+      removes, because it depends on depth to the millimetre. If rung 3
+      confirms this, it is a finding about crack recall, not a bug to tune.
 
 
 ## 6b. Objective & metrics (rev. 2)

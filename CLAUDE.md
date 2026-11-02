@@ -1,6 +1,6 @@
 # CLAUDE.md — MetaRE railtrack defect detection
 
-*Last updated: 2026-10-29 (design study) · 2026-10-26 · λ = 5 mm (60 GHz) · horn = physical RFspin H-A75-W20
+*Last updated: 2026-11-02 (rail targets, finding 34) · 2026-10-29 (design study) · 2026-10-26 · λ = 5 mm (60 GHz) · horn = physical RFspin H-A75-W20
 (README finding 29, 2026-09-24), moved out to 278.5 mm with its lowest edge level
 with the metasurface, metasurface input upward-only (finding 31, 2026-10-02);
 Import source verified at three planes by rungs −1/0 (finding 32) ·
@@ -12,6 +12,17 @@ the metasurface: an optimization failure), 25 (s0 is the dominant variable), 26
 Lumerical file I/O (absolute paths, text fallback, load check,
 `matlabsavelegacy`) — finding 30 · shadow guard settled 2026-09-11 (min_t 0.05,
 offset 0.3).*
+
+## Rail-reflection targets (2026-11-02)
+
+`rail3D/RAIL_TARGETS.md`, README finding 34. Rung 3 is gated on the DIFFERENCE field
+(`fdtd_agreement.DIFF_CRITERIA`: corr ≥ 0.90, level ±3 dB, 130-detector signature cos ≥ 0.95 /
+±3 dB; scorer `--external … --intact-external …`). `po_canonical_2d.py` (2D exact BIE, validated)
+vs rail3D's PO on 162 cross-sections: wear/shell 100% inside the gates, dents 89–94% (narrow deep
+ones miss), transverse cracks 67% (TEM stub, ±5 dB with depth), longitudinal 46% (TE cutoff at
+2.5 mm width; up to 19 dB above it). Cracks are waveguides, not ray-bounce cavities; a scalar
+model cannot see the polarisation. Lab seed-0 crack prediction: +1.6 dB transverse (borderline),
++4.7 dB longitudinal (fail). Targets: `--diff-target all [--predicted]`; figures `rail_targets_figs.py`.
 
 ## Experimental-design study (2026-10-29)
 
@@ -203,7 +214,7 @@ Trainable metasurface + detector "barcode" system for rail defect detection.
   call `data3d.stage_root(stage)` and `data3d.run_tag(root)`. A provenance
   change auto-suffixes the root with a geometry digest so the generator has a
   legal next move instead of refusing with nowhere to go (README finding 23).
-- **`python tests_plumbing.py` (~1 min, CPU) after touching anything that
+- **`python tests_plumbing.py` (~2–3 min, CPU) after touching anything that
   addresses, reads back or compares results** — dataset-root resolution, the
   history schema the reports read, or the SLM/baseline identity. These are NOT
   physics gates; they exist because the last three lab failures were all

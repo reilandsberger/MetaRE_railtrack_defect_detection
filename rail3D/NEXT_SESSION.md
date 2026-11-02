@@ -1,6 +1,6 @@
 # rail3D — session handoff, 2026-10-13
 
-*Last updated: 2026-10-29 (experimental-design study added: `rail3D/DESIGN_STUDY.md`, not yet acted on) · 2026-10-13 (wear is a smooth parametric gauge-corner cut, finding
+*Last updated: 2026-11-02 (rail-reflection targets, finding 34: `rail3D/RAIL_TARGETS.md`) · 2026-10-29 (experimental-design study added: `rail3D/DESIGN_STUDY.md`, not yet acted on) · 2026-10-13 (wear is a smooth parametric gauge-corner cut, finding
 33; new prelim root `L5_prelim_689da5`) · 2026-10-02 (horn moved out to 278.5 mm,
 upward-only metasurface input, finding 31; Lumerical file I/O 2026-09-29, finding 30). Rewritten for a
 cold start on a new Claude account: no chat history or auto-memory is assumed.
@@ -126,8 +126,10 @@ and unchanged). Then Lumerical: rung −1 → rung 0 → plate → intact → cr
   A 65° horn is the best gauge-corner channel; azimuth is worse than today. Finalists
   F1–F3 and next steps in its §7 — ablate_surface first, then Tier 2 training.
 
-- **Rung-3 difference-field scorer** (crack − intact) in `fdtd_agreement.py` —
-  the real FDTD result for cracks (LUMERICAL.md §5).
+- ~~Rung-3 difference-field scorer~~ **built 2026-11-02**: `fdtd_agreement.py
+  --external … --intact-external …`; targets + per-class predictions in
+  `rail3D/RAIL_TARGETS.md` (finding 34: cracks are the worst match, by
+  waveguide physics; wear/dent/shell pass).
 - ~~Plumbing test P6~~ **done 2026-10-02** (finding 32): the three-plane
   source verification round-trips on synthetic exports.
 - ~~SEG_LEN re-check script~~ now `term_budget.py`'s

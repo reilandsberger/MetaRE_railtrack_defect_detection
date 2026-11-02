@@ -14,6 +14,8 @@ SOURCE VERIFICATION, three planes (LUMERICAL.md section 5, README finding 32):
     python fdtd_agreement.py --external data/generated/fdtd_intact/intact_z30.mat   # a REAL Lumerical run
     python fdtd_agreement.py --target                       # the TARGET figure
     python fdtd_agreement.py --horn-target                  # rung -1's TARGET figure
+    python fdtd_agreement.py --sample crack --external data/generated/fdtd_crack/crack_z30.mat --intact-external data/generated/fdtd_crack/intact_z30.mat   # rung 3: the difference field
+    python fdtd_agreement.py --diff-target all [--predicted]  # rung 3 TARGETS (or the 2D-based PREDICTIONS), RAIL_TARGETS.md
 
 The .mat files come from Lumerical's matlabsave (v7.3, read with h5py) or
 matlabsavelegacy (v7, read with scipy) -- README finding 30, revised 2026-10-26.
@@ -819,6 +821,408 @@ def horn_target(args, device) -> int:
     return horn_check(args, device, target=m)
 
 
+# ---------------------------------------------------------------------------
+# RUNG 3: the DIFFERENCE field (defect - intact), LUMERICAL.md section 5
+# ---------------------------------------------------------------------------
+# The absolute field of a cracked rail is ~99% the intact rail's, so it can agree
+# at 0.99 while the crack's own signal is wrong (READING_RESULTS 9b). What the
+# detectors see is the difference, so rung 3 is gated on it. Both absolute
+# exports are aligned with ONE complex gain fitted on the INTACT run (as rung 2
+# does), then subtracted: a level error in the difference is kept, not fitted away.
+#
+# Why these numbers (proposed; revisit after the first real rung 3):
+#   diff_corr >= 0.90     the same signature: residual <= 44% of its amplitude
+#   |diff_level| <= 3 dB  a 2x power error; the design study calls 6 dB "robust",
+#                         so a model inside 3 dB keeps at least half that margin
+#   barcode cos >= 0.95   the 130-detector signature (heterodyned with the intact
+#                         light, as the detectors see it) points the same way
+#   |barcode dB| <= 3     ... with the same size
+DIFF_CRITERIA = {
+    "diff_corr": 0.90,
+    "diff_level_dB": 3.0,
+    "diff_barcode_cos": 0.95,
+    "diff_barcode_dB": 3.0,
+    "lit_frac": 0.25,             # difference-field phase is drawn where |d| >= 25% of its peak
+}
+DIFF_GATED = {"z30": ("diff_corr", "diff_level_dB"),
+              "ms": ("diff_corr", "diff_level_dB", "diff_barcode_cos", "diff_barcode_dB")}
+# A PASSING rung 3, for the generic target: the stated correlation and level
+# error, the rest of the difference field replaced by a scrambled copy of itself.
+DIFF_PASS_MODEL = {"corr": 0.96, "level_dB": 0.5, "seed": 3}
+# The target walks this ladder and draws the LOOSEST agreement that passes every
+# gate, so each class's figure also states the field agreement it needs. Classes
+# whose difference field outshines the intact one (wear) need more: there a field
+# residual r costs ~2r in the detector signature (|d|^2 dominates), not ~r.
+DIFF_PASS_LADDER = (0.96, 0.98, 0.99, 0.995, 0.998)
+DIFF_SAMPLES = ("crack_transverse", "crack_longitudinal", "crack_oblique", "dent", "wear", "shell")
+PRED_JSON = config.GENERATED_DIR / "po_canonical_2d.json"
+
+
+def diff_params(name: str, section) -> dict:
+    """The rung-3 sample: the same seed-0 draw compare_wavefronts --export-case
+    writes for the class, with the crack's orientation pinned by name."""
+    cls = name.split("_")[0]
+    p = sample_params(cls, section)
+    if cls == "crack":
+        p["theta"] = {"crack_transverse": np.pi / 2, "crack_longitudinal": 0.0,
+                      "crack_oblique": np.radians(45.0)}[name]
+    return p
+
+
+def _apply_align(psi: torch.Tensor, al: dict) -> torch.Tensor:
+    """The intact run's alignment, applied unchanged to another export."""
+    c = psi.conj() if al["conjugated"] else psi
+    return c * (al["gain"] * np.exp(1j * np.radians(al["phase_deg"])))
+
+
+def diff_score(rd, ri, ed, ei, g, device, ms_plane: bool) -> dict:
+    """rd/ri: rail3D defect/intact; ed/ei: FDTD defect/intact (aligned)."""
+    a, b = (rd - ri).detach().cpu(), (ed - ei).detach().cpu()
+    X, Y = cw.plane_grid(g, torch.device("cpu"))
+    X, Y = X[0].numpy(), Y[0].numpy()
+    peak = float(a.abs().max())
+    lit = (a.abs() >= DIFF_CRITERIA["lit_frac"] * peak).numpy()
+    out = {
+        "diff_corr": cw.complex_corr(b, a),
+        "diff_level_dB": float(10 * np.log10(float(b.norm() ** 2) / float(a.norm() ** 2))),
+        "signal_dB": float(10 * np.log10(float(a.norm() ** 2) / float(ri.cpu().norm() ** 2))),
+        "abs_corr_defect": cw.complex_corr(ed.cpu(), rd.cpu()),
+        "_maps": {"a": a.numpy(), "b": b.numpy(), "res": ((b - a).abs() / peak).numpy(),
+                  "lit": lit, "X": X, "Y": Y},
+    }
+    if ms_plane:
+        br = (cw.barcode(rd.to(device), g, device) - cw.barcode(ri.to(device), g, device)).cpu()
+        be = (cw.barcode(ed.to(device), g, device) - cw.barcode(ei.to(device), g, device)).cpu()
+        out["diff_barcode_cos"] = cw.cos_sim(br, be)
+        out["diff_barcode_dB"] = float(20 * np.log10(float(be.norm()) / float(br.norm())))
+        out["_maps"]["bar"] = (br.numpy(), be.numpy())
+    checks = {
+        "diff_corr": out["diff_corr"] >= DIFF_CRITERIA["diff_corr"],
+        "diff_level_dB": abs(out["diff_level_dB"]) <= DIFF_CRITERIA["diff_level_dB"],
+    }
+    if ms_plane:
+        checks["diff_barcode_cos"] = out["diff_barcode_cos"] >= DIFF_CRITERIA["diff_barcode_cos"]
+        checks["diff_barcode_dB"] = abs(out["diff_barcode_dB"]) <= DIFF_CRITERIA["diff_barcode_dB"]
+    out["pass"] = {k: checks[k] for k in DIFF_GATED["ms" if ms_plane else "z30"]}
+    return out
+
+
+def _scrambled(d: torch.Tensor, seed: int) -> torch.Tensor:
+    """d with the same angular extent but a random structure: a smooth random
+    phase screen in its angular spectrum, orthogonalised against d, unit norm."""
+    gen = torch.Generator().manual_seed(seed)
+    A = torch.fft.fft2(d.cpu().to(torch.complex128))
+    ph = smooth_field(tuple(A.shape), 2.0, gen).double() * np.pi
+    n = torch.fft.ifft2(A * torch.exp(1j * ph))
+    dd = d.cpu().to(torch.complex128)
+    n = n - torch.vdot(dd.reshape(-1), n.reshape(-1)) / torch.vdot(dd.reshape(-1), dd.reshape(-1)) * dd
+    return (n / n.norm()).to(torch.complex64)
+
+
+def pass_target_diff(d: torch.Tensor, m: dict = DIFF_PASS_MODEL) -> torch.Tensor:
+    """A difference field that passes: corr m['corr'] with d, energy +m['level_dB']."""
+    dn = d.cpu() / d.cpu().norm()
+    out = m["corr"] * dn + np.sqrt(1 - m["corr"] ** 2) * _scrambled(d, m["seed"])
+    return (out * float(d.norm()) * 10 ** (m["level_dB"] / 20)).to(d.device)
+
+
+def _tilt_at(s0: float) -> float:
+    import glint_band
+    g = glint_band.arc()
+    return float(np.interp(s0, g["s"], g["tilt"]))
+
+
+def _nearest_case(rows: list, **want) -> dict:
+    """The 2D case closest to a 3D defect: same class/sub/where (and three lines
+    for cracks, as rail3D draws them), nearest in the numeric keys."""
+    num = {k: v for k, v in want.items() if isinstance(v, float)}
+    cat = {k: v for k, v in want.items() if not isinstance(v, float)}
+    pool = [r for r in rows if all(r.get(k) == v for k, v in cat.items())]
+    if not pool:
+        raise SystemExit(f"no 2D case matches {cat}: re-run po_canonical_2d.py")
+    return min(pool, key=lambda r: sum(((r[k] - v) / max(abs(v), 1.0)) ** 2
+                                       for k, v in num.items() if k in r))
+
+
+def _transfer(case: dict, sin_phi: np.ndarray, tilt_deg: float) -> np.ndarray:
+    """Exact / rail3D, per far-field direction, from a 2D case. Regularised toward
+    1 (no correction), not 0, where rail3D's difference pattern is weak, and 1
+    outside the directions the case computed: no information is not a prediction
+    that the signal vanishes. sin_phi: direction sines in the cut."""
+    pat = case["_pattern"]
+    phi = np.asarray(pat["phi"])
+    de = np.asarray(pat["d_ex"][0]) + 1j * np.asarray(pat["d_ex"][1])
+    dp = np.asarray(pat["d_po"][0]) + 1j * np.asarray(pat["d_po"][1])
+    eps = 0.05 * np.abs(dp).max()
+    T = 1 + (de - dp) * dp.conj() / (np.abs(dp) ** 2 + eps ** 2)
+    ang = np.degrees(np.arcsin(np.clip(sin_phi, -1, 1))) - tilt_deg
+    inside = (ang >= phi[0]) & (ang <= phi[-1])
+    return np.where(inside, np.interp(ang, phi, T.real) + 1j * np.interp(ang, phi, T.imag), 1.0)
+
+
+def predicted_diff(d: torch.Tensor, gw: dict, name: str, params: dict, rows: list):
+    """rail3D's z = 30 difference field, re-weighted direction by direction by
+    the 2D exact/rail3D ratio of the nearest canonical case: the PREDICTED
+    Lumerical difference field. Mapping (stated, not derived):
+      longitudinal crack, wear: the x-z (Dirichlet) cut, along k_x
+      transverse crack:         the y-z (Neumann) cut, along k_y at k_t
+      oblique (45 deg) crack:   the mean of the two (E_y splits evenly between
+                                the crack-parallel and crack-normal components)
+      dent, shell:              the mean of their x-z and y-z cuts"""
+    cls = name.split("_")[0]
+    s0 = params.get("s0", 140.0)
+    tilt = _tilt_at(s0)
+    theta_loc = np.degrees(config.THETA_INC) - tilt
+    thetas = sorted({r["theta"] for r in rows if r["cls"] == cls})
+    th = min(thetas, key=lambda t: abs(t - theta_loc))
+    k = 2 * np.pi / config.WVL
+    kt = k * np.cos(np.radians(th))
+    nx, ny = d.shape
+    KX = 2 * np.pi * np.fft.fftfreq(nx, d=gw["dx"])[:, None] * np.ones((1, ny))
+    KY = 2 * np.pi * np.fft.fftfreq(ny, d=gw["dx"])[None, :] * np.ones((nx, 1))
+    want = {"cls": cls, "theta": th}
+    used = {}
+
+    def cut_T(cut_name):
+        w = dict(want)
+        if cls == "crack":
+            w.update(sub="longitudinal" if cut_name == "x-z" else "transverse", lines=3,
+                     width=float(params["width"]), depth=float(params["depth"]))
+        elif cls == "dent":
+            w.update(sub=cut_name, depth=float(params["depth"]),
+                     fwhm=float(params["fw_s"] if cut_name == "x-z" else params["fw_y"]))
+        elif cls == "shell":
+            w.update(sub=cut_name, depth=float(params["depth"]),
+                     radius=float(params["r_s"] if cut_name == "x-z" else params["r_y"]))
+        elif cls == "wear":
+            w.update(sub="x-z", depth=float(params["depth"]), radius=float(params["gauge_radius"]))
+        c = _nearest_case(rows, **w)
+        used[cut_name] = c["id"]
+        if cut_name == "x-z":
+            return _transfer(c, KX / k, tilt)
+        T = _transfer(c, KY / kt, 0.0)
+        return np.where(np.abs(KY) < kt, T, 1.0)
+
+    if name in ("crack_longitudinal", "wear"):
+        T = cut_T("x-z")
+    elif name == "crack_transverse":
+        T = cut_T("y-z")
+    else:
+        T = 0.5 * (cut_T("x-z") + cut_T("y-z"))
+    A = torch.fft.fft2(d.cpu().to(torch.complex128))
+    out = torch.fft.ifft2(A * torch.as_tensor(T)).to(torch.complex64).to(d.device)
+    return out, {"theta_loc_deg": float(theta_loc), "theta_case_deg": th, "tilt_deg": tilt,
+                 "cases": used}
+
+
+def diff_draw(rows, mode: str, meta: dict, path: Path) -> None:
+    """mode: 'external' | 'target' | 'predicted'."""
+    fig = plt.figure(figsize=(29, 8.8), layout="constrained")
+    subs = fig.subfigures(len(rows), 1)
+    src = {"external": "Lumerical", "target": "FDTD target", "predicted": "FDTD predicted"}[mode]
+    for sub, (label, m, g) in zip(np.atleast_1d(subs), rows):
+        axs = sub.subplots(1, 8, gridspec_kw={"width_ratios": [1, 1, 1, 1, 1, 1.05, 1.0, 1.5]})
+        X, Y, mp = m["_maps"]["X"], m["_maps"]["Y"], m["_maps"]
+        vmax = float(np.abs(mp["a"]).max())
+        lit = mp["lit"]
+        panels = [
+            (np.abs(mp["a"]), "magma", (0, vmax), "|Δψ| rail3D (defect − intact)"),
+            (np.abs(mp["b"]), "magma", (0, vmax), f"|Δψ| {src}"),
+            (mp["res"], "Reds", (0, 0.6), f"|Δ{src} − Δrail3D| / peak"),
+            (np.where(lit, np.angle(mp["a"]), np.nan), "twilight", (-np.pi, np.pi), "arg Δψ rail3D"),
+            (np.where(lit, np.angle(mp["b"]), np.nan), "twilight", (-np.pi, np.pi), f"arg Δψ {src}"),
+        ]
+        for k_, (arr, cmap, (lo, hi), title) in enumerate(panels):
+            ax = axs[k_]
+            cm = plt.get_cmap(cmap).copy()
+            cm.set_bad("#d9d9d9")
+            im = ax.pcolormesh(X, Y, arr, cmap=cm, vmin=lo, vmax=hi, shading="nearest")
+            fig.colorbar(im, ax=ax, fraction=0.05, pad=0.02)
+            ax.set_title(title, fontsize=10)
+            ax.set_aspect("equal")
+            ax.set_xlabel("x (mm)")
+            if k_ == 0:
+                ax.set_ylabel("y (mm)")
+        # a cut through the difference-field peak
+        ax = axs[5]
+        i, j = np.unravel_index(np.argmax(np.abs(mp["a"])), mp["a"].shape)
+        ax.plot(X[:, j], np.abs(mp["a"][:, j]) / vmax, "k-", lw=1.8, label="rail3D")
+        ax.plot(X[:, j], np.abs(mp["b"][:, j]) / vmax, color="#c62828", lw=1.4, ls="--", label=src)
+        ax.set_xlabel(f"x (mm) at y = {Y[i, j]:+.1f}")
+        ax.set_title("|Δψ| through its peak", fontsize=10)
+        ax.legend(fontsize=8)
+        ax.grid(alpha=0.3)
+        # detector level (MS row) or the level budget (z = 30 row)
+        ax = axs[6]
+        if "bar" in mp:
+            br, be = mp["bar"]
+            s = np.abs(br).max()
+            ax.scatter(br / s, be / s, s=12, color="#1b9e77", alpha=0.8)
+            lim = 1.15 * max(np.abs(br).max(), np.abs(be).max()) / s
+            ax.plot([-lim, lim], [-lim, lim], "k-", lw=0.8)
+            ax.set_xlim(-lim, lim)
+            ax.set_ylim(-lim, lim)
+            ax.set_aspect("equal")
+            ax.set_xlabel("Δ detector power, rail3D")
+            ax.set_ylabel(f"Δ detector power, {src}")
+            ax.set_title("130 dense detectors:\ndefect − intact", fontsize=10)
+            ax.grid(alpha=0.3)
+        else:
+            ax.axis("off")
+            ax.text(0, 0.95, f"defect signal: {m['signal_dB']:+.1f} dB\nof the intact field's\n"
+                    f"energy in this window\n\nabsolute defect field\nagreement: "
+                    f"{100*m['abs_corr_defect']:.2f}%\n(why rung 3 is gated\non the difference)",
+                    fontsize=9.5, va="top", transform=ax.transAxes)
+        # metrics
+        ax = axs[7]
+        ax.axis("off")
+        lines = [("difference agreement", f"{100*m['diff_corr']:.1f}%", "diff_corr",
+                  f">= {100*DIFF_CRITERIA['diff_corr']:.0f}%"),
+                 ("difference level", f"{m['diff_level_dB']:+.2f} dB", "diff_level_dB",
+                  f"within ±{DIFF_CRITERIA['diff_level_dB']:g} dB")]
+        if "diff_barcode_cos" in m:
+            lines += [("detector signature cos", f"{m['diff_barcode_cos']:.3f}", "diff_barcode_cos",
+                       f">= {DIFF_CRITERIA['diff_barcode_cos']}"),
+                      ("detector signature size", f"{m['diff_barcode_dB']:+.2f} dB", "diff_barcode_dB",
+                       f"within ±{DIFF_CRITERIA['diff_barcode_dB']:g} dB")]
+        for j_, (lab_, val, key, crit) in enumerate(lines):
+            yy = 0.95 - j_ * 0.16
+            ok = m["pass"].get(key)
+            ax.text(0.0, yy, lab_, fontsize=10, va="top", transform=ax.transAxes)
+            ax.text(0.55, yy, val, fontsize=10, family="monospace", va="top", transform=ax.transAxes)
+            if ok is not None:
+                ax.text(0.83, yy, "PASS" if ok else "FAIL", fontsize=10, fontweight="bold", va="top",
+                        color="#1a7f37" if ok else "#c62828", transform=ax.transAxes)
+            ax.text(0.83, yy - 0.06, crit if ok is not None else "reported", fontsize=7.5,
+                    color="#555", va="top", transform=ax.transAxes)
+        sub.suptitle(label, fontsize=12, x=0.01, ha="left")
+    head = {"external": "", "target": "TARGET: ", "predicted": "PREDICTION: "}[mode] + (
+        f"rung 3, {meta['sample'].replace('_', ' ')} -- difference field (defect − intact), "
+        f"Lumerical FDTD vs rail3D, {config.WVL:g} mm")
+    fig.suptitle(head, fontsize=14, fontweight="bold",
+                 color={"external": "black", "target": "#b00020", "predicted": "#6a1b9a"}[mode])
+    foot = meta["defect"] + "\n"
+    if mode == "target":
+        pm = meta["pass_model"]
+        foot += (f"TARGET SPECIFICATION -- what a PASSING rung 3 looks like: the FDTD side is "
+                 f"SYNTHESIZED as rail3D's difference field at {100*pm['corr']:.1f}% correlation and "
+                 f"{pm['level_dB']:+g} dB (the loosest of "
+                 f"{', '.join(f'{100*c:g}%' for c in DIFF_PASS_LADDER)} that passes every gate for this "
+                 f"sample), on top of the rung-2 target's absolute perturbation. NOT an FDTD result.\n")
+    elif mode == "predicted":
+        foot += ("PREDICTION -- the FDTD side is rail3D's difference field re-weighted, direction "
+                 "by direction, by the exact/rail3D ratio of the nearest 2D canonical case "
+                 f"(po_canonical_2d.py: {', '.join(meta['pred']['cases'].values())}; local "
+                 f"incidence {meta['pred']['theta_loc_deg']:.0f} deg). What we EXPECT Lumerical to "
+                 "show, not an FDTD result.\n")
+    foot += (f"Both absolute exports aligned with ONE gain fitted on the intact run "
+             f"({meta['align']['convention']}, corr {meta['align']['corr_as_is']:.3f}); "
+             f"MS row: both carried {config.H_MS - Z_MON:g} mm by the same ASM.  "
+             f"Generated {datetime.now():%Y-%m-%d} at {meta['commit']} by rail3D/fdtd_agreement.py")
+    fig.text(0.5, -0.005, foot, ha="center", va="top", fontsize=8.5, wrap=True,
+             color={"external": "#333", "target": "#b00020", "predicted": "#6a1b9a"}[mode])
+    fig.savefig(path, dpi=120, bbox_inches="tight")
+    plt.close(fig)
+
+
+def describe_defect(name: str, p: dict) -> str:
+    cls = name.split("_")[0]
+    if cls == "crack":
+        return (f"{name.replace('_', ' ')}: {p['n_lines']} lines {p['width']:.2f} mm wide, "
+                f"{p['depth']:.2f} deep, {p['L']:.0f} long, gap {p['line_gap']:.2f}; s0 {p['s0']:.1f}, "
+                f"y0 {p['y0']:+.1f} (seed 0, orientation pinned)")
+    if cls == "dent":
+        return (f"dent: {p['depth']:.2f} mm deep, FWHM {p['fw_s']:.1f} across x {p['fw_y']:.1f} along; "
+                f"s0 {p['s0']:.1f} (seed 0)")
+    if cls == "shell":
+        return f"shell: {p['depth']:.2f} mm deep, semi-axes {p['r_s']:.1f} x {p['r_y']:.1f}; s0 {p['s0']:.1f} (seed 0)"
+    crown = f", crown {p['crown_depth']:.2f} mm" if p.get("crown_depth") else ""
+    return (f"wear: gauge cut {p['depth']:.2f} mm at {p['gauge_angle_deg']:.0f} deg, "
+            f"R {p['gauge_radius']:.0f}{crown} (seed 0)")
+
+
+def rung3(args, device) -> int:
+    """--external DEFECT --intact-external INTACT: a real rung 3.
+    --diff-target NAME [--predicted]: the target (or the 2D-based prediction)."""
+    chunk = config.PROFILES[args.profile].chunk_faces
+    config.ensure_dirs()
+    section = sections.load_reference_section()
+    names = DIFF_SAMPLES if args.diff_target == "all" else (args.diff_target or args.sample,)
+    rows2d = json.loads(PRED_JSON.read_text())["cases"] if args.predicted else None
+    summary = {}
+    for name in names:
+        params = diff_params(name, section) if args.diff_target else sample_params(args.sample, section)
+        ds = config.MESH_DS
+        v, _ = cw.build_mesh(section, {"class": "intact"}, ds, mesh3d.default_arc_count(section, ds), None)
+        plan = cw.fdtd_plan(v.numpy(), dict(cw.geom_now(), h_ms=Z_MON), Z_MON, None)
+        gw = window_geom(plan["monitor_mm"])
+        common = dict(section=section, device=device, chunk=chunk, seg=None, source="horn",
+                      shadow="raycast", min_t=config.SHADOW_MIN_T, terms="psi12")
+        t = time.time()
+        ri = cw.solve(g=gw, params={"class": "intact"}, **common)
+        rd = cw.solve(g=gw, params=params, **common)
+        print(f"{name}: rail3D intact + defect at z = {Z_MON:g} ({time.time() - t:.1f} s)")
+        meta = {"sample": name, "commit": data3d._git_commit(),
+                "defect": describe_defect(name, params) if args.diff_target else args.sample}
+        if args.diff_target:
+            d = rd - ri
+            ei_raw = synthesize_target(ri, gw)
+            G = TARGET_MODEL["gain"] * np.exp(1j * np.radians(TARGET_MODEL["gain_phase_deg"]))
+            if args.predicted:
+                dfd, meta["pred"] = predicted_diff(d, gw, name, params, rows2d)
+                mode, ladder = "predicted", (None,)
+            else:
+                mode, ladder = "target", DIFF_PASS_LADDER
+            for c in ladder:
+                if mode == "target":
+                    meta["pass_model"] = dict(DIFF_PASS_MODEL, corr=c)
+                    dfd = pass_target_diff(d, meta["pass_model"])
+                ei, align = cw.align_external(ei_raw, ri)
+                ed = _apply_align(ei_raw + G * dfd, align)
+                ms = [to_ms_plane(z, gw) for z in (rd, ri, ed, ei)]
+                m30 = diff_score(rd, ri, ed, ei, gw, device, ms_plane=False)
+                mms = diff_score(*ms, cw.geom_now(), device, ms_plane=True)
+                if all(m30["pass"].values()) and all(mms["pass"].values()):
+                    break
+        else:
+            mode = "external"
+            ed_raw = torch.as_tensor(cw.load_external(args.external, gw)[0]).to(torch.complex64).to(device)
+            ei_raw = torch.as_tensor(cw.load_external(args.intact_external, gw)[0]).to(torch.complex64).to(device)
+            ei, align = cw.align_external(ei_raw, ri)
+            ed = _apply_align(ed_raw, align)
+            ms = [to_ms_plane(z, gw) for z in (rd, ri, ed, ei)]
+            m30 = diff_score(rd, ri, ed, ei, gw, device, ms_plane=False)
+            mms = diff_score(*ms, cw.geom_now(), device, ms_plane=True)
+        meta["align"] = align
+        tag = f"rung3_{name}" + {"external": "", "target": "_target", "predicted": "_predicted"}[mode]
+        fig_path = config.FIGURE_DIR / "rail_targets" / f"{tag}.png"
+        fig_path.parent.mkdir(parents=True, exist_ok=True)
+        diff_draw([(f"z = {Z_MON:g} mm monitor -- where FDTD is recorded", m30, gw),
+                   (f"MS plane, z = {config.H_MS:g} mm -- what the detectors see", mms, cw.geom_now())],
+                  mode, meta, fig_path)
+        strip = lambda m: {k: v for k, v in m.items() if k != "_maps"}   # noqa: E731
+        res = data3d.stamp({"mode": mode, "sample": name, "defect": meta["defect"],
+                            "criteria": DIFF_CRITERIA, "pass_model": meta.get("pass_model"),
+                            "prediction": meta.get("pred"), "alignment": align,
+                            "z30": strip(m30), "ms_plane": strip(mms)})
+        js = config.GENERATED_DIR / "rail_targets" / f"{tag}.json"
+        js.parent.mkdir(parents=True, exist_ok=True)
+        js.write_text(json.dumps(res, indent=2, default=str), encoding="utf-8")
+        summary[name] = res
+        for nm, m in (("z=30", m30), ("MS  ", mms)):
+            verdict = "PASS" if all(m["pass"].values()) else "FAIL: " + ", ".join(
+                k for k, v in m["pass"].items() if not v)
+            print(f"  {nm} difference agreement {100*m['diff_corr']:.1f}%  level {m['diff_level_dB']:+.2f} dB"
+                  + (f"  signature cos {m['diff_barcode_cos']:.3f} / {m['diff_barcode_dB']:+.2f} dB"
+                     if "diff_barcode_cos" in m else "") + f"  signal {m['signal_dB']:+.1f} dB  -> {verdict}")
+        print(f"  -> {fig_path}")
+    if len(names) > 1:
+        tag = "predicted" if args.predicted else "target"
+        (config.GENERATED_DIR / "rail_targets" / f"rung3_summary_{tag}.json").write_text(
+            json.dumps(summary, indent=1, default=str), encoding="utf-8")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -833,6 +1237,9 @@ def main() -> int:
                       help="RUNG 0: E_y at z = 0 from the EMPTY-box run")
     mode.add_argument("--horn", default=None,
                       help="RUNG -1: E_y on mon_aperture from the horn_fdtd_case.py run")
+    mode.add_argument("--diff-target", default=None, choices=DIFF_SAMPLES + ("all",),
+                      help="RUNG 3 TARGET: the difference field (defect - intact) of a passing "
+                           "run; with --predicted, what the 2D canonical study predicts instead")
     mode.add_argument("--horn-target", action="store_true",
                       help="RUNG -1 TARGET: synthesize the three exports from the model with "
                            "HORN_TARGET_MODEL's imperfections and score them (fdtd_horn_target.png)")
@@ -841,6 +1248,11 @@ def main() -> int:
     ap.add_argument("--horn-slab", default=None,
                     help="RUNG -1: 3D E_y on mon_slab (horn_slab.mat): scores the global "
                          "z = H_MS plane right under the horn")
+    ap.add_argument("--intact-external", default=None,
+                    help="RUNG 3: the INTACT run's z = 30 export, with --external = the defect "
+                         "run's (same mesh override): scores the difference field")
+    ap.add_argument("--predicted", action="store_true",
+                    help="with --diff-target: use po_canonical_2d.json's exact/rail3D ratios")
     ap.add_argument("--leak", default=None,
                     help="RUNG 0: E_y at the z = 30 monitor from the EMPTY-box run")
     ap.add_argument("--injection-src", default=None,
@@ -859,6 +1271,8 @@ def main() -> int:
         return horn_check(args, device)
     if args.injection:
         return rung0(args, device)
+    if args.diff_target or args.intact_external:
+        return rung3(args, device)
     chunk = config.PROFILES[args.profile].chunk_faces
     config.ensure_dirs()
     section = sections.load_reference_section()

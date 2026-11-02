@@ -1,6 +1,6 @@
 # Validating rail3D against Ansys Lumerical FDTD — horn Import source
 
-*Last updated: 2026-10-26 (exports: `matlabsavelegacy` needs a MATLAB integration the lab lacks, so
+*Last updated: 2026-11-02 (rung 3 difference-field scorer and targets: `RAIL_TARGETS.md`) · 2026-10-26 (exports: `matlabsavelegacy` needs a MATLAB integration the lab lacks, so
 `matlabsave` v7.3 + h5py) · 2026-10-22 (rung −1 Mode source span: inside the waveguide wall, never outside it) ·
 2026-10-02 · λ = 5 mm (59.9585 GHz) · written for Lumerical FDTD
 2025 R1 (modern UI). Horn Import-source design, no TFSF. The horn is now the
@@ -546,8 +546,13 @@ their common-mode numerical error cancels in the difference.
 - **The difference field** (crack − intact) against rail3D's is **the real
   result**. It is where the crack signature lives, and README finding 27 /
   READING_RESULTS §9b explain why the absolute field alone is not enough for
-  cracks. The difference-field scorer is not built yet. It is the next addition
-  to `fdtd_agreement.py`.
+  cracks. Export the intact run (same override) as `intact_z30.mat` and score
+  the difference: `fdtd_agreement.py --sample crack --external
+  data/generated/fdtd_crack/crack_z30.mat --intact-external
+  data/generated/fdtd_crack/intact_z30.mat`. Gates, targets and the per-class
+  PREDICTION of what this shows are in `RAIL_TARGETS.md` (README finding 34:
+  for this transverse crack, expect +1.6 dB, the detector signature on its
+  0.95 edge, and the z = 30 correlation at risk).
 
 A disagreement **here**, while rungs 0–2 agree, is exactly the finding worth
 having: PO failing on a sub-wavelength feature. Report it; do not tune it away.

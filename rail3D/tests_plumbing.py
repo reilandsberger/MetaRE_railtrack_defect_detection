@@ -1,6 +1,6 @@
 """Plumbing gates: the non-physics assumptions that have actually broken runs.
 
-    python tests_plumbing.py          # ~1 min, CPU, no dataset, no GPU
+    python tests_plumbing.py          # ~2-3 min, CPU, no dataset, no GPU
 
 tests_physics_3d.py guards the solver. This guards the things AROUND it -- how
 results are addressed, read back and compared -- which is where the last three
@@ -45,6 +45,10 @@ run rather than here:
       vectors, an arbitrary complex gain): rung -1's aperture, near, z = 150
       slab (3D, resampled through the envelope) and Import-plane scores, and
       rung 0's injected-plane score, must all round-trip to ~1 and ~0 dB.
+  P7  rung 3's difference-field scorer (--external + --intact-external) on two
+      P4-style exports of rail3D's own intact and dent fields: one gain fitted
+      on the intact file must carry over, and the difference must round-trip to
+      ~1 and ~0 dB at both planes with every DIFF gate passing (RAIL_TARGETS.md).
 
 Every check runs the real code path on tiny synthetic inputs. Add one here
 whenever a run dies on something that was not physics.
@@ -605,6 +609,70 @@ def _p5_text_copy(tmp: Path, m: dict, nx: int, ny: int):
     }, got
 
 
+def p7_rung3_difference_roundtrip() -> dict:
+    """Rung 3's difference-field scorer recovers rail3D's own difference field from
+    TWO files shaped like Lumerical exports (metres, column vectors, one complex
+    gain), the gain fitted on the INTACT file only. Native grid and no ray cast:
+    P4 already covers resampling, and this checks bookkeeping, not physics
+    (a 4x-resampled, ray-cast version took 7 min on CPU and lost ~1% of the
+    difference to interpolation). Anything but ~100% is the tool."""
+    import sys as _sys
+    from scipy.io import savemat
+    import compare_wavefronts as cw
+    import fdtd_agreement as fa
+    from rail3d import sections
+
+    tmp = Path(tempfile.mkdtemp())
+    saved = (config.FIGURE_DIR, config.GENERATED_DIR, list(_sys.argv), cw.solve)
+    config.FIGURE_DIR = config.GENERATED_DIR = tmp
+    cache: dict = {}
+
+    def solve_once(**kw):                     # rung3 re-solves what the test already has
+        key = kw["params"]["class"]
+        if key not in cache:
+            cache[key] = saved[3](**dict(kw, shadow=None))
+        return cache[key]
+    cw.solve = solve_once
+    try:
+        sec = sections.load_reference_section()
+        v, _ = cw.build_mesh(sec, {"class": "intact"}, config.MESH_DS, mesh3d_arc(sec), None)
+        plan = cw.fdtd_plan(v.numpy(), dict(cw.geom_now(), h_ms=fa.Z_MON), fa.Z_MON, None)
+        gw = fa.window_geom(plan["monitor_mm"])
+        dev = torch.device("cpu")
+        common = dict(g=gw, section=sec, device=dev, chunk=2048, seg=None, source="horn",
+                      terms="psi12", shadow=None, min_t=config.SHADOW_MIN_T)
+        X, Y = cw.plane_grid(gw, dev)
+        xs, ys = X[0, :, 0].numpy(), Y[0, 0, :].numpy()
+        gain = 4.0e-3 * np.exp(1j * np.radians(-50.0))
+        files = {}
+        for name, params in (("intact", {"class": "intact"}), ("dent", fa.sample_params("dent", sec))):
+            r = cw.solve(params=params, **common).numpy()
+            files[name] = tmp / f"{name}_z30.mat"
+            savemat(str(files[name]), {"Ey": r * gain, "x": (xs * 1e-3)[:, None],
+                                       "y": (ys * 1e-3)[:, None]})
+        _sys.argv = ["fdtd_agreement.py", "--sample", "dent", "--external", str(files["dent"]),
+                     "--intact-external", str(files["intact"]), "--profile", "cpu"]
+        rc = fa.main()
+        out = json.loads((tmp / "rail_targets" / "rung3_dent.json").read_text(encoding="utf-8"))
+        z30, ms = out["z30"], out["ms_plane"]
+        res = {
+            "exit_ok": rc == 0,
+            "aligned_as_is": out["alignment"]["convention"] == "as-is",
+            "z30_diff_corr": round(z30["diff_corr"], 6), "ms_diff_corr": round(ms["diff_corr"], 6),
+            "z30_level_dB": round(z30["diff_level_dB"], 4), "ms_level_dB": round(ms["diff_level_dB"], 4),
+            "signature_cos": round(ms["diff_barcode_cos"], 6),
+            "roundtrip_exact": min(z30["diff_corr"], ms["diff_corr"]) > 0.999
+            and max(abs(z30["diff_level_dB"]), abs(ms["diff_level_dB"])) < 0.05,
+            "all_gates_pass": all(z30["pass"].values()) and all(ms["pass"].values()),
+            "figure_written": (tmp / "rail_targets" / "rung3_dent.png").exists(),
+            "stamped": "_stamp" in out,
+        }
+        res["pass"] = all(v for k, v in res.items() if isinstance(v, bool))
+        return res
+    finally:
+        config.FIGURE_DIR, config.GENERATED_DIR, _sys.argv, cw.solve = saved
+
+
 def _mat_top_level_types(path) -> set:
     """Top-level MAT v5 data-element types: 14 = miMATRIX, 15 = miCOMPRESSED."""
     b = Path(path).read_bytes()
@@ -627,7 +695,8 @@ def main() -> int:
                      ("P3_slm_profile", p3_slm_profile),
                      ("P4_fdtd_agreement_roundtrip", p4_fdtd_agreement_roundtrip),
                      ("P5_horn_source", p5_horn_source),
-                     ("P6_source_verification", p6_source_verification)]:
+                     ("P6_source_verification", p6_source_verification),
+                     ("P7_rung3_difference_roundtrip", p7_rung3_difference_roundtrip)]:
         t0 = time.time()
         try:
             res = fn()
