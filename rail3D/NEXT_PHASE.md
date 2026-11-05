@@ -1,6 +1,6 @@
 # Next phase: the F1 setup sweep, data-centric ML, and the story for the slides
 
-*Last updated: 2026-11-05 (detection only: `train_detect.py`, sweep detection figures, a 1-hour sweep slice first; ablation: every SLM loses; SLM on hold, detector-only focus; geometry override built; the ceiling is too loose to prune) · 2026-11-04. Decisions so far (user, 2026-11-04): go with F1 (one horn, one
+*Last updated: 2026-11-05 (results by day in data/generated/<date>/; detection only: `train_detect.py`, sweep detection figures, a 1-hour sweep slice first; ablation: every SLM loses; SLM on hold, detector-only focus; geometry override built; the ceiling is too loose to prune) · 2026-11-04. Decisions so far (user, 2026-11-04): go with F1 (one horn, one
 wider metasurface); sweep the setup dials on a controlled grid (6 types × 7 positions ×
 ~100, plus ~600 intact); keep finding 31's horn rule; overnight budget; score with field
 level + a fast classifier where that is provably enough, full training otherwise.*
@@ -31,15 +31,23 @@ optimises) and few-detector out-of-bounds (largest |z| of any detector vs the in
 spread). `TrainConfig(task="detect")` trains without the class losses and selects on
 AUC (P9).
 
+**Results by day.** `train_detect.py` writes into `data/generated/<YYYY-MM-DD>/`, and
+`sweep_eval.py` copies its summary and figures to `data/generated/<YYYY-MM-DD>/sweep_<root>/`
+(`config.day_dir`). Set the day once per shell, so an overnight run stays in the day it
+started, and keep the logs there too:
+
+```bash
+export RAIL3D_DAY=2026-11-05 && mkdir -p data/generated/$RAIL3D_DAY
+```
+
 **B. Detector-only training, today's geometry** (~3 min per detector count, on
 `L5_prelim_689da5`; also scores run_stage's detect+classify no-MS model beside it):
 
 ```bash
-python -u train_detect.py --stage prelim --n-det 4 8 12 16 2>&1 | tee ../train_detect.log
+python -u train_detect.py --stage prelim --n-det 4 8 12 16 2>&1 | tee data/generated/$RAIL3D_DAY/train_detect.log
 ```
 
-Send back `data/generated/detect_report.json`, `data/figures/detect_compare.png` and
-the log.
+Send back the day folder (`data/generated/2026-11-05/`), zipped.
 
 **C. The sweep**, after a 2-minute timing run. Run a 1-hour slice first: every placement
 gets the same balanced subsample, so `sweep_eval` gives a first comparison tonight, and
@@ -49,18 +57,17 @@ re-running the sweep command with the longer budget continues it.
 python -u setup_sweep.py --timing 20 --profile lab
 ```
 ```bash
-python -u setup_sweep.py --profile lab --budget-hours 1 2>&1 | tee ../setup_sweep.log
+python -u setup_sweep.py --profile lab --budget-hours 1 2>&1 | tee data/generated/$RAIL3D_DAY/setup_sweep.log
 ```
 ```bash
-python -u sweep_eval.py --profile lab 2>&1 | tee ../sweep_eval.log
+python -u sweep_eval.py --profile lab 2>&1 | tee data/generated/$RAIL3D_DAY/sweep_eval.log
 ```
 ```bash
-python -u setup_sweep.py --profile lab --budget-hours 8 2>&1 | tee -a ../setup_sweep.log
+python -u setup_sweep.py --profile lab --budget-hours 8 2>&1 | tee -a data/generated/$RAIL3D_DAY/setup_sweep.log
 ```
 
-Then `sweep_eval.py` again on the full set. Send back
-`data/generated/setup_sweep/F1_*/sweep_eval.json`, `progress.txt`, the seven
-`sweep_0*.png` and the logs. The fields (~0.3 GB per placement) stay on the lab. The
+Then `sweep_eval.py` again on the full set. Send back the day folder: it holds
+`sweep_F1_*/` (sweep_eval.json, progress.txt, the seven `sweep_0*.png`) and the logs. The fields (~0.3 GB per placement) stay on the lab. The
 detection comparison is `sweep_05_detection.png` (every setup: AUC, recall and accuracy
 at 5% false alarms, barcode distance), `sweep_06_detection_dials.png` (far edge,
 θ × H) and `sweep_07_detection_cells.png` (type × position, today vs the best setup).

@@ -30,6 +30,9 @@ offset 0.3).*
   and selects on AUC (P9); `train_detect.py` trains/scores the no-MS ONN (`--n-det`);
   `sweep_eval.py` scores every setup this way (`sweep_05`–`07`). The setup sweep has
   NOT run on the lab yet (only a 36-sample laptop smoke). Commands: NEXT_PHASE.md §1.
+- **Results by day**: `config.day_dir()` = `rail3D/data/generated/<YYYY-MM-DD>/` (`--day`,
+  else `$RAIL3D_DAY`, else today). `train_detect.py` writes there; `sweep_eval.py` copies
+  its summary + figures to `<day>/sweep_<root>/`. Datasets and sweep fields stay put.
 - Lab returns are unpacked in `rail3D/data/lab_returns/<date>/` (gitignored).
 
 ## F1 setup sweep and the next phase (2026-11-05)

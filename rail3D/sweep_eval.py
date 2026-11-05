@@ -4,6 +4,10 @@ metasurface could add, and prune the setups that cannot win.
     python sweep_eval.py                        # the newest sweep root
     python sweep_eval.py --root data/generated/setup_sweep/F1_xxxxxxxx
 
+The summary (sweep_eval.json), progress.txt and the figures are also copied into the
+day's results folder, data/generated/<YYYY-MM-DD>/sweep_<root>/ (--day, else
+$RAIL3D_DAY, else today); the fields stay in the sweep root.
+
 THE BOUND SANDWICH (why no training is needed to discard a setup)
 A phase-only metasurface is lossless: it redistributes the light the aperture
 receives and adds none. For every setup (placement x metasurface crop):
@@ -427,6 +431,8 @@ def main() -> int:
     ap.add_argument("--root", default=None)
     ap.add_argument("--profile", default="lab", choices=list(config.PROFILES))
     ap.add_argument("--shards", type=int, default=None, help="use only the first N shards per placement")
+    ap.add_argument("--day", default=None, help="also copy the summary and figures into "
+                    "data/generated/<YYYY-MM-DD>/sweep_<root> (default: $RAIL3D_DAY, else today)")
     a = ap.parse_args()
     root = Path(a.root) if a.root else latest_root()
     device = config.get_device(a.profile)
@@ -452,7 +458,23 @@ def main() -> int:
               + f" {d[PRIMARY]['recall']:7.3f} {d[PRIMARY]['best_bal_acc']:7.3f} {d['distance']['ratio']:8.2f}")
     import sweep_figs
     sweep_figs.all_figures(res, root)
+    copy_to_day(root, a.day)
     return 0
+
+
+def copy_to_day(root: Path, day: str | None) -> Path:
+    """The day's results folder gets the small outputs (summary, progress, figures);
+    the fields and sweep_eval_full.json stay in the sweep root, which sweep_figs.py
+    redraws from."""
+    import shutil
+    dest = config.day_dir(day) / f"sweep_{root.name}"
+    dest.mkdir(parents=True, exist_ok=True)
+    for f in ["sweep_eval.json", "progress.txt", "plan.json", "sweep.json",
+              *sorted(q.name for q in root.glob("sweep_0*.png"))]:
+        if (root / f).exists():
+            shutil.copy2(root / f, dest / f)
+    print(f"copied the summary and figures -> {dest}")
+    return dest
 
 
 if __name__ == "__main__":

@@ -681,6 +681,21 @@ def sample_seed(class_name: str, csv_index: int) -> int:
     return (base * 1_000_003 + csv_index * 7919 + SEED) % (2**31 - 1)
 
 
+def day_dir(day: str | None = None) -> Path:
+    """Dated results folder, data/generated/<YYYY-MM-DD>/, so one day's outputs stay
+    together (user request 2026-11-05). The day is, in order: the argument, the
+    RAIL3D_DAY environment variable (keeps an overnight run in the day it started),
+    then today's local date."""
+    import re
+    import time
+    d = day or os.environ.get("RAIL3D_DAY") or time.strftime("%Y-%m-%d")
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", d):
+        raise ValueError(f"day must be YYYY-MM-DD, got {d!r}")
+    p = GENERATED_DIR / d
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
 def ensure_dirs() -> None:
     for d in (GENERATED_DIR, CHECKPOINT_DIR, FIGURE_DIR):
         d.mkdir(parents=True, exist_ok=True)

@@ -21,7 +21,8 @@ and reported as AUC, recall at 5% false alarms, test false-alarm rate, best bala
 accuracy, the barcode distance of defects vs intact, recall per class and by arc
 position s0 (README finding 25: s0 decides detection).
 
-Writes data/generated/detect_report.json and data/figures/detect_compare.png.
+Writes detect_report.json and detect_compare.png into the day's results folder,
+data/generated/<YYYY-MM-DD>/ (--day, else $RAIL3D_DAY, else today).
 """
 from __future__ import annotations
 
@@ -37,8 +38,6 @@ import torch                      # noqa: E402
 
 from rail3d import config, data3d, train3d   # noqa: E402
 
-REPORT = config.GENERATED_DIR / "detect_report.json"
-FIG = config.FIGURE_DIR / "detect_compare.png"
 FPR = 0.05
 S0_BINS = (100, 115, 125, 135, 145, 155, 170)
 RULES = {"cos": "total barcode difference", "maxz": "few-detector out-of-bounds"}
@@ -99,7 +98,7 @@ def score_model(model, data, metas) -> dict:
     return out
 
 
-def figure(rep: dict) -> None:
+def figure(rep: dict, path) -> None:
     runs = rep["runs"]
     names = list(runs)
     fig, axs = plt.subplots(1, 4, figsize=(22, 5), constrained_layout=True)
@@ -153,10 +152,9 @@ def figure(rep: dict) -> None:
     fig.suptitle(f"Detector-only system, detection only: {rep['dataset_root']}  "
                  f"({runs[best]['n_test_defects']} test defects, {runs[best]['n_test_intact']} test intact)",
                  fontsize=13, fontweight="bold")
-    FIG.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(FIG, dpi=140, bbox_inches="tight")
+    fig.savefig(path, dpi=140, bbox_inches="tight")
     plt.close(fig)
-    print(f"figure -> {FIG}")
+    print(f"figure -> {path}")
 
 
 def main() -> int:
@@ -165,10 +163,14 @@ def main() -> int:
     ap.add_argument("--root", default=None, help="dataset folder under data/generated (default: the stage root)")
     ap.add_argument("--n-det", type=int, nargs="+", default=[config.N_DET_FINAL])
     ap.add_argument("--profile", default="lab")
+    ap.add_argument("--day", default=None, help="results folder data/generated/<YYYY-MM-DD> "
+                    "(default: $RAIL3D_DAY, else today)")
     ap.add_argument("--quick", action="store_true", help="40-epoch schedule, for a plumbing check only")
     a = ap.parse_args()
 
     root = data3d.stage_root(a.stage) if a.root is None else config.GENERATED_DIR / a.root
+    out = config.day_dir(a.day)
+    report = out / ("detect_report_quick.json" if a.quick else "detect_report.json")
     data3d.check_dataset_config(root, strict=True)
     tag = data3d.run_tag(root)
     device = config.get_device(a.profile)
@@ -208,7 +210,7 @@ def main() -> int:
         r["run_name"] = cfg.run_name
         r["best_epoch"] = (state.get("history") or {}).get("best_epoch")
         rep["runs"][label] = r
-        REPORT.write_text(json.dumps(rep, indent=1), encoding="utf-8")
+        report.write_text(json.dumps(rep, indent=1), encoding="utf-8")
 
     print(f"\n  {'model':32s} {'n_det':>5s} | {'AUC cos':>7s} {'maxz':>6s} | {'recall':>6s} "
           f"{'FA test':>7s} {'bal.acc':>7s} {'dist x':>6s} | per-class recall (cos)")
@@ -217,8 +219,8 @@ def main() -> int:
         pc = " ".join(f"{k} {v:.2f}" for k, v in c["per_class"].items())
         print(f"  {label:32s} {r['n_det']:5d} | {c['auc']:7.3f} {z['auc']:6.3f} | {c['recall']:6.3f} "
               f"{c['false_alarm_test']:7.3f} {c['best_bal_acc']:7.3f} {c['distance']['ratio']:6.1f} | {pc}")
-    figure(rep)
-    print(f"report -> {REPORT}")
+    figure(rep, report.with_name(report.stem.replace("detect_report", "detect_compare") + ".png"))
+    print(f"report -> {report}")
     return 0
 
 
