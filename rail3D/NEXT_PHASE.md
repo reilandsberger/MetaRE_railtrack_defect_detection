@@ -1,6 +1,6 @@
 # Next phase: the F1 setup sweep, data-centric ML, and the story for the slides
 
-*Last updated: 2026-11-05 (geometry override built; the ceiling is too loose to prune) · 2026-11-04. Decisions so far (user, 2026-11-04): go with F1 (one horn, one
+*Last updated: 2026-11-05 (ablation: every SLM loses, `ablate_diagnose.py` next; geometry override built; the ceiling is too loose to prune) · 2026-11-04. Decisions so far (user, 2026-11-04): go with F1 (one horn, one
 wider metasurface); sweep the setup dials on a controlled grid (6 types × 7 positions ×
 ~100, plus ~600 intact); keep finding 31's horn rule; overnight budget; score with field
 level + a fast classifier where that is provably enough, full training otherwise.*
@@ -15,6 +15,13 @@ python run_stage.py --stage prelim --fresh --with-baseline --bundle 2>&1 | tee .
 ```
 ```bash
 python ablate_surface.py --stage prelim --long 2>&1 | tee ../ablation_newhorn.log
+```
+
+**Ran 2026-11-05: every SLM setting loses (best 0.889 vs control 0.950; README finding
+24).** The next step needs no training: score those checkpoints on every split.
+
+```bash
+python -u ablate_diagnose.py --stage prelim 2>&1 | tee ../ablation_diagnose.log
 ```
 
 **B. The sweep**, after a 2-minute timing run sets the night's expectations:

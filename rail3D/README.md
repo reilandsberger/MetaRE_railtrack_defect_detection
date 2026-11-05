@@ -1,6 +1,6 @@
 # rail3D — 3D diffraction simulation + metasurface training for rail defect detection
 
-*Last updated: 2026-11-05 (the F1 setup sweep: `setup_sweep.py`, `sweep_eval.py`, `NEXT_PHASE.md`) · 2026-11-02 (rail-reflection targets and the 2D exact-vs-PO study, finding 34: `RAIL_TARGETS.md`) · 2026-10-29 (experimental-design study: `DESIGN_STUDY.md`) · 2026-10-26 · λ = 5 mm (60 GHz) · horn = RFspin H-A75-W20 (finding 29) at
+*Last updated: 2026-11-05 (ablation result in finding 24: neither knob, `ablate_diagnose.py`; the F1 setup sweep: `setup_sweep.py`, `sweep_eval.py`, `NEXT_PHASE.md`) · 2026-11-02 (rail-reflection targets and the 2D exact-vs-PO study, finding 34: `RAIL_TARGETS.md`) · 2026-10-29 (experimental-design study: `DESIGN_STUDY.md`) · 2026-10-26 · λ = 5 mm (60 GHz) · horn = RFspin H-A75-W20 (finding 29) at
 278.5 mm, lowest edge level with the metasurface; upward-only metasurface input (finding 31); the
 Import source verified at three planes by rungs −1 and 0 (finding 32) · wear is a smooth
 parametric gauge-corner cut in every sample, crown wear in 50% (finding 33) · V0–V8
@@ -211,6 +211,7 @@ field, plus parameter histograms.
 | `setup_diagram.py` | renders the annotated scene diagram |
 | `run_stage.py` | generate → gate → train → analyse as ONE resumable command (`--stage prelim/full`, `--with-baseline`, `--fresh`, `--bundle`); refuses short or mismatched datasets |
 | `ablate_surface.py` | 2×2 over SLM init × `w_capture` + the no-MS control (finding 24); resumable, writes `surface_ablation.json` |
+| `ablate_diagnose.py` | no training: scores ablate_surface's checkpoints on train/val/test + a zero-phase probe, overfitting vs optimisation (finding 24); writes `surface_ablation_diagnosis.json` |
 | `slm_profile.py` | the trained mask: wrapped phase, \|t\|, incident light, change from init |
 | `defect_sections.py` | rail-head cross-sections of dataset samples, removed material in red, slide-ready: `wear_sections.png` (wear seeds 0–23 in order, crown share visible) and `defect_sections.png` (4 ABOVE-AVERAGE samples per class, cut where deepest, zoom insets for crack/shell — not representative of the size spread). CPU, ~15 s |
 | `detector_layout.py` | where the trained detectors ended up — wide, slide-ready: one panel per run (SLM vs no-MS side by side) on the 150 × 75 mm detector plane, numbered windows over the defect-signal (or intact) light rebuilt through the run's own metasurface and dataset; flags a checkpoint still above the detector budget |
@@ -692,6 +693,25 @@ first) · or everything at once with `python lab_report.py`.
     own hypothesis space, stop interpreting the science and debug the
     optimizer.** Do not report "the metasurface underperforms" until an SLM
     seeded at zero phase has been measured.
+
+    **Measured 2026-11-05 (`L5_prelim_689da5`, new horn + wear model): neither
+    suspect is the cause.** Val AUC: control 0.950; SLM shipped 0.846, flat
+    init 0.889, no capture 0.872, flat + no capture 0.843, flat at 4× epochs
+    0.885. Every SLM loses by ≥ 0.06. Two details point past the knobs:
+    - `slm_flat_nocap` STARTS exactly at the control's optics (zero phase) and
+      still ends 0.11 below it, so training moves the phase away from a better
+      point.
+    - `slm_flat` (the control's own objective, zero-phase start) selected
+      epoch **106** of 1500: its validation score peaked right after pruning
+      and fell for the remaining 1400 epochs. The 4× run recovered score
+      (1.553 vs the control's 1.555) by trading AUC for `class_acc`.
+
+    Remaining explanations: overfitting (1800 phases against 320 training
+    intact poses, which the rank loss pulls tight) or objective/selection
+    mismatch (`score = auc + class_acc` weights classification equally with
+    detection). `ablate_diagnose.py` separates them from the existing
+    checkpoints (train vs val vs test AUC, intact spread per split, and the
+    trained detectors re-scored with the phase set to zero).
 
 25. **The system is nearly blind outside the gauge corner — `s0`, not defect
     size, is the dominant variable.** Detection rate vs arc position, prelim:
