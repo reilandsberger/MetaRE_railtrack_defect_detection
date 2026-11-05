@@ -1,6 +1,6 @@
 # CLAUDE.md — MetaRE railtrack defect detection
 
-*Last updated: 2026-11-05 (lab: all gates pass at 689da5, prelim trained, SLM on hold) · 2026-11-05 (F1 sweep, NEXT_PHASE.md) · 2026-11-02 (rail targets, finding 34) · 2026-10-29 (design study) · 2026-10-26 · λ = 5 mm (60 GHz) · horn = physical RFspin H-A75-W20
+*Last updated: 2026-11-05 (detection-only focus: train_detect.py, sweep detection figures) · 2026-11-05 (lab: all gates pass at 689da5, prelim trained, SLM on hold) · 2026-11-05 (F1 sweep, NEXT_PHASE.md) · 2026-11-02 (rail targets, finding 34) · 2026-10-29 (design study) · 2026-10-26 · λ = 5 mm (60 GHz) · horn = physical RFspin H-A75-W20
 (README finding 29, 2026-09-24), moved out to 278.5 mm with its lowest edge level
 with the metasurface, metasurface input upward-only (finding 31, 2026-10-02);
 Import source verified at three planes by rungs −1/0 (finding 32) ·
@@ -24,6 +24,12 @@ offset 0.3).*
 - **Ablation: every SLM setting loses** (best 0.889); README finding 24.
   **User decision: the SLM is on hold; optimise the detector-only system
   (`surface="none"`).** Do not propose SLM debugging unless the user reopens it.
+- **Detection only (user decision 2026-11-05)**: classification is set aside. Rules:
+  total barcode difference (1 − cos to the intact mean) and few-detector out-of-bounds
+  (max |z| vs the intact spread). `TrainConfig(task="detect")` drops the class losses
+  and selects on AUC (P9); `train_detect.py` trains/scores the no-MS ONN (`--n-det`);
+  `sweep_eval.py` scores every setup this way (`sweep_05`–`07`). The setup sweep has
+  NOT run on the lab yet (only a 36-sample laptop smoke). Commands: NEXT_PHASE.md §1.
 - Lab returns are unpacked in `rail3D/data/lab_returns/<date>/` (gitignored).
 
 ## F1 setup sweep and the next phase (2026-11-05)

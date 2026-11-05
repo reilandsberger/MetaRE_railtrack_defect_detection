@@ -209,6 +209,7 @@ def combined_loss(
     metric: str = "cos",        # score used by the rank objective / reporting
     total_power: torch.Tensor | None = None,  # plane power per sample, for capture
     w_capture: float = W_CAPTURE,             # TrainConfig.w_capture; 0 = legacy objective
+    w_class: float = W_CLASS,                 # 0 = detection only (TrainConfig.task="detect")
 ) -> tuple[torch.Tensor, dict]:
     """Full objective; returns (loss, dict of detached components).
 
@@ -225,10 +226,10 @@ def combined_loss(
         terms = {
             "detect": detection_margin_loss(gap),
             "intact": W_INTACT * intact_compact_loss(gap0),
-            "class": W_CLASS * F.cross_entropy(logits, labels),
+            "class": w_class * F.cross_entropy(logits, labels),
             "power": W_POWER * power_floor_loss(det, det0, power_floor),
             "topk": W_TOPK * topk_margin_loss(gap),
-            "centroid": W_CENTROID * class_centroid_loss(det, labels, ref_norm),
+            "centroid": W_CENTROID * (w_class / W_CLASS) * class_centroid_loss(det, labels, ref_norm),
             "tv": tv,
         }
     elif objective == "rank":
@@ -238,9 +239,9 @@ def combined_loss(
             "rank": ranking_loss(gap, gap0),
             "hardest": W_HARDEST * hardest_ranking_loss(gap, gap0),
             "intact": W_INTACT_RANK * gap0.mean(),
-            "class": W_CLASS * F.cross_entropy(logits, labels),
+            "class": w_class * F.cross_entropy(logits, labels),
             "power": W_POWER * power_floor_loss(det, det0, power_floor),
-            "centroid": W_CENTROID * class_centroid_loss(
+            "centroid": W_CENTROID * (w_class / W_CLASS) * class_centroid_loss(
                 normalize_barcode(det), labels, det.new_ones(()),
                 margin=CENTROID_MARGIN_N),
             "tv": tv,

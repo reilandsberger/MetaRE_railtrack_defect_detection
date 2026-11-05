@@ -91,6 +91,20 @@ class TrainConfig:
     # only the optimizer's starting point, so runs remain comparable in
     # geometry, but NOT in initialisation -- record it when comparing scores.
     slm_init_std: float = float(np.pi / 2)
+    # "detect+classify" (default): rank + class losses, checkpoint chosen on
+    # auc + class_acc. "detect" (user focus 2026-11-05): defect vs intact only --
+    # the class and class-centroid losses are off and the checkpoint is chosen on
+    # AUC alone, so classification cannot pull detectors away from detection.
+    task: str = "detect+classify"
+
+
+TASKS = ("detect+classify", "detect")
+
+
+def class_weight(cfg: TrainConfig) -> float:
+    if cfg.task not in TASKS:
+        raise ValueError(f"TrainConfig.task must be one of {TASKS}, got {cfg.task!r}")
+    return 0.0 if cfg.task == "detect" else losses3d.W_CLASS
 
 
 def _ckpt_dir(cfg: TrainConfig) -> Path:
@@ -227,7 +241,9 @@ def evaluate(model, data, split="val", cfg: TrainConfig | None = None) -> dict:
         "gap0_mean": float(gap0.mean()),
         "class_acc": class_acc,
     }
-    if cfg.objective == "rank":
+    if cfg.task == "detect":
+        metrics["score"] = auc
+    elif cfg.objective == "rank":
         metrics["score"] = auc + class_acc
     else:
         metrics["score"] = metrics["pass_rate"] - metrics["false_alarm"] + class_acc
@@ -484,7 +500,7 @@ def train(cfg: TrainConfig, device: torch.device | None = None,
             loss, logs = losses3d.combined_loss(
                 det_d, data["labels"][idx], det_0, logits, surface_map(model), power_floor,
                 objective=cfg.objective, metric=cfg.metric, total_power=total_power,
-                w_capture=cfg.w_capture)
+                w_capture=cfg.w_capture, w_class=class_weight(cfg))
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
             optimizer.step()

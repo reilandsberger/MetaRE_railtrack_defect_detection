@@ -291,6 +291,7 @@ def evaluate(root: Path, device, n_shards: int | None) -> dict:
             ref = ref_window or float(np.mean(np.abs(fld[~is_def]) ** 2))
             # receiver noise 1% of today's mean 4x3-pixel window power (DESIGN_STUDY section 5)
             marg = field_margin(fld, is_def, 0.01 * ref * 12 * config.DX ** 2)
+            dmet, dhits = detection_metrics(detection_scores(P, is_def, fold, r8["det_score"]), is_def)
             cfg = {"placement": pl["name"], "theta": pl["theta"], "H": pl["H"],
                    **{k: v for k, v in c.items() if k != "idx"},
                    "n_samples": len(meta), "n_intact": int((~is_def).sum()),
@@ -300,7 +301,8 @@ def evaluate(root: Path, device, n_shards: int | None) -> dict:
                    "U": {e: float(u.mean()) for e, u in U.items()},
                    "margin_robust": float(marg.mean()),
                    "light_dB": float(10 * np.log10(np.mean(np.abs(fld[~is_def]) ** 2) / ref)),
-                   "_per_sample": {"L8": hit8[is_def].tolist(), "Ldense": hitd[is_def].tolist(),
+                   "detect": dmet,
+                   "_per_sample": {"detect_hits": dhits, "L8": hit8[is_def].tolist(), "Ldense": hitd[is_def].tolist(),
                                    "U": U[str(ETA_PRUNE)].tolist(), "margin": marg.tolist(),
                                    "cls_pred": r8["cls_pred"].tolist(),
                                    "det_score": r8["det_score"].tolist()}}
@@ -347,6 +349,72 @@ def balanced_acc(y, pred) -> float:
     return float(np.mean([np.mean(pred[y == k] == k) for k in np.unique(y)]))
 
 
+# ---------------------------------------------------------------------------
+# detection only (user focus 2026-11-05): is this rail outside the intact bounds?
+# ---------------------------------------------------------------------------
+DET_SCORES = {
+    "cos8":    "total barcode difference, 8 detectors (1 - cos to the intact mean barcode)",
+    "maxz8":   "few-detector out-of-bounds, 8 detectors (largest |z| vs the intact spread)",
+    "cosall":  "total barcode difference, all dense detectors",
+    "maxzall": "few-detector out-of-bounds, all dense detectors",
+    "logreg8": "trained linear detector, 8 detectors (the floor L8)",
+}
+PRIMARY = "cos8"                   # what the trained detector-only ONN scores with
+
+
+def _barcode(P: np.ndarray) -> np.ndarray:
+    return P / np.linalg.norm(P, axis=1, keepdims=True).clip(1e-30)
+
+
+def detection_scores(P: np.ndarray, is_def: np.ndarray, fold: np.ndarray,
+                     logreg8: np.ndarray) -> dict:
+    """Out-of-fold defect scores that need NO defect examples at scoring time: each
+    compares a rail's barcode with the intact rails of the training folds only.
+    The 8 detectors are chosen inside each training fold (Fisher x redundancy), as a
+    stand-in for what training + pruning picks; the 'all' variants use every dense
+    detector and are fully one-class."""
+    out = {k: np.zeros(len(P)) for k in DET_SCORES}
+    out["logreg8"] = logreg8
+    F = _barcode(P)
+    for f in range(FOLDS):
+        tr, te = fold != f, fold == f
+        it = tr & ~is_def
+        cols = select_detectors(F[tr], is_def[tr].astype(int), N_DET)
+        for tag, sub in (("8", P[:, cols]), ("all", P)):
+            B = _barcode(sub)
+            mu = B[it].mean(0)
+            sd = B[it].std(0, ddof=1) + 1e-12
+            out["cos" + tag][te] = 1 - B[te] @ mu / np.linalg.norm(mu)
+            out["maxz" + tag][te] = (np.abs(B[te] - mu) / sd).max(1)
+    return out
+
+
+def best_balanced_acc(score: np.ndarray, is_def: np.ndarray) -> float:
+    """max over thresholds of (recall + specificity) / 2."""
+    order = np.argsort(-score)
+    d = is_def[order]
+    tpr = np.cumsum(d) / max(d.sum(), 1)
+    fpr = np.cumsum(~d) / max((~d).sum(), 1)
+    return float(np.max((tpr + 1 - fpr) / 2))
+
+
+def detection_metrics(scores: dict, is_def: np.ndarray) -> tuple[dict, dict]:
+    met, hits = {}, {}
+    for k, s in scores.items():
+        hit, thr = recall_at_fpr(s, is_def)
+        fa = float(hit[~is_def].mean())
+        met[k] = {"auc": auc(s, is_def), "recall": float(hit[is_def].mean()),
+                  "acc_at_fpr": float((hit[is_def].mean() + 1 - fa) / 2),
+                  "best_bal_acc": best_balanced_acc(s, is_def)}
+        hits[k] = hit[is_def].astype(int).tolist()
+    c = scores["cos8"]
+    met["distance"] = {"defect_mean": float(c[is_def].mean()), "defect_median": float(np.median(c[is_def])),
+                       "intact_mean": float(c[~is_def].mean()),
+                       "intact_p95": float(np.quantile(c[~is_def], 1 - FPR)),
+                       "ratio": float(np.median(c[is_def]) / max(np.quantile(c[~is_def], 1 - FPR), 1e-30))}
+    return met, hits
+
+
 def strip(res: dict) -> dict:
     out = dict(res)
     out["configs"] = [{k: v for k, v in c.items() if k != "_per_sample"} for c in res["configs"]]
@@ -373,6 +441,15 @@ def main() -> int:
         print(f"  {c['placement'] + ' ' + c['label']:40s} {c['L8']:6.3f} {c['Ldense']:7.3f} "
               f"{c['U'][str(ETA_PRUNE)]:6.3f} {c['margin_robust']:7.3f} {c['light_dB']:+6.1f}  "
               f"{'pruned' if c['pruned'] else 'KEEP'}{'  (bright)' if c['bright'] else ''}")
+    print("\n  DETECTION ONLY (defect vs intact), AUC per score; recall/accuracy at "
+          f"{100 * FPR:.0f}% false alarms for {PRIMARY}")
+    print(f"  {'setup':40s} " + " ".join(f"{k:>7s}" for k in DET_SCORES)
+          + f" {'recall':>7s} {'bal.acc':>7s} {'dist/int':>8s}")
+    for c in sorted(res["configs"], key=lambda c: -c["detect"][PRIMARY]["auc"]):
+        d = c["detect"]
+        print(f"  {c['placement'] + ' ' + c['label']:40s} "
+              + " ".join(f"{d[k]['auc']:7.3f}" for k in DET_SCORES)
+              + f" {d[PRIMARY]['recall']:7.3f} {d[PRIMARY]['best_bal_acc']:7.3f} {d['distance']['ratio']:8.2f}")
     import sweep_figs
     sweep_figs.all_figures(res, root)
     return 0

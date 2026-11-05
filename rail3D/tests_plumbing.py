@@ -54,6 +54,9 @@ run rather than here:
       finding-31 horn distance and the detector lattice; unknown keys and a
       metasurface reaching past the horn are refused; every geometry gets its own
       provenance tag (so its datasets and checkpoints are kept apart).
+  P9  TrainConfig(task="detect") (train_detect.py) drives the real train() loop with
+      the class and class-centroid losses at exactly zero and selects on AUC alone;
+      the default task and its class weight are unchanged; an unknown task raises.
 
 Every check runs the real code path on tiny synthetic inputs. Add one here
 whenever a run dies on something that was not physics.
@@ -70,7 +73,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from rail3d import config, data3d, optics3d, train3d
+from rail3d import config, data3d, losses3d, optics3d, train3d
 
 NX, NY = config.NX, config.NY
 
@@ -741,6 +744,40 @@ def _mat_top_level_types(path) -> set:
 
 
 # ---------------------------------------------------------------------------
+def p9_detect_only_task() -> dict:
+    """task="detect" (train_detect.py): the class and class-centroid losses are OFF
+    and the checkpoint is selected on AUC alone; the default task is unchanged."""
+    from dataclasses import replace
+
+    tmp = Path(tempfile.mkdtemp())
+    orig_load, orig_ckpt = train3d.load_all_data, config.CHECKPOINT_DIR
+    train3d.load_all_data, config.CHECKPOINT_DIR = _synthetic_loader(), tmp
+    try:
+        cfg = replace(_tiny_cfg("p9"), task="detect")
+        hist = train3d.train(cfg, device=torch.device("cpu"), verbose=False)
+        tr, va = hist.get("train") or [], hist.get("val") or []
+        try:
+            train3d.class_weight(replace(cfg, task="classify"))
+            refused = False
+        except ValueError:
+            refused = True
+        out = {
+            "class_loss_off": all(t.get("class", 1.0) == 0.0 for t in tr),
+            "centroid_loss_off": all(t.get("centroid", 1.0) == 0.0 for t in tr),
+            "score_is_auc": all(v["score"] == v["auc"] for v in va),
+            "default_weight_unchanged": train3d.class_weight(train3d.TrainConfig()) == losses3d.W_CLASS,
+            "default_task": train3d.TrainConfig().task == "detect+classify",
+            "unknown_task_refused": refused,
+            "epochs": len(tr),
+        }
+        out["pass"] = all(v for k, v in out.items() if isinstance(v, bool)) and out["epochs"] > 0
+        return out
+    finally:
+        train3d.load_all_data, config.CHECKPOINT_DIR = orig_load, orig_ckpt
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
 def main() -> int:
     ok = True
     for name, fn in [("P0_stage_root", p0_stage_root),
@@ -751,7 +788,8 @@ def main() -> int:
                      ("P5_horn_source", p5_horn_source),
                      ("P6_source_verification", p6_source_verification),
                      ("P7_rung3_difference_roundtrip", p7_rung3_difference_roundtrip),
-                     ("P8_geometry_override", p8_geometry_override)]:
+                     ("P8_geometry_override", p8_geometry_override),
+                     ("P9_detect_only_task", p9_detect_only_task)]:
         t0 = time.time()
         try:
             res = fn()

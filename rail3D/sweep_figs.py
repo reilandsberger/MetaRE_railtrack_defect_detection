@@ -5,6 +5,13 @@
     sweep_03_cells.png       type x position recall: today vs the best setup, and the ceiling
     sweep_04_data.png        data-centric: size strata, trust tags, crack width vs cutoff,
                              learning curve
+  detection only (defect vs intact, no classification; the 2026-11-05 focus):
+    sweep_05_detection.png   setups ranked: AUC, recall and accuracy at 5% false alarms for
+                             each detection score, and the average barcode distance
+    sweep_06_detection_dials.png   far edge and theta x H, scored by detection AUC
+    sweep_07_detection_cells.png   type x position: today vs the best setup, two scores
+
+    python sweep_figs.py <sweep root>      # redraw from sweep_eval_full.json
 """
 from __future__ import annotations
 
@@ -215,11 +222,177 @@ def fig_data(res, root):
     _save(fig, root, "sweep_04_data.png")
 
 
+# ---------------------------------------------------------------------------
+# detection only (defect vs intact), the 2026-11-05 focus
+# ---------------------------------------------------------------------------
+DET_STYLE = {   # score -> (colour, marker, short label)
+    "cos8":    ("#1b9e77", "o", "total barcode difference, 8 det."),
+    "maxz8":   ("#d95f02", "D", "few-detector out-of-bounds, 8 det."),
+    "cosall":  ("#66c2a5", "o", "total barcode difference, all det."),
+    "maxzall": ("#fc8d62", "D", "few-detector out-of-bounds, all det."),
+    "logreg8": ("#7570b3", "s", "trained linear detector, 8 det."),
+}
+PRIMARY = "cos8"
+
+
+def _is_today(c):
+    return c["placement"] == "t55_H150" and c["family"] == "today"
+
+
+def _det_rows(res, top=24):
+    cs = sorted(res["configs"], key=lambda c: -c["detect"][PRIMARY]["auc"])
+    rows = cs[:top]
+    today = next((c for c in cs if _is_today(c)), None)
+    if today is not None and today not in rows:
+        rows.append(today)
+    return rows
+
+
+def _label_today(ax, rows):
+    for k, c in enumerate(rows):
+        if _is_today(c):
+            ax.get_yticklabels()[k].set_color("tab:purple")
+            ax.get_yticklabels()[k].set_fontweight("bold")
+
+
+def fig_detection(res, root):
+    """Setup comparison: AUC, recall and accuracy at 5% false alarms, barcode distance."""
+    rows = _det_rows(res)
+    n = len(rows)
+    fpr = 100 * res["fpr"]
+    fig, axs = plt.subplots(1, 4, figsize=(22, 0.32 * n + 2.8), sharey=True, constrained_layout=True)
+    yy = np.arange(n)
+    panels = (("auc", "A. Detection AUC (defect vs intact)", (0.5, 1.0)),
+              ("recall", f"B. Defects caught at {fpr:.0f}% false alarms", (0, 1.0)),
+              ("best_bal_acc", "C. Accuracy: best (recall + specificity) / 2", (0.5, 1.0)))
+    for ax, (key, title, lim) in zip(axs, panels):
+        for s, (col, mk, lab) in DET_STYLE.items():
+            v = [c["detect"][s][key] for c in rows]
+            ax.scatter(v, yy, color=col, marker=mk, s=34 if s == PRIMARY else 20,
+                       zorder=3 if s == PRIMARY else 2, label=lab,
+                       edgecolor="k" if s == PRIMARY else "none", linewidth=0.6)
+        ax.set_xlim(lim[0] - 0.02, lim[1] + 0.01)
+        ax.set_title(title, loc="left")
+        ax.grid(alpha=0.3, axis="x")
+    axs[0].set_yticks(yy, [_name(c) + ("  ☀" if c["bright"] else "") for c in rows], fontsize=7.5)
+    axs[0].invert_yaxis()
+    _label_today(axs[0], rows)
+    ax = axs[3]
+    dm = np.array([c["detect"]["distance"]["defect_median"] for c in rows])
+    ip = np.array([c["detect"]["distance"]["intact_p95"] for c in rows])
+    im = np.array([c["detect"]["distance"]["intact_mean"] for c in rows])
+    ax.barh(yy, dm, 0.38, color=DET_STYLE[PRIMARY][0], label="defects: median distance")
+    ax.barh(yy + 0.38, ip, 0.38, color="0.65", label=f"intact: {100 - fpr:.0f}th percentile (the alarm line)")
+    ax.scatter(im, yy + 0.38, marker="|", color="k", s=40, label="intact: mean")
+    for k in range(n):
+        ax.text(max(dm[k], ip[k]) * 1.15, yy[k] + 0.19, f"×{dm[k] / ip[k]:.1f}", va="center", fontsize=7)
+    ax.set_xscale("log")
+    ax.set_title("D. Average barcode distance from intact\n(1 − cos, 8 detectors; ×  = defect / alarm line)",
+                 loc="left")
+    ax.grid(alpha=0.3, axis="x")
+    below = (0, -0.02)
+    ax.legend(fontsize=7.5, loc="upper left", bbox_to_anchor=below, frameon=False)
+    axs[0].legend(fontsize=7.5, loc="upper left", bbox_to_anchor=below, ncol=1, frameon=False)
+    fig.suptitle(f"Detection only, no metasurface: which setup separates defects from intact rails?  "
+                 f"(sorted by {DET_STYLE[PRIMARY][2]} AUC; purple = today; ☀ = crown glint inside; "
+                 f"n = {rows[0]['n_samples'] - rows[0]['n_intact']} defects / {rows[0]['n_intact']} intact)",
+                 fontsize=12, fontweight="bold")
+    _save(fig, root, "sweep_05_detection.png")
+
+
+def fig_detection_dials(res, root):
+    """The dials, scored by detection AUC: far edge, and the theta x H grid."""
+    cs = res["configs"]
+    thetas = sorted({c["theta"] for c in cs})
+    Hs = sorted({c["H"] for c in cs})
+    fig, axs = plt.subplots(1, 3, figsize=(18, 5.2), constrained_layout=True)
+    ax = axs[0]
+    cols = dict(zip(thetas, plt.cm.viridis(np.linspace(0.1, 0.85, len(thetas)))))
+    ls = dict(zip(Hs, ["-", "--", ":", "-."][:len(Hs)]))
+    for th in thetas:
+        for h in Hs:
+            e = sorted([c for c in cs if c["theta"] == th and c["H"] == h and c["family"] == "extend"],
+                       key=lambda c: c["far_frac"])
+            if e:
+                ax.plot([c["far_frac"] for c in e], [c["detect"][PRIMARY]["auc"] for c in e], ls[h],
+                        color=cols[th], marker="o", ms=4, label=f"θ{th:g} H{h:g}")
+    t = next((c for c in cs if _is_today(c)), None)
+    if t is not None:
+        ax.axhline(t["detect"][PRIMARY]["auc"], color="tab:purple", lw=1, ls="--")
+        ax.text(0.01, t["detect"][PRIMARY]["auc"], " today", color="tab:purple", fontsize=8, va="bottom",
+                transform=ax.get_yaxis_transform())
+    ax.axvline(1.0, color="tab:red", lw=1)
+    ax.text(1.0, 0.02, " crown glint", color="tab:red", fontsize=8, transform=ax.get_xaxis_transform())
+    ax.set_xlabel("far edge / crown mirror point  (−x0 / H tan θ)")
+    ax.set_ylabel(f"detection AUC ({DET_STYLE[PRIMARY][2]})")
+    ax.set_title("A. Extending the far edge (near edge +75 mm)")
+    ax.legend(fontsize=7.5, ncol=2)
+    ax.grid(alpha=0.3)
+    for ax, s, lab in ((axs[1], "cos8", "B"), (axs[2], "maxz8", "C")):
+        M = np.full((len(Hs), len(thetas)), np.nan)
+        for i, h in enumerate(Hs):
+            for j, th in enumerate(thetas):
+                v = [c["detect"][s]["auc"] for c in cs if c["theta"] == th and c["H"] == h]
+                if v:
+                    M[i, j] = max(v)
+        im = ax.imshow(M, origin="lower", cmap="viridis", vmin=0.5, vmax=1, aspect="auto")
+        for i in range(len(Hs)):
+            for j in range(len(thetas)):
+                if np.isfinite(M[i, j]):
+                    ax.text(j, i, f"{M[i, j]:.3f}", ha="center", va="center",
+                            color="w" if M[i, j] < 0.8 else "k")
+        ax.set_xticks(range(len(thetas)), [f"{t:g}°" for t in thetas])
+        ax.set_yticks(range(len(Hs)), [f"{h:g}" for h in Hs])
+        ax.set_xlabel("horn angle θ")
+        ax.set_ylabel("metasurface-plane height H (mm)")
+        ax.set_title(f"{lab}. Best crop per placement: AUC, {DET_STYLE[s][2]}")
+        fig.colorbar(im, ax=ax, fraction=0.05)
+    fig.suptitle("The dials, scored by detection only", fontsize=13, fontweight="bold")
+    _save(fig, root, "sweep_06_detection_dials.png")
+
+
+def fig_detection_cells(res, root):
+    """Where on the rail each score catches defects: today vs the best setup."""
+    cs = res["configs"]
+    today = next((c for c in cs if _is_today(c)), None)
+    best = max(cs, key=lambda c: c["detect"][PRIMARY]["auc"])
+    types, pos = res["plan"]["types"], res["plan"]["positions"]
+    panels = [(c, s) for c in (today, best) if c is not None for s in ("cos8", "maxz8")]
+    fig, axs = plt.subplots(1, len(panels), figsize=(5.4 * len(panels), 4.6), constrained_layout=True)
+    for ax, (c, s) in zip(np.atleast_1d(axs), panels):
+        meta = [m for m in res["meta"][c["placement"]] if m["cls"] != "intact"]
+        v = np.asarray(c["_per_sample"]["detect_hits"][s], float)
+        M = np.full((len(types), len(pos)), np.nan)
+        for i, t in enumerate(types):
+            for j, p in enumerate(pos):
+                m = np.array([mm["type"] == t and mm["s_nom"] == p for mm in meta])
+                if m.any():
+                    M[i, j] = v[m].mean()
+        im = ax.imshow(M, cmap="viridis", vmin=0, vmax=1, aspect="auto")
+        for i in range(len(types)):
+            for j in range(len(pos)):
+                if np.isfinite(M[i, j]):
+                    ax.text(j, i, f"{M[i, j]:.2f}", ha="center", va="center", fontsize=8,
+                            color="w" if M[i, j] < 0.6 else "k")
+        ax.set_xticks(range(len(pos)), [f"{p:g}" for p in pos])
+        ax.set_yticks(range(len(types)), [t.replace("_", " ") for t in types])
+        ax.set_xlabel("position s (mm): crown ← → gauge corner")
+        who = "today" if c is today else "best setup"
+        ax.set_title(f"{who}: {DET_STYLE[s][2]}\n{_name(c)}  (recall {c['detect'][s]['recall']:.2f})",
+                     fontsize=9.5)
+    fig.colorbar(im, ax=axs, fraction=0.02, label=f"defects caught at {100 * res['fpr']:.0f}% false alarms")
+    _save(fig, root, "sweep_07_detection_cells.png")
+
+
 def all_figures(res, root: Path):
     fig_bounds(res, root)
     fig_dials(res, root)
     fig_cells(res, root)
     fig_data(res, root)
+    if res["configs"] and "detect" in res["configs"][0]:
+        fig_detection(res, root)
+        fig_detection_dials(res, root)
+        fig_detection_cells(res, root)
 
 
 if __name__ == "__main__":
