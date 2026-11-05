@@ -648,6 +648,18 @@ def check_cuda_build(device: torch.device) -> None:
     try:
         (torch.zeros(1, device=device) + 1).item()
     except RuntimeError as err:
+        # A full card fails this same 1-element probe with "out of memory", which is
+        # NOT a build problem: blaming the build sent the lab towards a pointless torch
+        # reinstall (2026-11-05, the 5090 held by another process).
+        if "out of memory" in str(err).lower():
+            raise RuntimeError(
+                f"{name} ({device}) has no free memory: another process is holding it, so "
+                f"even a 1-element tensor cannot be allocated. The torch build is not the "
+                f"problem. Run `nvidia-smi`, find the process on this GPU (an earlier run, a "
+                f"Jupyter kernel, another user's job), and stop it if it is yours; or pick "
+                f"another card for this shell with RAIL3D_DEVICE (e.g. cuda:1). "
+                f"Original error: {err}"
+            ) from err
         raise RuntimeError(
             f"torch {torch.__version__} cannot execute on {name} (sm_{major}{minor}). "
             f"On the RTX 5090 install a cu128 build:\n"
