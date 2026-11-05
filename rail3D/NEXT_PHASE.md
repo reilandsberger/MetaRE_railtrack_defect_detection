@@ -1,6 +1,6 @@
 # Next phase: the F1 setup sweep, data-centric ML, and the story for the slides
 
-*Last updated: 2026-11-05 (ablation: every SLM loses, `ablate_diagnose.py` next; geometry override built; the ceiling is too loose to prune) · 2026-11-04. Decisions so far (user, 2026-11-04): go with F1 (one horn, one
+*Last updated: 2026-11-05 (ablation: every SLM loses; SLM on hold, detector-only focus; geometry override built; the ceiling is too loose to prune) · 2026-11-04. Decisions so far (user, 2026-11-04): go with F1 (one horn, one
 wider metasurface); sweep the setup dials on a controlled grid (6 types × 7 positions ×
 ~100, plus ~600 intact); keep finding 31's horn rule; overnight budget; score with field
 level + a fast classifier where that is provably enough, full training otherwise.*
@@ -18,11 +18,11 @@ python ablate_surface.py --stage prelim --long 2>&1 | tee ../ablation_newhorn.lo
 ```
 
 **Ran 2026-11-05: every SLM setting loses (best 0.889 vs control 0.950; README finding
-24).** The next step needs no training: score those checkpoints on every split.
-
-```bash
-python -u ablate_diagnose.py --stage prelim 2>&1 | tee ../ablation_diagnose.log
-```
+24).** **User decision (2026-11-05): the SLM is on hold.** Work focuses on training and
+optimising the detector-only system (`surface="none"`), which scores best. The sweep's
+floor IS that system (no metasurface, 8 detectors), so the sweep ranks it directly; the
+calibration set in §2 trains only `surface="none"`. `ablate_diagnose.py` stays for
+whenever the SLM question is reopened.
 
 **B. The sweep**, after a 2-minute timing run sets the night's expectations:
 
