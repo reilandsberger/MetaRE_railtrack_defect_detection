@@ -30,3 +30,5 @@ rail3D/**/__pycache__/
 # Regenerate with:  python setup_diagram.py  and the validation scripts.
 rail3D/data/generated/verification_report.json
 rail3D/data/figures/
+# result bundles copied back from the lab 5090 for review (one dated folder per return)
+rail3D/data/lab_returns/

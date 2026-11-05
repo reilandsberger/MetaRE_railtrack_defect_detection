@@ -1,6 +1,6 @@
 # CLAUDE.md — MetaRE railtrack defect detection
 
-*Last updated: 2026-11-05 (F1 sweep, NEXT_PHASE.md) · 2026-11-02 (rail targets, finding 34) · 2026-10-29 (design study) · 2026-10-26 · λ = 5 mm (60 GHz) · horn = physical RFspin H-A75-W20
+*Last updated: 2026-11-05 (lab: all gates pass at 689da5, prelim trained, SLM on hold) · 2026-11-05 (F1 sweep, NEXT_PHASE.md) · 2026-11-02 (rail targets, finding 34) · 2026-10-29 (design study) · 2026-10-26 · λ = 5 mm (60 GHz) · horn = physical RFspin H-A75-W20
 (README finding 29, 2026-09-24), moved out to 278.5 mm with its lowest edge level
 with the metasurface, metasurface input upward-only (finding 31, 2026-10-02);
 Import source verified at three planes by rungs −1/0 (finding 32) ·
@@ -12,6 +12,19 @@ the metasurface: an optimization failure), 25 (s0 is the dominant variable), 26
 Lumerical file I/O (absolute paths, text fallback, load check,
 `matlabsavelegacy`) — finding 30 · shadow guard settled 2026-09-11 (min_t 0.05,
 offset 0.3).*
+
+## Lab state (2026-11-05) — gates green, detector-only focus
+
+- **All 13 gates PASS at commit 9a3a7d1, geometry 689da5** (new horn + wear model, freshly
+  stamped): V3 0.0010273 (unchanged), V5 0.968, V6 omitted 0.0119 (< 0.02), V7 min cosine
+  0.982 (crack2; was 0.997, bound 0.90), V9 20.09 dBi.
+- **Prelim `L5_prelim_689da5`** (8400 samples, 0.58 h): no-MS val AUC **0.950**, SLM
+  0.846. Wear recall 0.99 → 0.77 (the old cliff is gone; now falls with gauge angle,
+  rises with depth). Crack/dent recall ≈ 0 below s0 130 (r(s0) 0.68 / 0.77).
+- **Ablation: every SLM setting loses** (best 0.889); README finding 24.
+  **User decision: the SLM is on hold; optimise the detector-only system
+  (`surface="none"`).** Do not propose SLM debugging unless the user reopens it.
+- Lab returns are unpacked in `rail3D/data/lab_returns/<date>/` (gitignored).
 
 ## F1 setup sweep and the next phase (2026-11-05)
 
