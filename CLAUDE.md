@@ -1,6 +1,6 @@
 # CLAUDE.md — MetaRE railtrack defect detection
 
-*Last updated: 2026-11-02 (rail targets, finding 34) · 2026-10-29 (design study) · 2026-10-26 · λ = 5 mm (60 GHz) · horn = physical RFspin H-A75-W20
+*Last updated: 2026-11-05 (F1 sweep, NEXT_PHASE.md) · 2026-11-02 (rail targets, finding 34) · 2026-10-29 (design study) · 2026-10-26 · λ = 5 mm (60 GHz) · horn = physical RFspin H-A75-W20
 (README finding 29, 2026-09-24), moved out to 278.5 mm with its lowest edge level
 with the metasurface, metasurface input upward-only (finding 31, 2026-10-02);
 Import source verified at three planes by rungs −1/0 (finding 32) ·
@@ -12,6 +12,17 @@ the metasurface: an optimization failure), 25 (s0 is the dominant variable), 26
 Lumerical file I/O (absolute paths, text fallback, load check,
 `matlabsavelegacy`) — finding 30 · shadow guard settled 2026-09-11 (min_t 0.05,
 offset 0.3).*
+
+## F1 setup sweep and the next phase (2026-11-05)
+
+User decision: F1 (one horn, a wider metasurface). `rail3D/NEXT_PHASE.md` holds the plan,
+the lab commands (SETUP_LAB §7g) and the data-centric track. `setup_sweep.py` solves θ × H
+placements on a wide plane: 6 types × 7 positions s 110–170 × 100 (Latin hypercube, bands
+overridden, wear = a cut tangent at s), plus 600 intact, paired seeds, and each defect's
+exact same-pose signal. `sweep_eval.py` scores the floor and ceiling for every
+metasurface crop. **The ceiling came out ~1.00 everywhere on the laptop smoke, too loose
+to prune**, so finalists need a calibration set trained in full. That needs the geometry
+override (not built) and a passing ablation.
 
 ## Rail-reflection targets (2026-11-02)
 

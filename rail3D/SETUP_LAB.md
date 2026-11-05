@@ -1,6 +1,6 @@
 # rail3D — Lab Workstation Setup (RTX 5090)
 
-*Last updated: 2026-10-22 (§7f: the 130-window pass-over set for the reservoir-computing
+*Last updated: 2026-11-05 (§7g: the F1 setup sweep) · 2026-10-22 (§7f: the 130-window pass-over set for the reservoir-computing
 collaborator) · 2026-10-13 · λ = 5 mm (60 GHz), V0–V8 measured on the 5090 · horn changed to the
 RFspin H-A75-W20 on 2026-09-24 and moved out to 278.5 mm on 2026-10-02 (README
 finding 31) — re-run per §7e · wear rebuilt as a smooth gauge-corner cut on
@@ -705,6 +705,45 @@ fields (~2.7 GB) afterwards, without re-solving:
 ```bash
 python passover_big.py --profile lab --assemble-only --fields
 ```
+
+## 7g. The F1 setup sweep (2026-11-05)
+
+Run §7e first if `L5_prelim_689da5` does not exist yet; the ablation there decides whether
+trained-metasurface numbers mean anything (README finding 24). The plan and the decision
+rule are in `NEXT_PHASE.md`.
+
+```bash
+python setup_sweep.py --timing 20 --profile lab
+```
+
+This measures s/sample on the reference placement and projects the night for every
+placement. The defaults are 9 placements (θ 45/55/65 × H 100/150/200), each with 6 types × 7
+positions × 100 + 600 intact = 4,800 samples.
+
+```bash
+python setup_sweep.py --profile lab --budget-hours 8 2>&1 | tee ../setup_sweep.log
+```
+
+Breadth-first and resumable: it stops before a shard would cross the deadline, and every
+placement then holds the same balanced subsample. Re-run the same command to continue.
+It writes `data/generated/setup_sweep/F1_<digest>/`, ~0.3 GB per placement; keep it on the
+lab. Change `--thetas`, `--heights`, `--y-half`, `--n-per-cell` or `--n-intact` for another
+grid; a different plan gets a different root.
+
+```bash
+python sweep_eval.py --profile lab 2>&1 | tee ../sweep_eval.log
+```
+
+For every placement and metasurface crop (today's, far edge extended, fixed-width slid),
+it reports the floor (no metasurface, 8 detectors), the ceiling (ideal matched filter),
+all-dense detectors and the design study's field margin. Expect ~1.5–3 h. Send back
+`sweep_eval.json`, `progress.txt`, `sweep_01…04.png` and both logs.
+
+`python setup_sweep.py --self-test --profile lab` (~1 min on the 5090) re-checks that
+every stored exact signal equals defect − same-pose intact, and that every type renders
+at full depth at s = 110 and 170.
+
+---
 
 ## 8. Generate the dataset
 

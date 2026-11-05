@@ -1,6 +1,6 @@
 # rail3D — 3D diffraction simulation + metasurface training for rail defect detection
 
-*Last updated: 2026-11-02 (rail-reflection targets and the 2D exact-vs-PO study, finding 34: `RAIL_TARGETS.md`) · 2026-10-29 (experimental-design study: `DESIGN_STUDY.md`) · 2026-10-26 · λ = 5 mm (60 GHz) · horn = RFspin H-A75-W20 (finding 29) at
+*Last updated: 2026-11-05 (the F1 setup sweep: `setup_sweep.py`, `sweep_eval.py`, `NEXT_PHASE.md`) · 2026-11-02 (rail-reflection targets and the 2D exact-vs-PO study, finding 34: `RAIL_TARGETS.md`) · 2026-10-29 (experimental-design study: `DESIGN_STUDY.md`) · 2026-10-26 · λ = 5 mm (60 GHz) · horn = RFspin H-A75-W20 (finding 29) at
 278.5 mm, lowest edge level with the metasurface; upward-only metasurface input (finding 31); the
 Import source verified at three planes by rungs −1 and 0 (finding 32) · wear is a smooth
 parametric gauge-corner cut in every sample, crown wear in 50% (finding 33) · V0–V8
@@ -188,6 +188,9 @@ field, plus parameter histograms.
 | `passover_big.py` | the 130-window pass-over set: 5 intact + 200 each of transverse / oblique / longitudinal cracks, dents, wear and shells, all centred on the well-seen gauge shoulder (s0 140–160) with narrowed sizes; batched solves (~6–7 h on the 5090), streaming assembly, and it writes its own README, pass list (CSV + Markdown) and layout figure. SETUP_LAB §7f |
 | `glint_band.py` | Tier 0 design tool (CPU, seconds): ray-traces which part of the priority arc s 110–170 reflects the horn specularly into a given aperture, for any horn θ / azimuth φ / plane H / aperture x-range; `--figures` writes `DESIGN_STUDY.md` Figs 01, 02, 04, 05 |
 | `coverage_scan.py` | Tier 1 design scan: solves ψ1 on a wide plane (x −300…+100) for 7 horn placements × 52 mid-size defects at s0 110–170 + 16 intact, scores every aperture and two-channel combination against intact pose noise; laptop ~12 min/horn, resumable; `--twins`, `--analyze` (Figs 03, 06, 07). Applies its scene patches (240 mm tapered segment, defect-facet-only ray cast, proven identical) only while it solves |
+| `setup_sweep.py` | the F1 experimental-setup sweep (SETUP_LAB §7g): horn θ × metasurface H placements solved on a wide plane, 6 types × 7 positions × 100 Latin-hypercube defects + 600 intact, paired seeds, each defect's exact same-pose signal stored; breadth-first, resumable, `--budget-hours`, `--timing`, `--self-test` |
+| `sweep_eval.py` / `sweep_figs.py` | scores every placement × metasurface crop: floor (no metasurface, 8 detectors), ceiling (ideal matched filter), dense detectors, field margin; per type × position cell; learning curve; four figures |
+| `NEXT_PHASE.md` | the plan after the design study: lab commands, the decision rule, the data-centric ML track, the slide story |
 | `po_canonical_2d.py` | 2D EXACT boundary-integral solver (both polarisations, validated against a plate and the PEC-cylinder series) vs rail3D's physical optics on 162 defect cross-sections; predicts rung 3 per class (finding 34). `--validate` in seconds; the study ~45 min CPU |
 | `rail_targets_figs.py` | the figures behind `RAIL_TARGETS.md`: approval ladder, crack waveguide physics, crack error maps, class scorecard, rung-3 summary |
 | `RAIL_TARGETS.md` | rail-reflection rungs 1–3: approval metrics and why, rung-3 targets and per-class predictions |

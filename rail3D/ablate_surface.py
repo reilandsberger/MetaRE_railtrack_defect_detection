@@ -43,6 +43,7 @@ import torch
 from rail3d import config, data3d, train3d
 
 REPORT = config.GENERATED_DIR / "surface_ablation.json"
+TIE = 0.002                      # |auc difference| below this is a tie, not a verdict
 
 
 def best_val_of(hist: dict) -> dict:
@@ -147,11 +148,18 @@ def main() -> int:
     best_slm = max(scored, key=lambda v: v["auc"])
     out["baseline_auc"] = ctrl
     out["best_slm_auc"] = best_slm["auc"]
-    out["slm_beats_baseline"] = best_slm["auc"] > ctrl
+    # a tie is not a loss: within TIE the SLM has merely recovered the baseline
+    # (which zero phase reproduces exactly), so it has neither lost nor earned anything
+    out["slm_beats_baseline"] = best_slm["auc"] > ctrl + TIE
+    out["slm_ties_baseline"] = abs(best_slm["auc"] - ctrl) <= TIE
 
     print(f"\n  no-MS baseline auc {ctrl:.4f} | best SLM auc {best_slm['auc']:.4f}")
     if out["slm_beats_baseline"]:
         print("  -> the metasurface now EARNS its place; adopt that setting as default.")
+    elif out["slm_ties_baseline"]:
+        print(f"  -> the best SLM setting TIES the baseline (within {TIE}): the optimizer no\n"
+              "     longer loses ground, but the surface does not yet add anything. If the\n"
+              "     baseline is near 1.0 the dataset may simply be too easy to tell them apart.")
     else:
         print("  -> every SLM setting still loses to a piece of empty space, even though\n"
               "     zero phase reproduces it exactly. The optimization, not the surface,\n"
