@@ -13,6 +13,7 @@ const path = require("path");
 
 const RAIL = "C:/Users/Rei/Documents/MetaRE_railtrack_defect_detection/rail3D";
 const FIG = RAIL + "/data/figures";
+const SWEEP = RAIL + "/data/generated/2026-11-05/sweep_F1_f5be4bbb";   // sweep_06a = panel A of sweep_06
 const OUT = RAIL + "/data/generated/2026-11-05/rail3D_update_2026-11-05.pptx";
 
 const INK = "1B2733", MUTE = "7B8494", ACC = "1F6FEB", GOOD = "1A7F5A", BAD = "B42318";
@@ -357,8 +358,8 @@ const AX = { catAxisLabelColor: INK, valAxisLabelColor: INK, catAxisLabelFontSiz
     "Each defect's exact signal stored"], ACC, { bullets: true, space: 3 });
   card(s, M, 5.15, 7.3, 1.75, "How each setup is scored", ["No metasurface, 8 detectors, both " +
     "detection rules; 5-fold split by rail, the same folds for every setup."], INK, { space: 4 });
-  card(s, sx, 5.5, sw, 1.4, "Tonight", ["θ 55° and 65° at H 150 (45 min);", "all 9 placements " +
-    "overnight"], GOOD, { space: 2 });
+  card(s, sx, 5.5, sw, 1.4, "Run so far", ["θ 45°, 55°, 65° at H 150 (88% of rails);",
+    "H 100 and 200 next"], GOOD, { space: 2 });
   s.addNotes("setup_sweep.py + sweep_eval.py, NEXT_PHASE.md. Crop families: 'extend' moves the far " +
     "edge out from +75 mm; 'slide' moves a fixed-width aperture along x. Bright-field crops (the " +
     "crown's mirror point inside the plane) are marked in the figures. The ideal-processor ceiling " +
@@ -368,37 +369,58 @@ const AX = { catAxisLabelColor: INK, valAxisLabelColor: INK, catAxisLabelFontSiz
 // ---------------------------------------------------------------- 11. sweep results
 {
   const s = pres.addSlide();
-  header(s, "SETUP SWEEP RESULTS", "Which setup separates defects from intact rails?");
-  placeholder(s, M, 1.45, CW, 4.6, "sweep_05_detection.png",
-    "data/generated/2026-11-05/sweep_F1_<id>/  (sweep_eval.py)",
-    "Every setup ranked: detection AUC, recall and accuracy at 5% false alarms, barcode distance; " +
-    "today in purple");
-  s.addShape(pres.shapes.ROUNDED_RECTANGLE, { x: M, y: 6.25, w: CW, h: 0.7, rectRadius: 0.08,
+  header(s, "SETUP SWEEP RESULTS", "A 45° horn and a wider plane: AUC 0.89 → 0.95");
+  const ih = 4.6, iw = ih * (3096 / 1483);
+  s.addImage({ path: SWEEP + "/sweep_05_detection.png", x: M, y: 1.4, w: iw, h: ih,
+    altText: "Every setup ranked by detection AUC, recall and accuracy at 5% false alarms, barcode distance" });
+  const sx = M + iw + 0.3, sw = W - M - sx;
+  stat(s, sx, 1.35, sw, "0.89 → 0.95", "detection AUC, total barcode difference: today → best", ACC, 28);
+  stat(s, sx, 2.95, sw, "74% → 86%", "defects caught at 5% false alarms", GOOD, 28);
+  stat(s, sx, 4.55, sw, "0.94 → 0.96", "few-detector out-of-bounds AUC; it beats total difference " +
+    "in every setup", ACC, 28);
+  s.addShape(pres.shapes.ROUNDED_RECTANGLE, { x: M, y: 6.15, w: CW, h: 0.85, rectRadius: 0.08,
     fill: { color: PANEL }, line: { color: PANEL, width: 0 } });
-  s.addText([{ text: "Fill in after the run:  ", options: { bold: true, color: ACC } },
-    { text: "today's AUC ___ → best setup ___ (θ ___, plane x ___ to ___ mm); defects caught at 5% " +
-      "false alarms ___ → ___", options: { color: INK } }],
-    { x: M + 0.25, y: 6.27, w: CW - 0.5, h: 0.66, fontSize: 15, valign: "middle", isTextBox: true });
-  s.addNotes("Sorted by total-barcode-difference AUC on 8 detectors. Each setup is scored with no " +
-    "metasurface; the numbers are out-of-fold. With the 45-minute slice, quote AUC; the 5% line " +
-    "rests on ~100 intact rails per placement.");
+  s.addText([{ text: "Horn angle matters most:  ", options: { bold: true, color: ACC } },
+    { text: "45° beats 55° beats 65° at nearly every plane width. Best: θ 45°, plane x −135 to +75 mm. " +
+      "Untrained, no metasurface, 8 detectors; 3,675 defects and 525 intact rails per setup.",
+      options: { color: INK } }],
+    { x: M + 0.25, y: 6.17, w: CW - 0.5, h: 0.81, fontSize: 14, valign: "middle", isTextBox: true });
+  s.addNotes("sweep_F1_f5be4bbb (commit dbde7d8, geometry 689da5): θ 45/55/65° at H 150, 42-43 of 48 " +
+    "shards each. Scores are out-of-fold; the 8 detectors are picked inside each training fold by a " +
+    "Fisher x redundancy rule (a stand-in for training + pruning), so these are untrained. Today = " +
+    "θ 55°, x −75..75: cos8 AUC 0.891, recall 0.74; best = θ 45°, x −135..75: 0.949, 0.86. The top " +
+    "five setups are all 45° and within 0.02 of each other (AUC standard error ~0.005), so treat " +
+    "them as tied. The all-detector out-of-bounds rule reaches 0.97-0.99 almost everywhere and " +
+    "does not separate setups. The trained linear detector (purple squares, 0.70-0.77) loses to " +
+    "both untrained rules: defects push the barcode in different directions, which one linear " +
+    "boundary cannot follow. The learning curve is flat past half the data, so the missing 12% of " +
+    "rails does not change the ranking.");
 }
 
 // ---------------------------------------------------------------- 12. where each setup looks
 {
   const s = pres.addSlide();
-  header(s, "SETUP SWEEP RESULTS", "Where on the railhead each setup catches defects");
-  placeholder(s, M, 1.45, CW, 2.75, "sweep_07_detection_cells.png",
-    "data/generated/2026-11-05/sweep_F1_<id>/",
-    "Defect type × position: today vs the best setup, both detection rules");
-  placeholder(s, M, 4.4, 7.6, 2.5, "sweep_06_detection_dials.png",
-    "data/generated/2026-11-05/sweep_F1_<id>/",
-    "AUC vs far edge; horn angle × plane height");
-  card(s, 8.5, 4.4, W - M - 8.5, 2.5, "Fill in after the run", ["Which positions the best setup " +
-    "recovers (s 110–130?)", "Does a steeper horn help?", "Where AUC stops rising as the plane grows"],
-    ACC, { bullets: true, space: 3 });
-  s.addNotes("If only the 45-minute slice is available, the horn-angle grid has two cells " +
-    "(55° and 65° at H 150); the overnight run fills the 3 × 3 grid.");
+  header(s, "SETUP SWEEP RESULTS", "The wider plane wins the crown and loses the gauge face");
+  s.addImage({ path: SWEEP + "/sweep_07_detection_cells.png", x: M, y: 1.4, w: CW,
+    h: CW / (3033 / 660), altText: "Defects caught by type and position, today vs the best setup" });
+  const fh = 2.75, fw = fh * (772 / 704), fy = 4.2;
+  s.addImage({ path: SWEEP + "/sweep_06a_far_edge.png", x: M, y: fy, w: fw, h: fh,
+    altText: "Detection AUC vs the plane's far edge for each horn angle" });
+  const cx = M + fw + 0.25, cw2 = (W - M - cx - 0.25) / 2;
+  card(s, cx, fy, cw2, fh, "Gained: the crown side (s 110–130)", ["Oblique cracks 19–31% → 47–97%",
+    "Transverse cracks at s 110: 28% → 78%", "Dents at s 110: 24% → 69%",
+    "Longitudinal cracks: 91% or better everywhere, in both"], GOOD,
+    { bullets: true, space: 5, bodySize: 15 });
+  card(s, cx + cw2 + 0.25, fy, cw2, fh, "Lost: the gauge face (s 170)", ["Shells 18% → 6%",
+    "Transverse cracks 56% → 27%; oblique 36% → 19%", "The near edge stayed at +75 mm: " +
+    "widening it is the next test"], BAD, { bullets: true, space: 5, bodySize: 15 });
+  s.addNotes("Top: defects caught at 5% false alarms per defect type x position, today (θ 55°, " +
+    "x −75..75) vs the best setup (θ 45°, x −135..75), both rules; the card numbers are the total " +
+    "barcode difference rule. Bottom left: AUC vs how far the plane reaches toward the crown's " +
+    "mirror point, near edge fixed at +75 mm. AUC rises to ~0.9 of the mirror point at 45° and " +
+    "55°; taking the glint inside does not help at 45°. 65° stays near today's level, so the " +
+    "design study's 65° pick (a field-level measure) does not survive detection scoring. Only " +
+    "H 150 has run, so the horn-angle x height grid is one row (left out).");
 }
 
 // ---------------------------------------------------------------- 13. next steps
@@ -406,8 +428,8 @@ const AX = { catAxisLabelColor: INK, valAxisLabelColor: INK, catAxisLabelFontSiz
   const s = pres.addSlide();
   header(s, "NEXT STEPS", "Let the data pick the setup, then train the finalists");
   const items = [
-    ["Finish the sweep", "All 9 placements overnight; rank every setup on the detector-only score."],
-    ["Train the finalists", "Detector-only, detection only, on the top setups; 4 to 16 detectors."],
+    ["Finish the sweep", "H 100 and 200; widen the plane's near edge to win back the gauge face."],
+    ["Train the finalists", "θ 45°, plane x −135 to +75 mm (and today's width slid to −125 to +25); 4 to 16 detectors."],
     ["Where it fails", "Recall by defect type × position × size, not one overall number."],
     ["Fixable or not?", "Label each miss by its physical signal strength: weak signals cannot be trained away."],
     ["How much data", "Learning curves per cell: spend the next generation where results still climb."],
