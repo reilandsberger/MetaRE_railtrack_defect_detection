@@ -49,6 +49,11 @@ run rather than here:
       P4-style exports of rail3D's own intact and dent fields: one gain fitted
       on the intact file must carry over, and the difference must round-trip to
       ~1 and ~0 dB at both planes with every DIFF gate passing (RAIL_TARGETS.md).
+  P8  RAIL3D_GEOMETRY (config.py, geometry.py) in fresh processes: the default is
+      untouched when unset; F1 and a theta/H override re-derive the aperture, the
+      finding-31 horn distance and the detector lattice; unknown keys and a
+      metasurface reaching past the horn are refused; every geometry gets its own
+      provenance tag (so its datasets and checkpoints are kept apart).
 
 Every check runs the real code path on tiny synthetic inputs. Add one here
 whenever a run dies on something that was not physics.
@@ -673,6 +678,55 @@ def p7_rung3_difference_roundtrip() -> dict:
         config.FIGURE_DIR, config.GENERATED_DIR, _sys.argv, cw.solve = saved
 
 
+def p8_geometry_override() -> dict:
+    """RAIL3D_GEOMETRY re-derives every dependent constant, leaves the default
+    untouched when unset, refuses bad files, and separates provenance."""
+    import math
+    import os
+    import subprocess
+    import sys as _sys
+
+    tmp = Path(tempfile.mkdtemp())
+    probe = ("import json, math; from rail3d import config, data3d; print(json.dumps({"
+             "'theta': math.degrees(config.THETA_INC), 'H': config.H_MS, 'NX': config.NX, 'NY': config.NY,"
+             "'xc': config.PLANE_X_CENTER, 'WX': config.WX, 'D': config.DIST_ANT, 'edge': config.HORN_LOWER_EDGE_Z,"
+             "'grid': list(config.DET_GRID), 'tag': data3d.geometry_tag(),"
+             "'lattice_ok': bool((config.dense_detector_centers()[:, 0].abs() <= config.WX / 2).all())}))")
+
+    def run(spec):
+        env = dict(os.environ)
+        env.pop("RAIL3D_GEOMETRY", None)
+        if spec is not None:
+            f = tmp / f"g{abs(hash(json.dumps(spec, sort_keys=True))) % 10**8}.json"
+            f.write_text(json.dumps(spec))
+            env["RAIL3D_GEOMETRY"] = str(f)
+        r = subprocess.run([_sys.executable, "-c", probe], cwd=str(Path(__file__).resolve().parent),
+                           env=env, capture_output=True, text=True)
+        return (json.loads(r.stdout.strip().splitlines()[-1]) if r.returncode == 0 else None), r.stderr
+
+    default, _ = run(None)
+    f1, banner = run({"label": "F1", "theta_deg": 55, "H_MS": 150, "NX": 106, "NY": 30,
+                      "PLANE_X_CENTER": -57.5})
+    t65, _ = run({"theta_deg": 65, "H_MS": 100, "NX": 60, "NY": 30})
+    th = math.radians(65)
+    d65 = (100 + (config.SIZE_ANT[0] / 2 + config.HORN_WALL) * math.sin(th)) / math.cos(th)
+    bad_key, err_key = run({"NX": 80, "width": 200})
+    collide, err_col = run({"NX": 200, "PLANE_X_CENTER": 100.0})
+    res = {
+        "default_untouched": default == {**default, "theta": 55.0, "H": 150.0, "NX": 60, "NY": 30,
+                                         "xc": 0.0, "grid": [13, 10]} and default["tag"] == data3d.geometry_tag(),
+        "f1_derived": f1 is not None and f1["WX"] == 265.0 and f1["grid"] == [23, 10]
+        and abs(f1["D"] - default["D"]) < 1e-9 and f1["lattice_ok"],
+        "theta_h_derived": t65 is not None and abs(t65["D"] - d65) < 1e-6 and t65["edge"] == 100.0,
+        "tags_differ": len({default["tag"], f1["tag"], t65["tag"]}) == 3 if f1 and t65 else False,
+        "banner_printed": "GEOMETRY OVERRIDE F1" in banner,
+        "unknown_key_refused": bad_key is None and "unknown keys" in err_key,
+        "horn_collision_refused": collide is None and "past the horn" in err_col,
+    }
+    res["pass"] = all(res.values())
+    return res
+
+
 def _mat_top_level_types(path) -> set:
     """Top-level MAT v5 data-element types: 14 = miMATRIX, 15 = miCOMPRESSED."""
     b = Path(path).read_bytes()
@@ -696,7 +750,8 @@ def main() -> int:
                      ("P4_fdtd_agreement_roundtrip", p4_fdtd_agreement_roundtrip),
                      ("P5_horn_source", p5_horn_source),
                      ("P6_source_verification", p6_source_verification),
-                     ("P7_rung3_difference_roundtrip", p7_rung3_difference_roundtrip)]:
+                     ("P7_rung3_difference_roundtrip", p7_rung3_difference_roundtrip),
+                     ("P8_geometry_override", p8_geometry_override)]:
         t0 = time.time()
         try:
             res = fn()

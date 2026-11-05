@@ -16,7 +16,9 @@ with the incidence tilt in the x-z plane (matching Face3D's
 
 from __future__ import annotations
 
+import json
 import os
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -396,6 +398,66 @@ DET_SIZE = (18.2 * WVL / LIBRARY_WVL,
 DET_GRID = (int(WX // DET_SIZE[0]),
             int(WY // DET_SIZE[1]))     # tiling bound: (13, 10) = 130 windows
 N_DET_FINAL = 8
+
+# ---------------------------------------------------------------------------
+# Geometry override (2026-11-05, NEXT_PHASE.md section 3): RAIL3D_GEOMETRY=<json>
+# replaces the horn angle, the metasurface height, its grid and its lateral
+# position for THIS PROCESS, and re-derives everything that follows from them by
+# the same rules as above (aperture, the finding-31 horn distance, the dense
+# detector lattice). It is applied here, at import, before any other module reads
+# config, so default arguments elsewhere pick it up. Every key it touches is a
+# provenance key (data3d.PROVENANCE_KEYS): datasets and checkpoints made under an
+# override live in their own auto-suffixed roots and refuse the default geometry,
+# and vice versa. Unset, the geometry above is untouched. geometry.py writes the
+# files (geometries/F1.json is DESIGN_STUDY's F1).
+# ---------------------------------------------------------------------------
+GEOMETRY_KEYS = ("label", "theta_deg", "H_MS", "NX", "NY", "PLANE_X_CENTER")
+GEOMETRY_OVERRIDE: dict | None = None
+
+
+def _apply_geometry_override() -> None:
+    global THETA_INC, H_MS, NX, NY, PLANE_X_CENTER, WX, WY, HORN_LOWER_EDGE_Z, DIST_ANT
+    global DET_GRID, GEOMETRY_OVERRIDE
+    raw = os.environ.get("RAIL3D_GEOMETRY")
+    if not raw:
+        return
+    path = Path(raw)
+    if not path.is_absolute() and not path.exists():
+        path = RAIL3D_DIR / raw
+    if not path.is_file():
+        raise FileNotFoundError(f"RAIL3D_GEOMETRY={raw!r}: no such file (relative paths are tried "
+                                f"against the working directory, then {RAIL3D_DIR})")
+    spec = json.loads(path.read_text(encoding="utf-8"))
+    bad = sorted(set(spec) - set(GEOMETRY_KEYS))
+    if bad:
+        raise ValueError(f"RAIL3D_GEOMETRY {path}: unknown keys {bad}; allowed {GEOMETRY_KEYS}")
+    if "theta_deg" in spec:
+        THETA_INC = float(spec["theta_deg"]) * np.pi / 180
+    H_MS = float(spec.get("H_MS", H_MS))
+    NX, NY = int(spec.get("NX", NX)), int(spec.get("NY", NY))
+    PLANE_X_CENTER = float(spec.get("PLANE_X_CENTER", PLANE_X_CENTER))
+    WX, WY = NX * DX, NY * DX
+    HORN_LOWER_EDGE_Z = H_MS
+    DIST_ANT = float((HORN_LOWER_EDGE_Z + (SIZE_ANT[0] / 2 + HORN_WALL) * np.sin(THETA_INC))
+                     / np.cos(THETA_INC))
+    DET_GRID = (int(WX // DET_SIZE[0]), int(WY // DET_SIZE[1]))
+    # the horn's lowest edge is level with the plane, so the metasurface must end
+    # before it in x or the two occupy the same space
+    horn_edge_x = DIST_ANT * np.sin(THETA_INC) - (SIZE_ANT[0] / 2 + HORN_WALL) * np.cos(THETA_INC)
+    if PLANE_X_CENTER + WX / 2 >= horn_edge_x:
+        raise ValueError(f"RAIL3D_GEOMETRY {path}: the metasurface reaches x = "
+                         f"{PLANE_X_CENTER + WX / 2:.1f} mm, past the horn's lowest edge at "
+                         f"x = {horn_edge_x:.1f} mm (same height, finding 31)")
+    GEOMETRY_OVERRIDE = dict(spec, path=str(path))
+    sys.stderr.write(
+        f"[rail3d] GEOMETRY OVERRIDE {spec.get('label', path.stem)} ({path.name}): horn "
+        f"{np.degrees(THETA_INC):g} deg at {DIST_ANT:.1f} mm, metasurface H {H_MS:g} mm, "
+        f"{NX}x{NY} px = {WX:g}x{WY:g} mm centred at x {PLANE_X_CENTER:+g} "
+        f"(x {PLANE_X_CENTER - WX / 2:+g}..{PLANE_X_CENTER + WX / 2:+g}), "
+        f"detectors {DET_GRID[0]}x{DET_GRID[1]}\n")
+
+
+_apply_geometry_override()
 
 # Noise model (Face3D values; multiplicative/additive noise is RELATIVE to the
 # RMS-normalized field, so it is λ-invariant by construction)

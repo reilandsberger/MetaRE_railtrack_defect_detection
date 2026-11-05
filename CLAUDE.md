@@ -21,8 +21,15 @@ placements on a wide plane: 6 types × 7 positions s 110–170 × 100 (Latin hyp
 overridden, wear = a cut tangent at s), plus 600 intact, paired seeds, and each defect's
 exact same-pose signal. `sweep_eval.py` scores the floor and ceiling for every
 metasurface crop. **The ceiling came out ~1.00 everywhere on the laptop smoke, too loose
-to prune**, so finalists need a calibration set trained in full. That needs the geometry
-override (not built) and a passing ablation.
+to prune**, so finalists need a calibration set trained in full, after a passing ablation.
+
+**Geometry override (built 2026-11-05):** `RAIL3D_GEOMETRY=<json>` (e.g.
+`geometries/F1.json`, written by `geometry.py`) is read at config import and sets
+`THETA_INC`, `H_MS`, `NX`, `NY` and `PLANE_X_CENTER` for the whole process. It re-derives
+`WX`/`WY`, `DIST_ANT` (finding 31's rule) and `DET_GRID`, prints a `GEOMETRY OVERRIDE`
+banner, and refuses unknown keys or a metasurface past the horn. All keys are provenance
+keys, so roots auto-suffix and the two geometries refuse each other's datasets. **Unset it
+for default-geometry runs.** P8 guards it.
 
 ## Rail-reflection targets (2026-11-02)
 

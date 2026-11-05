@@ -1,6 +1,6 @@
 # Next phase: the F1 setup sweep, data-centric ML, and the story for the slides
 
-*Last updated: 2026-11-04. Decisions so far (user, 2026-11-04): go with F1 (one horn, one
+*Last updated: 2026-11-05 (geometry override built; the ceiling is too loose to prune) · 2026-11-04. Decisions so far (user, 2026-11-04): go with F1 (one horn, one
 wider metasurface); sweep the setup dials on a controlled grid (6 types × 7 positions ×
 ~100, plus ~600 intact); keep finding 31's horn rule; overnight budget; score with field
 level + a fast classifier where that is provably enough, full training otherwise.*
@@ -79,20 +79,37 @@ every setup:
    chosen by training.
 
 This needs the ablation to show the SLM can beat the no-MS control at all (finding 24),
-and the geometry override in §3.2.
+and the geometry override (§3.2, built).
 
 ## 3. After the sweep
 
 1. **Rank by the floor, and check the ceiling anyway.** At 600 poses the ceiling may prune
    setups that collect too little defect light; if it does not, use the calibration rule
    in §2.
-2. **Full training of the calibration set and the finalists** (ONN, SLM and no-MS) needs one pipeline change that
-   does not exist yet: a **geometry override**. Today `NX`, `PLANE_X_CENTER`, `THETA_INC`
-   and `H_MS` are module constants; F1 alone needs `NX = 106` and `PLANE_X_CENTER = −57.5`.
-   - Proposal: `RAIL3D_GEOMETRY=<json>` read at config import, like `RAILDEFECT_DATA_DIR`.
-     All four are provenance keys, so roots auto-suffix and nothing old is reused.
-   - The sweep's own fields could become the training set: same samples, cropped. That
-     saves the generation entirely.
+2. **Full training of the calibration set and the finalists** (ONN, SLM and no-MS) runs on
+   the **geometry override** (built 2026-11-05). `RAIL3D_GEOMETRY=<json>` is read at
+   config import, so the whole pipeline (generation, gates, training, analysis) runs on
+   that geometry, in its own auto-suffixed roots.
+   - `geometry.py` writes the files from the sweep's dials; `geometries/F1.json` is F1
+     (θ 55, H 150, x −190…+75 = 106 × 30 px, 23 × 10 detectors).
+   - Every key is a provenance key, so a default-geometry dataset is refused under F1 and
+     vice versa (checked).
+   - P8 in `tests_plumbing.py` guards the derivations.
+   - Not yet: turning the sweep's own fields into a training set (same samples, cropped),
+     which would skip the generation. Worth building if the calibration set grows.
+
+   ```bash
+   python geometry.py --name F1 --theta 55 --H 150 --x0 -190 --x1 75
+   ```
+   ```bash
+   export RAIL3D_GEOMETRY=geometries/F1.json
+   ```
+   ```bash
+   python geometry.py --show && python run_stage.py --stage prelim --fresh --with-baseline --bundle
+   ```
+
+   F1's plane is 1.77× today's, so expect roughly 1.5–1.8× today's generation time.
+   `unset RAIL3D_GEOMETRY` returns to the default.
 3. **The ablation's answer gates step 2.** Until a trained SLM beats the no-MS control on
    today's geometry, the "trained" numbers are not trustworthy on any geometry
    (finding 24).
@@ -133,5 +150,5 @@ cheap:
 - **Defect sizes.** The sweep uses the full operating ranges. Should the small end
   (hairlines, shallow dents) get its own stratum, given that finding 34 says rail3D is
   least trustworthy exactly there?
-- **The geometry override** (§3.2): OK to build it next? It is the only blocker between
-  the sweep and trained finalists.
+- **Which candidates go into the calibration set** once the sweep is back: my default is
+  today's setup, F1, the top 2 floors and one mid-rank.

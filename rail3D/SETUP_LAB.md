@@ -739,6 +739,25 @@ it reports the floor (no metasurface, 8 detectors), the ceiling (ideal matched f
 all-dense detectors and the design study's field margin. Expect ~1.5–3 h. Send back
 `sweep_eval.json`, `progress.txt`, `sweep_01…04.png` and both logs.
 
+**Training a candidate geometry (the calibration set, NEXT_PHASE §2).** `RAIL3D_GEOMETRY`
+points the WHOLE pipeline at another geometry for the shell it is set in. Every entry point
+prints `[rail3d] GEOMETRY OVERRIDE …` while it is set, and its roots auto-suffix.
+
+```bash
+export RAIL3D_GEOMETRY=geometries/F1.json
+```
+```bash
+python geometry.py --show && python preflight.py
+```
+```bash
+python run_stage.py --stage prelim --fresh --with-baseline --bundle 2>&1 | tee ../prelim_F1.log
+```
+
+PowerShell: `$env:RAIL3D_GEOMETRY = "geometries/F1.json"`. cmd: `set RAIL3D_GEOMETRY=geometries/F1.json`.
+Make other candidates with `python geometry.py --name <n> --theta … --H … --x0 … --x1 …`, from
+`sweep_eval.json`'s `theta`, `H`, `x0` and `x1`. **Unset it before any default-geometry run**,
+the ablation included: `unset RAIL3D_GEOMETRY`.
+
 `python setup_sweep.py --self-test --profile lab` (~1 min on the 5090) re-checks that
 every stored exact signal equals defect − same-pose intact, and that every type renders
 at full depth at s = 110 and 170.
