@@ -1,6 +1,6 @@
 # Next phase: the F1 setup sweep, data-centric ML, and the story for the slides
 
-*Last updated: 2026-11-05 (results by day in data/generated/<date>/; detection only: `train_detect.py`, sweep detection figures, a 1-hour sweep slice first; ablation: every SLM loses; SLM on hold, detector-only focus; geometry override built; the ceiling is too loose to prune) · 2026-11-04. Decisions so far (user, 2026-11-04): go with F1 (one horn, one
+*Last updated: 2026-11-05 (F2 refined sweep: θ 40–55 × H 125–200, plane out to the horn's beam limit, §1 D; results by day in data/generated/<date>/; detection only: `train_detect.py`, sweep detection figures, a 1-hour sweep slice first; ablation: every SLM loses; SLM on hold, detector-only focus; geometry override built; the ceiling is too loose to prune) · 2026-11-04. Decisions so far (user, 2026-11-04): go with F1 (one horn, one
 wider metasurface); sweep the setup dials on a controlled grid (6 types × 7 positions ×
 ~100, plus ~600 intact); keep finding 31's horn rule; overnight budget; score with field
 level + a fast classifier where that is provably enough, full training otherwise.*
@@ -71,6 +71,50 @@ Then `sweep_eval.py` again on the full set. Send back the day folder: it holds
 detection comparison is `sweep_05_detection.png` (every setup: AUC, recall and accuracy
 at 5% false alarms, barcode distance), `sweep_06_detection_dials.png` (far edge,
 θ × H) and `sweep_07_detection_cells.png` (type × position, today vs the best setup).
+
+**D. The refined sweep, F2 (2026-11-05, an 8-hour GPU window).** The F1 slice
+(θ 45/55/65 at H 150, 88% of rails) ranked 45° > 55° > 65°. Its best setup was θ 45° with
+the plane at x −135..75 (AUC 0.891 → 0.949, untrained, 8 detectors). That setup won the crown
+side but lost the gauge face: s 170 shells went from 18% to 6%. The gauge face (s 160–170)
+sends its light toward +x, past F1's fixed +80 mm edge. F2 changes two things:
+
+- **θ in 5° steps around the winner, and H 125–200**: θ 40, 45, 50, 55 × H 125, 150, 175,
+  200 = 16 placements. 65° is dropped (worst at every width). H 100 is dropped because the
+  horn's beam leaves no room on the horn side (next point).
+- **The plane reaches toward the horn up to its beam limit** (`--x-hi auto`,
+  `setup_sweep.near_edge_limit`). The horn's lowest edge is level with the plane, so its
+  beam comes down onto the plane on the horn side. A metasurface there would shadow the
+  rail, and the solve cannot show it (`upward_only`). The limit is where a ray 20° off
+  the horn axis (its H-plane null), leaving the aperture's upper edge, reaches the plane:
+
+  | H \ θ | 40° | 45° | 50° | 55° |
+  |---|---|---|---|---|
+  | 100 | +55 | +64 | +72 | +77 |
+  | 125 | +76 | +89 | +102 | +113 |
+  | 150 | +97 | +114 | +132 | +149 |
+  | 175 | +118 | +139 | +162 | +184 |
+  | 200 | +139 | +164 | +191 | +220 |
+
+  Every F1 crop sits inside it. 45° has less room on the horn side than 55°, so the
+  45° advantage may shrink once each angle gets its full plane: that is what F2 tests.
+  `sweep_eval` adds "extend_near" crops (each far edge, near edge at the limit), and
+  `sweep_06` gains a panel D: the AUC gain from the wider near edge per θ × H.
+
+At F1's measured rate (~0.40 s per rail on a 135-pixel-wide plane), all 16 placements in
+full would take ~9 h. A 6-hour budget gives each placement the same balanced ~65–70%
+(~3,200 rails), and F1's learning curve was flat past 50%. `sweep_eval` then takes
+~1–1.5 h (F1: 15 min for 3 placements). F2 is a new root because its planes differ;
+F1 stays as it is.
+
+```bash
+python -u setup_sweep.py --timing 20 --profile lab --name F2 --x-hi auto --thetas 40 45 50 55 --heights 125 150 175 200
+```
+```bash
+python -u setup_sweep.py --profile lab --name F2 --x-hi auto --thetas 40 45 50 55 --heights 125 150 175 200 --budget-hours 6 2>&1 | tee data/generated/$RAIL3D_DAY/setup_sweep_F2.log
+```
+```bash
+python -u sweep_eval.py --profile lab --root data/generated/setup_sweep/F2_f5be4bbb 2>&1 | tee data/generated/$RAIL3D_DAY/sweep_eval_F2.log
+```
 
 ## 2. What the sweep measures
 

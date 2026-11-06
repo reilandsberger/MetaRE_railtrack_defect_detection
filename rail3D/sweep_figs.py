@@ -305,7 +305,8 @@ def fig_detection_dials(res, root):
     cs = res["configs"]
     thetas = sorted({c["theta"] for c in cs})
     Hs = sorted({c["H"] for c in cs})
-    fig, axs = plt.subplots(1, 3, figsize=(18, 5.2), constrained_layout=True)
+    near = any(c["family"] == "extend_near" for c in cs)
+    fig, axs = plt.subplots(1, 4 if near else 3, figsize=(24 if near else 18, 5.2), constrained_layout=True)
     ax = axs[0]
     cols = dict(zip(thetas, plt.cm.viridis(np.linspace(0.1, 0.85, len(thetas)))))
     ls = dict(zip(Hs, ["-", "--", ":", "-."][:len(Hs)]))
@@ -346,6 +347,31 @@ def fig_detection_dials(res, root):
         ax.set_xlabel("horn angle θ")
         ax.set_ylabel("metasurface-plane height H (mm)")
         ax.set_title(f"{lab}. Best crop per placement: AUC, {DET_STYLE[s][2]}")
+        fig.colorbar(im, ax=ax, fraction=0.05)
+    if near:
+        # D: what widening toward the horn (to its beam limit) adds over the +75 mm near edge
+        ax = axs[3]
+        G = np.full((len(Hs), len(thetas)), np.nan)
+        xh = {}
+        for i, h in enumerate(Hs):
+            for j, th in enumerate(thetas):
+                a = [c["detect"][PRIMARY]["auc"] for c in cs if c["theta"] == th and c["H"] == h
+                     and c["family"] in ("extend", "today")]
+                b = [c for c in cs if c["theta"] == th and c["H"] == h and c["family"] == "extend_near"]
+                if a and b:
+                    G[i, j] = max(c["detect"][PRIMARY]["auc"] for c in b) - max(a)
+                    xh[i, j] = b[0]["x1"]
+        v = np.nanmax(np.abs(G)) if np.isfinite(G).any() else 0.05
+        im = ax.imshow(G, origin="lower", cmap="RdBu", vmin=-max(v, 0.01), vmax=max(v, 0.01), aspect="auto")
+        for (i, j), x1 in xh.items():
+            ax.text(j, i, f"{G[i, j]:+.3f}\nto x {x1:.0f}", ha="center", va="center", fontsize=9,
+                    color="w" if abs(G[i, j]) > 0.6 * max(v, 0.01) else "k")
+        ax.set_xticks(range(len(thetas)), [f"{t:g}°" for t in thetas])
+        ax.set_yticks(range(len(Hs)), [f"{h:g}" for h in Hs])
+        ax.set_xlabel("horn angle θ")
+        ax.set_ylabel("metasurface-plane height H (mm)")
+        ax.set_title("D. AUC gain: near edge out to the horn's beam limit\n(vs the best crop with "
+                     "its near edge at +75; total barcode difference)", fontsize=10)
         fig.colorbar(im, ax=ax, fraction=0.05)
     fig.suptitle("The dials, scored by detection only", fontsize=13, fontweight="bold")
     _save(fig, root, "sweep_06_detection_dials.png")

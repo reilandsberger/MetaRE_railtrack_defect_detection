@@ -124,6 +124,9 @@ def crops(pl: dict, x: np.ndarray) -> list[dict]:
     add(-75.0, 75.0, "today")
     for f in FAR_FRACTIONS:
         add(f * xg, NEAR_EDGE, "extend")
+    if hi > NEAR_EDGE + 2 * config.DX:      # a plane solved past +75 (setup_sweep --x-hi auto):
+        for f in FAR_FRACTIONS:             # the same far edges, near edge at the horn's beam limit
+            add(f * xg, hi, "extend_near")
     for w in SLIDE_WIDTHS:
         c = NEAR_EDGE - w / 2
         while c - w / 2 >= min(1.1 * xg, lo):

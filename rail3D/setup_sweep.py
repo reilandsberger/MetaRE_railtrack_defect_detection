@@ -15,6 +15,12 @@ DIALS
     metasurface width     (150 mm today, 265 mm for F1, or any other)
   The solved plane per placement runs from x = +80 (horn side) out past the crown's
   mirror point -H tan(theta), so every crop up to and including bright field exists.
+    --x-hi      the horn-side edge (default 80; changing it needs a new --name). 'auto'
+                solves out to the horn's beam limit per placement (near_edge_limit: where a
+                ray 20 deg off the horn axis, its H-plane null, from the aperture's upper
+                edge comes down to the plane). The gauge face (s 160-170) sends its light
+                that way, and sweep_eval adds "extend_near" crops out to it. At H 100 the
+                limit is +55..77 for theta 40-55: today's +75 edge barely fits.
     --y-half    the plane's half-extent along the rail (37.5 = today's 75 mm)
 
 THE DEFECT SET (a controlled grid: README finding 25 made position the dominant variable)
@@ -75,7 +81,8 @@ OBLIQUE_DEG = (20.0, 70.0)
 CROWN_TILT_DEG = 20.0                       # wear below this tilt is crown wear
 WEAR_MAX_ANGLE = max(config.WEAR_GAUGE_ANGLE_RANGE)
 WEAR_CROWN_DEPTH = (0.5, 4.0)
-X_HI = 80.0                                 # plane edge on the horn side (mm)
+X_HI = 80.0                                 # plane edge on the horn side (mm); --x-hi auto: the beam limit
+BEAM_CLEAR_DEG = 20.0                       # H-A75-W20 H-plane first null: asin(1.5 lambda / A) = 19 deg
 SHARD = 100
 OUT = config.GENERATED_DIR / "setup_sweep"
 
@@ -83,18 +90,48 @@ OUT = config.GENERATED_DIR / "setup_sweep"
 # ---------------------------------------------------------------------------
 # placements
 # ---------------------------------------------------------------------------
-def placement(theta: float, h: float, y_half: float) -> dict:
+def near_edge_limit(theta: float, h: float, clear_deg: float = BEAM_CLEAR_DEG) -> float:
+    """The largest horn-side plane x that stays out of the horn's beam (2026-11-05).
+
+    The horn's lowest edge is level with the plane (finding 31), so its beam leaves the
+    aperture just above the plane and comes down onto it on the horn side. A ray
+    clear_deg off the axis (the H-plane first null; A spans the plane of incidence)
+    from the aperture's UPPER edge lands at the returned x; a metasurface beyond it
+    would sit in the beam and shadow the rail's illumination. upward_only keeps that
+    light out of the solve, so nothing in the fields would show the clash."""
+    th, a = math.radians(theta), config.SIZE_ANT[0] / 2 + config.HORN_WALL
+    ang = th + math.radians(clear_deg)
+    if ang >= math.pi / 2:
+        return float("-inf")
+    x_up = cs.dist_ant(theta, h) * math.sin(th) - a * math.cos(th)
+    return x_up - 2 * a * math.sin(th) * math.tan(ang)
+
+
+def placement(theta: float, h: float, y_half: float, x_hi=X_HI) -> dict:
     xg = -h * math.tan(math.radians(theta))                  # the crown's mirror point
     x_lo = math.floor(min(1.15 * xg - 10.0, -200.0) / config.DX) * config.DX
+    lim = near_edge_limit(theta, h)
+    if x_hi == "auto":
+        x_hi = math.floor(lim / config.DX) * config.DX
+    x_hi = float(x_hi)
     return {"name": f"t{theta:g}_H{h:g}", "theta": theta, "H": h, "D": cs.dist_ant(theta, h),
-            "x_glint": xg, "x_lo": x_lo, "x_hi": X_HI, "y_half": y_half,
-            "nx": int(round((X_HI - x_lo) / config.DX)), "ny": int(round(2 * y_half / config.DX))}
+            "x_glint": xg, "x_lo": x_lo, "x_hi": x_hi, "y_half": y_half,
+            "nx": int(round((x_hi - x_lo) / config.DX)), "ny": int(round(2 * y_half / config.DX)),
+            "x_beam": lim}
 
 
-def placements(thetas, heights, y_half) -> list[dict]:
+PLACEMENT_KEYS = ("theta", "H", "x_lo", "x_hi", "y_half", "nx", "ny")   # what makes shards comparable
+
+
+def placements(thetas, heights, y_half, x_hi=X_HI) -> list[dict]:
     """Today's setup first, then by distance from it (a cut-short night keeps the
     placements nearest the reference)."""
-    out = [placement(t, h, y_half) for t in thetas for h in heights]
+    out = [placement(t, h, y_half, x_hi) for t in thetas for h in heights]
+    for p in out:
+        if p["x_hi"] > p["x_beam"]:
+            print(f"[sweep] WARNING {p['name']}: plane edge x {p['x_hi']:g} is past the horn's beam "
+                  f"limit x {p['x_beam']:.0f} (a metasurface there would shadow the rail); crops "
+                  f"past it are unphysical (--x-hi auto stops at the limit)")
     return sorted(out, key=lambda p: (abs(p["theta"] - 55) / 10 + abs(p["H"] - 150) / 50,
                                       p["theta"], p["H"]))
 
@@ -307,14 +344,15 @@ def open_root(root: Path, plan: dict, pls: list[dict]) -> None:
     else:
         pf.write_text(json.dumps(plan))
     meta = {"geometry": data3d.geometry_tag(), "commit": data3d._git_commit(),
-            "scene": {"seg": cs.SEG, "taper": cs.TAPER, "x_hi": X_HI},
+            "scene": {"seg": cs.SEG, "taper": cs.TAPER, "x_hi": sorted({p["x_hi"] for p in pls})},
             "placements": pls, "created": time.strftime("%Y-%m-%d %H:%M")}
     mf = root / "sweep.json"
     if mf.exists():
         was = json.loads(mf.read_text())
         known = {p["name"]: p for p in was["placements"]}
+        core = lambda p: {k: p.get(k) for k in PLACEMENT_KEYS}           # noqa: E731
         for p in pls:
-            if p["name"] in known and known[p["name"]] != p:
+            if p["name"] in known and core(known[p["name"]]) != core(p):
                 raise SystemExit(f"placement {p['name']} changed since this root was started")
         meta["placements"] = list({**known, **{p["name"]: p for p in pls}}.values())
         meta["created"] = was["created"]
@@ -347,7 +385,7 @@ def run(args) -> int:
     device = config.get_device(args.profile)
     chunk = config.PROFILES[args.profile].chunk_faces
     plan = make_plan(args.n_per_cell, args.n_intact, args.s_jitter, args.types, args.positions)
-    pls = placements(args.thetas, args.heights, args.y_half)
+    pls = placements(args.thetas, args.heights, args.y_half, args.x_hi)
     root = run_root(args.name, plan)
     open_root(root, plan, pls)
     section = sections.load_reference_section()
@@ -361,7 +399,7 @@ def run(args) -> int:
     for p in pls:
         print(f"  {p['name']:10s} theta {p['theta']:g} H {p['H']:g} D {p['D']:.1f} mm, "
               f"crown glint x {p['x_glint']:.0f}, plane x {p['x_lo']:.0f}..{p['x_hi']:.0f} "
-              f"({p['nx']}x{p['ny']})")
+              f"({p['nx']}x{p['ny']}), horn beam reaches the plane at x {p['x_beam']:.0f}")
     faces = [None, None]
     for k, specs in enumerate(shards):
         for p in pls:
@@ -448,7 +486,7 @@ def timing(args) -> int:
     n_fine = mesh3d.default_arc_count(section, config.MESH_DS)
     n_coarse = mesh3d.default_arc_count(section, config.OCCLUDER_DS)
     plan = make_plan(args.n_per_cell, args.n_intact, args.s_jitter, args.types, args.positions)
-    pls = placements(args.thetas, args.heights, args.y_half)
+    pls = placements(args.thetas, args.heights, args.y_half, args.x_hi)
     specs = plan["samples"][:args.timing]
     tmp = OUT / "_timing"
     tmp.mkdir(parents=True, exist_ok=True)
@@ -472,6 +510,9 @@ def main() -> int:
     ap.add_argument("--thetas", type=float, nargs="+", default=[45.0, 55.0, 65.0])
     ap.add_argument("--heights", type=float, nargs="+", default=[100.0, 150.0, 200.0])
     ap.add_argument("--y-half", type=float, default=37.5)
+    ap.add_argument("--x-hi", default=X_HI, type=lambda v: v if v == "auto" else float(v),
+                    help="plane edge on the horn side (mm), or 'auto' = the horn's beam limit per "
+                         "placement (near_edge_limit); a new value needs a new --name")
     ap.add_argument("--types", nargs="+", default=list(TYPES), choices=TYPES)
     ap.add_argument("--positions", type=float, nargs="+", default=list(POSITIONS))
     ap.add_argument("--n-per-cell", type=int, default=100)
