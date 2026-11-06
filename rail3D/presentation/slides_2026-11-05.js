@@ -370,9 +370,9 @@ const AX = { catAxisLabelColor: INK, valAxisLabelColor: INK, catAxisLabelFontSiz
 {
   const s = pres.addSlide();
   header(s, "SETUP SWEEP RESULTS", "A 45° horn and a wider plane: AUC 0.89 → 0.95");
-  const ih = 4.6, iw = ih * (3096 / 1483);
-  s.addImage({ path: SWEEP + "/sweep_05_detection.png", x: M, y: 1.4, w: iw, h: ih,
-    altText: "Every setup ranked by detection AUC, recall and accuracy at 5% false alarms, barcode distance" });
+  const ih = 4.6, iw = ih * (2880 / 1380);
+  s.addImage({ path: SWEEP + "/sweep_05b_detection_slide.png", x: M, y: 1.4, w: iw, h: ih,
+    altText: "Top ten setups and today ranked by detection AUC, recall at 5% false alarms and barcode distance" });
   const sx = M + iw + 0.3, sw = W - M - sx;
   stat(s, sx, 1.35, sw, "0.89 → 0.95", "detection AUC, total barcode difference: today → best", ACC, 28);
   stat(s, sx, 2.95, sw, "74% → 86%", "defects caught at 5% false alarms", GOOD, 28);

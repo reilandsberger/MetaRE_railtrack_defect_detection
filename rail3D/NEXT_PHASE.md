@@ -1,6 +1,6 @@
 # Next phase: the F1 setup sweep, data-centric ML, and the story for the slides
 
-*Last updated: 2026-11-05 (F2 refined sweep: θ 40–55 × H 125–200, plane out to the horn's beam limit, §1 D; results by day in data/generated/<date>/; detection only: `train_detect.py`, sweep detection figures, a 1-hour sweep slice first; ablation: every SLM loses; SLM on hold, detector-only focus; geometry override built; the ceiling is too loose to prune) · 2026-11-04. Decisions so far (user, 2026-11-04): go with F1 (one horn, one
+*Last updated: 2026-11-06 (sweep_05b slide-size figure) · 2026-11-05 (F2 refined sweep: θ 40–55 × H 125–200, plane out to the horn's beam limit, §1 D; results by day in data/generated/<date>/; detection only: `train_detect.py`, sweep detection figures, a 1-hour sweep slice first; ablation: every SLM loses; SLM on hold, detector-only focus; geometry override built; the ceiling is too loose to prune) · 2026-11-04. Decisions so far (user, 2026-11-04): go with F1 (one horn, one
 wider metasurface); sweep the setup dials on a controlled grid (6 types × 7 positions ×
 ~100, plus ~600 intact); keep finding 31's horn rule; overnight budget; score with field
 level + a fast classifier where that is provably enough, full training otherwise.*
@@ -67,9 +67,9 @@ python -u setup_sweep.py --profile lab --budget-hours 8 2>&1 | tee -a data/gener
 ```
 
 Then `sweep_eval.py` again on the full set. Send back the day folder: it holds
-`sweep_F1_*/` (sweep_eval.json, progress.txt, the seven `sweep_0*.png`) and the logs. The fields (~0.3 GB per placement) stay on the lab. The
+`sweep_F1_*/` (sweep_eval.json, progress.txt, the `sweep_0*.png` figures) and the logs. The fields (~0.3 GB per placement) stay on the lab. The
 detection comparison is `sweep_05_detection.png` (every setup: AUC, recall and accuracy
-at 5% false alarms, barcode distance), `sweep_06_detection_dials.png` (far edge,
+at 5% false alarms, barcode distance; `sweep_05b_detection_slide.png` is the same at slide size), `sweep_06_detection_dials.png` (far edge,
 θ × H) and `sweep_07_detection_cells.png` (type × position, today vs the best setup).
 
 **D. The refined sweep, F2 (2026-11-05, an 8-hour GPU window).** The F1 slice

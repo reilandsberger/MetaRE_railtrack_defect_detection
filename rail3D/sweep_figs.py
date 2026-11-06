@@ -8,6 +8,7 @@
   detection only (defect vs intact, no classification; the 2026-11-05 focus):
     sweep_05_detection.png   setups ranked: AUC, recall and accuracy at 5% false alarms for
                              each detection score, and the average barcode distance
+    sweep_05b_detection_slide.png  the same for a slide: top 10 + today, A/B/D, 300 dpi
     sweep_06_detection_dials.png   far edge and theta x H, scored by detection AUC
     sweep_07_detection_cells.png   type x position: today vs the best setup, two scores
 
@@ -31,9 +32,9 @@ def _name(c):
     return f"θ{c['theta']:g} H{c['H']:g} | {c['label']}"
 
 
-def _save(fig, root: Path, name: str):
+def _save(fig, root: Path, name: str, dpi: int = 140, tight: bool = True):
     p = root / name
-    fig.savefig(p, dpi=140, bbox_inches="tight")
+    fig.savefig(p, dpi=dpi, bbox_inches="tight" if tight else None)
     plt.close(fig)
     print(f"wrote {p}")
 
@@ -297,7 +298,69 @@ def fig_detection(res, root):
                  f"(sorted by {DET_STYLE[PRIMARY][2]} AUC; purple = today; ☀ = crown glint inside; "
                  f"n = {rows[0]['n_samples'] - rows[0]['n_intact']} defects / {rows[0]['n_intact']} intact)",
                  fontsize=12, fontweight="bold")
-    _save(fig, root, "sweep_05_detection.png")
+    _save(fig, root, "sweep_05_detection.png", dpi=250)
+
+
+SLIDE_LABEL = {"cos8": "total difference, 8 det.", "maxz8": "out-of-bounds, 8 det.",
+               "cosall": "total difference, all 130", "maxzall": "out-of-bounds, all 130",
+               "logreg8": "trained linear, 8 det."}
+
+
+def fig_detection_slide(res, root, top: int = 10, size=(9.6, 4.6), dpi: int = 300):
+    """sweep_05 for a slide: the top setups + today, panels A, B and D, slide-size type.
+    Drawn at its exact placed size (no tight bbox), so the aspect ratio is `size`."""
+    rows = _det_rows(res, top)
+    n, fpr = len(rows), 100 * res["fpr"]
+    fig = plt.figure(figsize=size)
+    gs = fig.add_gridspec(1, 3, left=0.215, right=0.985, bottom=0.075, top=0.765, wspace=0.08,
+                          width_ratios=(1, 1, 1.05))
+    axs = [fig.add_subplot(gs[0])]
+    axs += [fig.add_subplot(gs[k], sharey=axs[0]) for k in (1, 2)]
+    yy = np.arange(n)
+    for ax, (key, title, lim) in zip(axs, (("auc", "A. AUC", (0.6, 1.0)),
+                                           ("recall", f"B. Caught at {fpr:.0f}% false alarms", (0.3, 1.0)))):
+        for s_, (col, mk, _) in DET_STYLE.items():
+            ax.scatter([c["detect"][s_][key] for c in rows], yy, color=col, marker=mk,
+                       s=42 if s_ == PRIMARY else 26, zorder=3 if s_ == PRIMARY else 2,
+                       edgecolor="k" if s_ == PRIMARY else "none", linewidth=0.6, label=SLIDE_LABEL[s_])
+        ax.set_xlim(lim[0] - 0.01, lim[1] + 0.01)
+        ax.set_title(title, loc="left", fontsize=9.5)
+        ax.grid(alpha=0.3, axis="x")
+        ax.tick_params(labelsize=8)
+    lab = [f"θ{c['theta']:g} H{c['H']:g}   x {c['x0']:.0f} … {c['x1']:+.0f}"
+           + ("  today" if _is_today(c) else "") + ("  ☀" if c["bright"] else "") for c in rows]
+    axs[0].set_yticks(yy, lab, fontsize=8)
+    axs[0].invert_yaxis()
+    _label_today(axs[0], rows)
+    for ax in axs[1:]:
+        ax.tick_params(labelleft=False)
+    ax = axs[2]
+    dm = np.array([c["detect"]["distance"]["defect_median"] for c in rows])
+    ip = np.array([c["detect"]["distance"]["intact_p95"] for c in rows])
+    im = np.array([c["detect"]["distance"]["intact_mean"] for c in rows])
+    ax.barh(yy - 0.19, dm, 0.38, color=DET_STYLE[PRIMARY][0], label="defects: median")
+    ax.barh(yy + 0.19, ip, 0.38, color="0.65", label=f"intact: {100 - fpr:.0f}th pct (alarm line)")
+    ax.scatter(im, yy + 0.19, marker="|", color="k", s=30, label="intact: mean", zorder=3)
+    for k in range(n):
+        ax.text(max(dm[k], ip[k]) * 1.12, yy[k], f"×{dm[k] / ip[k]:.1f}", va="center", fontsize=7.5)
+    ax.set_xscale("log")
+    ax.set_xlim(right=max(dm.max(), ip.max()) * 3)
+    ax.set_title("C. Barcode distance (8 det.)\n× = defect median ÷ alarm line", loc="left", fontsize=9.5)
+    ax.grid(alpha=0.3, axis="x")
+    ax.tick_params(labelsize=8)
+    h, l = axs[0].get_legend_handles_labels()
+    fig.legend(h, l, loc="upper left", bbox_to_anchor=(0.215, 0.985), ncol=3, fontsize=8,
+               frameon=False, columnspacing=1.0, handletextpad=0.3,
+               title="A, B:  circle = total barcode difference,  diamond = few-detector out-of-bounds",
+               title_fontsize=8, alignment="left")
+    h, l = ax.get_legend_handles_labels()
+    fig.legend(h, l, loc="upper right", bbox_to_anchor=(0.995, 0.985), ncol=1, fontsize=8,
+               frameon=False, handletextpad=0.4, labelspacing=0.3, title="C:", title_fontsize=8,
+               alignment="left")
+    fig.text(0.005, 0.985, f"top {top} setups + today\nsorted by dark-green AUC\n"
+             f"☀ = crown glint in the plane\n{rows[0]['n_samples'] - rows[0]['n_intact']} defects / "
+             f"{rows[0]['n_intact']} intact", va="top", fontsize=7.5, color="0.3")
+    _save(fig, root, "sweep_05b_detection_slide.png", dpi=dpi, tight=False)
 
 
 def fig_detection_dials(res, root):
@@ -417,6 +480,7 @@ def all_figures(res, root: Path):
     fig_data(res, root)
     if res["configs"] and "detect" in res["configs"][0]:
         fig_detection(res, root)
+        fig_detection_slide(res, root)
         fig_detection_dials(res, root)
         fig_detection_cells(res, root)
 
