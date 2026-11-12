@@ -82,6 +82,7 @@ CROWN_TILT_DEG = 20.0                       # wear below this tilt is crown wear
 WEAR_MAX_ANGLE = max(config.WEAR_GAUGE_ANGLE_RANGE)
 WEAR_CROWN_DEPTH = (0.5, 4.0)
 X_HI = 80.0                                 # plane edge on the horn side (mm); --x-hi auto: the beam limit
+WARMUP = 3                                  # --timing: untimed first samples (one-off setup)
 BEAM_CLEAR_DEG = 20.0                       # H-A75-W20 H-plane first null: asin(1.5 lambda / A) = 19 deg
 SHARD = 100
 OUT = config.GENERATED_DIR / "setup_sweep"
@@ -359,7 +360,8 @@ def open_root(root: Path, plan: dict, pls: list[dict]) -> None:
     mf.write_text(json.dumps(meta, indent=1))
 
 
-def solve_shard(pl, specs, path: Path, section, n_fine, n_coarse, device, chunk, faces) -> float:
+def solve_shard(pl, specs, path: Path, section, n_fine, n_coarse, device, chunk, faces,
+                times: list | None = None) -> float:
     x, y = plane_axes(pl)
     Xn, Yn = np.meshgrid(x, y, indexing="ij")
     X = torch.tensor(Xn, dtype=torch.float32, device=device)[None]
@@ -367,6 +369,7 @@ def solve_shard(pl, specs, path: Path, section, n_fine, n_coarse, device, chunk,
     psis, deltas, metas = [], [], []
     t0 = time.time()
     for spec in specs:
+        ts = time.time()
         p, aug, meta = draw(spec, section, n_fine)
         v, f, v0, moved, vo, fo = meshes(p, aug, section, n_fine, n_coarse, faces)
         psi, dl = fields(v, f, v0, moved, vo, fo, pl, X, Y, device, chunk)
@@ -374,6 +377,8 @@ def solve_shard(pl, specs, path: Path, section, n_fine, n_coarse, device, chunk,
         psis.append(psi.cpu().numpy().astype(np.complex64))
         deltas.append(dl.cpu().numpy().astype(np.complex64))
         metas.append(meta)
+        if times is not None:
+            times.append(time.time() - ts)          # .cpu() above has synchronised the GPU
     tmp = path.with_suffix(".tmp.npz")
     np.savez(tmp, psi=np.stack(psis), delta=np.stack(deltas),
              meta=json.dumps(metas, default=float), x=x, y=y)
@@ -487,14 +492,22 @@ def timing(args) -> int:
     n_coarse = mesh3d.default_arc_count(section, config.OCCLUDER_DS)
     plan = make_plan(args.n_per_cell, args.n_intact, args.s_jitter, args.types, args.positions)
     pls = placements(args.thetas, args.heights, args.y_half, args.x_hi)
-    specs = plan["samples"][:args.timing]
+    specs = plan["samples"][:WARMUP + args.timing]
     tmp = OUT / "_timing"
     tmp.mkdir(parents=True, exist_ok=True)
     ref = pls[0]
-    r = solve_shard(ref, specs, tmp / "t.npz", section, n_fine, n_coarse, device, chunk, [None, None])
+    t = []
+    solve_shard(ref, specs, tmp / "t.npz", section, n_fine, n_coarse, device, chunk, [None, None], t)
+    # the first samples carry one-off costs (CUDA kernel loading, FFT plans, allocator growth,
+    # the shared face lists) that a 100-sample shard amortises; time the steady state only
+    warm, t = t[:WARMUP], np.array(t[WARMUP:])
+    r = float(np.median(t))
     pts = ref["nx"] * ref["ny"]
     tot = 0.0
-    print(f"[timing] {ref['name']}: {r:.2f} s/sample on {device} ({ref['nx']}x{ref['ny']} plane)")
+    print(f"[timing] {ref['name']} on {device} ({ref['nx']}x{ref['ny']} plane): warm-up samples "
+          + " ".join(f"{w:.2f}" for w in warm) + f" s; then {len(t)} samples median {r:.2f} s "
+          f"(mean {t.mean():.2f}, min {t.min():.2f}, max {t.max():.2f}; "
+          f"first half {np.median(t[:len(t) // 2]):.2f}, second half {np.median(t[len(t) // 2:]):.2f})")
     for p in pls:
         # psi1 cost scales with plane points; the meshes and ray cast do not
         est = r * (0.35 + 0.65 * p["nx"] * p["ny"] / pts) * len(plan["samples"]) / 3600

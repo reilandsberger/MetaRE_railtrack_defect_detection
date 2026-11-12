@@ -1,6 +1,6 @@
 # Next phase: the F1 setup sweep, data-centric ML, and the story for the slides
 
-*Last updated: 2026-11-06 (sweep_05b slide-size figure) · 2026-11-05 (F2 refined sweep: θ 40–55 × H 125–200, plane out to the horn's beam limit, §1 D; results by day in data/generated/<date>/; detection only: `train_detect.py`, sweep detection figures, a 1-hour sweep slice first; ablation: every SLM loses; SLM on hold, detector-only focus; geometry override built; the ceiling is too loose to prune) · 2026-11-04. Decisions so far (user, 2026-11-04): go with F1 (one horn, one
+*Last updated: 2026-11-12 (`--timing` skips warm-up samples, median) · 2026-11-06 (sweep_05b slide-size figure) · 2026-11-05 (F2 refined sweep: θ 40–55 × H 125–200, plane out to the horn's beam limit, §1 D; results by day in data/generated/<date>/; detection only: `train_detect.py`, sweep detection figures, a 1-hour sweep slice first; ablation: every SLM loses; SLM on hold, detector-only focus; geometry override built; the ceiling is too loose to prune) · 2026-11-04. Decisions so far (user, 2026-11-04): go with F1 (one horn, one
 wider metasurface); sweep the setup dials on a controlled grid (6 types × 7 positions ×
 ~100, plus ~600 intact); keep finding 31's horn rule; overnight budget; score with field
 level + a fast classifier where that is provably enough, full training otherwise.*
@@ -105,6 +105,13 @@ full would take ~9 h. A 6-hour budget gives each placement the same balanced ~65
 (~3,200 rails), and F1's learning curve was flat past 50%. `sweep_eval` then takes
 ~1–1.5 h (F1: 15 min for 3 placements). F2 is a new root because its planes differ;
 F1 stays as it is.
+
+The timing run (2026-11-12) skips its first 3 samples and reports the median. Before that
+it averaged 20 samples including the first, whose one-off setup (kernel loading, FFT plans,
+memory pool, shared face lists; ~9 s extra on the laptop) inflated the lab estimate to
+1.13 s/sample, ~22.7 h, against F1's sustained 0.41 s/rail (12,700 rails in 1.5 h, from
+its plan.json → progress.txt times). The run itself times 100-sample shards and is
+breadth-first, so a wrong estimate only changes how far every placement gets, not the balance.
 
 ```bash
 python -u setup_sweep.py --timing 20 --profile lab --name F2 --x-hi auto --thetas 40 45 50 55 --heights 125 150 175 200
