@@ -1,6 +1,6 @@
 # CLAUDE.md — MetaRE railtrack defect detection
 
-*Last updated: 2026-11-05 (detection-only focus: train_detect.py, sweep detection figures) · 2026-11-05 (lab: all gates pass at 689da5, prelim trained, SLM on hold) · 2026-11-05 (F1 sweep, NEXT_PHASE.md) · 2026-11-02 (rail targets, finding 34) · 2026-10-29 (design study) · 2026-10-26 · λ = 5 mm (60 GHz) · horn = physical RFspin H-A75-W20
+*Last updated: 2026-11-12 (F2 sweep returned: θ45 H175 x −158..75 best; `horn_scan_plan.py`) · 2026-11-05 (detection-only focus: train_detect.py, sweep detection figures) · 2026-11-05 (lab: all gates pass at 689da5, prelim trained, SLM on hold) · 2026-11-05 (F1 sweep, NEXT_PHASE.md) · 2026-11-02 (rail targets, finding 34) · 2026-10-29 (design study) · 2026-10-26 · λ = 5 mm (60 GHz) · horn = physical RFspin H-A75-W20
 (README finding 29, 2026-09-24), moved out to 278.5 mm with its lowest edge level
 with the metasurface, metasurface input upward-only (finding 31, 2026-10-02);
 Import source verified at three planes by rungs −1/0 (finding 32) ·
@@ -569,6 +569,8 @@ plane), `inspect_dataset.py` (review a dataset), `analyze_results.py` (where it
 succeeds and fails, per defect parameter), `sweep_detectors.py` (final detector
 count / MS→detector distance), `slm_profile.py` (the trained mask: wrapped phase,
 |t| — exactly 1 for the phase-only SLM — incident light, change from init),
+`horn_scan_plan.py` (CPU: where to put a 340 mm scan plane in front of the horn for the beam-validation
+measurement, current horn vs the earlier Eravant 8 mm horn),
 `horn_source.py` (rail3D's horn as a Lumerical Import source: E+H .mat + .lsf;
 `--aperture-from` uses the rung −1 full-wave aperture), `horn_fdtd_case.py`
 (rung −1: the H-A75-W20 as a PEC STL + Mode-source plan + export script),
