@@ -217,7 +217,7 @@ def fig_data(res, root):
         ax.plot(np.array(lc["fracs"]) * 100, lc["L8"], "-o", color=C_FLOOR)
         ax.set_xlabel("% of the training folds used (100% = the full plan)")
         ax.set_ylabel("floor L8 recall")
-        ax.set_title("D. Learning curve, best setup:\nstill climbing at 100% = more data pays")
+        ax.set_title("D. Learning curve, best setup\n(still rising at 100% would mean more data pays)")
         ax.grid(alpha=0.3)
     fig.suptitle(f"Data-centric view of the best setup: {_name(best)}", fontsize=13, fontweight="bold")
     _save(fig, root, "sweep_04_data.png")
