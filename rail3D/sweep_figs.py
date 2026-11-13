@@ -9,6 +9,9 @@
     sweep_05_detection.png   setups ranked: AUC, recall and accuracy at 5% false alarms for
                              each detection score, and the average barcode distance
     sweep_05b_detection_slide.png  the same for a slide: top 10 + today, A/B/D, 300 dpi
+    sweep_05c_design_story.png     condensed: one row group per dial (angle, height, far edge,
+                                   near edge), anchored on the best setup
+    sweep_05d_near_edge.png        near edge at +75 vs at the horn's beam limit, every pair
     sweep_06_detection_dials.png   far edge and theta x H, scored by detection AUC
     sweep_07_detection_cells.png   type x position: today vs the best setup, two scores
 
@@ -363,6 +366,183 @@ def fig_detection_slide(res, root, top: int = 10, size=(9.6, 4.6), dpi: int = 30
     _save(fig, root, "sweep_05b_detection_slide.png", dpi=dpi, tight=False)
 
 
+STORY_RULES = ("cos8", "maxz8")
+
+
+def _story_rows(res):
+    """Rows that isolate one design dial at a time, anchored on the best setup."""
+    C = res["configs"]
+    key = lambda c: c["detect"][PRIMARY]["auc"]                  # noqa: E731
+    best = max(C, key=key)
+    th0, h0, pl0 = best["theta"], best["H"], best["placement"]
+    today = next((c for c in C if _is_today(c)), None)
+    groups = []
+    if today is not None:
+        groups.append(("Today's setup", [today]))
+    rows = [max((c for c in C if c["theta"] == t and c["H"] == h0), key=key)
+            for t in sorted({c["theta"] for c in C}) if any(c["theta"] == t and c["H"] == h0 for c in C)]
+    groups.append((f"1. Horn angle θ\n(H {h0:g} mm, best plane crop each)", rows))
+    rows = [max((c for c in C if c["H"] == h and c["theta"] == th0), key=key)
+            for h in sorted({c["H"] for c in C}) if any(c["H"] == h and c["theta"] == th0 for c in C)]
+    groups.append((f"2. Metasurface height H\n(θ {th0:g}°, best plane crop each)", rows))
+    ext = [c for c in C if c["placement"] == pl0 and c["family"] in ("today", "extend")]
+    ext = sorted(ext, key=lambda c: (-c["x0"], c["family"] != "today"))
+    ext = [c for c in ext if not (c["family"] == "extend" and c["x0"] > -75)]
+    groups.append((f"3. Far edge, crown side\n(θ {th0:g}° H {h0:g}, near edge at +75 mm)", ext))
+    near = {c["x0"]: c for c in C if c["placement"] == pl0 and c["family"] == "extend_near"}
+    pairs = sorted([c for c in C if c["placement"] == pl0 and c["family"] == "extend" and c["x0"] in near],
+                   key=key, reverse=True)[:2]
+    if pairs:
+        rows = []
+        for c in sorted(pairs, key=lambda c: -c["x0"]):
+            rows += [c, near[c["x0"]]]
+        groups.append((f"4. Near edge toward the horn\n(θ {th0:g}° H {h0:g}: +75 mm vs the beam limit)", rows))
+    return groups, best
+
+
+def fig_detection_story(res, root):
+    """sweep_05 condensed: one group of rows per design dial, the best setup as the anchor."""
+    groups, best = _story_rows(res)
+    fpr = 100 * res["fpr"]
+    labels, rows, heads, ys = [], [], [], []
+    y = 0.0
+    for title, rs in groups:
+        heads.append((y + 0.25 * title.count("\n"), title))
+        y += 1.0 + 0.5 * title.count("\n")
+        for c in rs:
+            ys.append(y)
+            rows.append(c)
+            labels.append(f"θ{c['theta']:g}  H{c['H']:g}   x {c['x0']:.0f} … {c['x1']:+.0f}"
+                          + ("  today" if _is_today(c) else "") + ("  ☀" if c["bright"] else "")
+                          + ("  ★" if c is best else ""))
+            y += 1.0
+        y += 0.35
+    ys = np.array(ys)
+    height = 0.34 * y + 2.0
+    fig, axs = plt.subplots(1, 4, figsize=(18, height), sharey=True,
+                            gridspec_kw={"width_ratios": (1, 1, 1, 1.15)})
+    fig.subplots_adjust(left=0.2, right=0.99, top=1 - 1.15 / height, bottom=0.85 / height, wspace=0.06)
+    panels = (("auc", "A. Detection AUC", (0.85, 1.0)),
+              ("recall", f"B. Defects caught at {fpr:.0f}% false alarms", (0.65, 1.0)),
+              ("best_bal_acc", "C. Best balanced accuracy", (0.8, 1.0)))
+    for ax, (k, title, lim) in zip(axs, panels):
+        for s in STORY_RULES:
+            col, mk, lab = DET_STYLE[s]
+            v = np.array([c["detect"][s][k] for c in rows])
+            ax.scatter(v, ys, color=col, marker=mk, s=55 if s == PRIMARY else 45, zorder=3,
+                       edgecolor="k" if s == PRIMARY else "none", linewidth=0.6, label=lab)
+            if s == "maxz8":
+                for yy, vv in zip(ys, v):
+                    ax.text(min(vv, lim[1]) + 0.005, yy, f"{vv:.3f}" if k == "auc" else f"{vv:.2f}",
+                            va="center", fontsize=7.5, color=col)
+        ax.set_xlim(lim[0], lim[1] + 0.04)
+        ax.set_title(title, loc="left", fontsize=11)
+        ax.grid(alpha=0.3, axis="x")
+    ax = axs[3]
+    dm = np.array([c["detect"]["distance"]["defect_median"] for c in rows])
+    ip = np.array([c["detect"]["distance"]["intact_p95"] for c in rows])
+    ax.barh(ys - 0.18, dm, 0.36, color=DET_STYLE[PRIMARY][0], label="defects: median distance")
+    ax.barh(ys + 0.18, ip, 0.36, color="0.65", label=f"intact: {100 - fpr:.0f}th percentile (alarm line)")
+    for k in range(len(rows)):
+        ax.text(max(dm[k], ip[k]) * 1.12, ys[k], f"×{dm[k] / ip[k]:.1f}", va="center", fontsize=8)
+    ax.set_xscale("log")
+    ax.set_xlim(right=max(dm.max(), ip.max()) * 3)
+    ax.set_title("D. Barcode distance (total difference, 8 det.)\n× = defect median ÷ alarm line",
+                 loc="left", fontsize=11)
+    ax.grid(alpha=0.3, axis="x")
+    axs[0].set_yticks(ys, labels, fontsize=9)
+    for t, c in zip(axs[0].get_yticklabels(), rows):
+        if _is_today(c):
+            t.set_color("tab:purple")
+        if c is best:
+            t.set_fontweight("bold")
+    axs[0].set_ylim(y - 0.2, -0.8)
+    for y0, title in heads:
+        n = title.count("\n")
+        for a in axs:
+            a.axhspan(y0 - 0.45 - 0.25 * n, y0 + 0.45 + 0.25 * n, color="0.92", zorder=0)
+        axs[0].text(-0.01, y0, title, transform=axs[0].get_yaxis_transform(), ha="right", va="center",
+                    fontsize=9.5, fontweight="bold", color="0.15", linespacing=1.15)
+    for a in axs[1:]:
+        a.tick_params(labelleft=False)
+    h1, l1 = axs[0].get_legend_handles_labels()
+    h2, l2 = axs[3].get_legend_handles_labels()
+    fig.legend(h1 + h2, l1 + l2, loc="lower center", ncol=4, fontsize=9.5, frameon=False,
+               bbox_to_anchor=(0.6, 0.0))
+    n_def = rows[0]["n_samples"] - rows[0]["n_intact"]
+    fig.suptitle("One design dial at a time: no metasurface, 8 untrained detectors  "
+                 f"(★ best setup; ☀ crown glint inside the plane; {n_def} defects / {rows[0]['n_intact']} "
+                 "intact per row; printed numbers = out-of-bounds rule)", fontsize=12, fontweight="bold")
+    _save(fig, root, "sweep_05c_design_story.png", dpi=250, tight=False)
+
+
+def fig_near_edge(res, root):
+    """Every far edge of every placement solved two ways: near edge at +75 vs at the horn's
+    beam limit. On the diagonal = widening toward the horn changes nothing."""
+    C = res["configs"]
+    near = {(c["placement"], c["x0"]): c for c in C if c["family"] == "extend_near"}
+    pairs = [(c, near[(c["placement"], c["x0"])]) for c in C
+             if c["family"] == "extend" and (c["placement"], c["x0"]) in near]
+    if not pairs:
+        return
+    fig, axs = plt.subplots(1, 3, figsize=(18, 5.8), constrained_layout=True,
+                            gridspec_kw={"width_ratios": (1, 1, 1.5)})
+    th = sorted({c["theta"] for c, _ in pairs})
+    cols = dict(zip(th, plt.cm.viridis(np.linspace(0, 0.85, len(th)))))
+    for ax, (s, k, title) in zip(axs[:2], (("cos8", "auc", "A. AUC, total barcode difference"),
+                                           ("maxz8", "recall", f"B. Caught at {100 * res['fpr']:.0f}% false "
+                                                               "alarms, out-of-bounds"))):
+        a = np.array([p[0]["detect"][s][k] for p in pairs])
+        b = np.array([p[1]["detect"][s][k] for p in pairs])
+        lo, hi = min(a.min(), b.min()) - 0.01, max(a.max(), b.max()) + 0.01
+        tol = 0.01 if k == "auc" else 0.02
+        ax.fill_between([lo, hi], [lo - tol, hi - tol], [lo + tol, hi + tol], color="0.88", zorder=0,
+                        label=f"±{tol:g} (rough noise band)")
+        ax.plot([lo, hi], [lo, hi], "k-", lw=1, label="no change")
+        for t in th:
+            m = np.array([p[0]["theta"] == t for p in pairs])
+            ax.scatter(a[m], b[m], color=cols[t], s=30, label=f"θ {t:g}°", zorder=3)
+        d = b - a
+        ax.set_title(f"{title}\nwider toward the horn: mean change {d.mean():+.3f}\nbetter in "
+                     f"{int((d > 0).sum())} of {len(d)} pairs, worse in {int((d < 0).sum())}; "
+                     f"{int((np.abs(d) <= tol).sum())} within ±{tol:g}", loc="left", fontsize=10)
+        ax.set_xlabel("near edge at +75 mm")
+        ax.set_ylabel("near edge at the horn's beam limit")
+        ax.set_xlim(lo, hi)
+        ax.set_ylim(lo, hi)
+        ax.set_aspect("equal")
+        ax.grid(alpha=0.3)
+        ax.legend(fontsize=8, loc="upper left")
+    ax = axs[2]
+    best_ext = {}
+    for c in C:
+        if c["family"] in ("extend", "today", "extend_near"):
+            k = (c["placement"], "near" if c["family"] == "extend_near" else "75")
+            best_ext[k] = max(best_ext.get(k, 0.0), c["detect"]["maxz8"]["recall"])
+    pls = sorted({p for p, _ in best_ext}, key=lambda p: (float(p.split("_H")[0][1:]), float(p.split("_H")[1])))
+    xs = np.arange(len(pls))
+    v75 = np.array([best_ext.get((p, "75"), np.nan) for p in pls])
+    vn = np.array([best_ext.get((p, "near"), np.nan) for p in pls])
+    ax.bar(xs - 0.2, v75, 0.4, color="0.6", label="near edge at +75 mm")
+    ax.bar(xs + 0.2, vn, 0.4, color="#1b9e77", label="near edge at the horn's beam limit")
+    for x_, a_, b_ in zip(xs, v75, vn):
+        if np.isfinite(b_):
+            ax.text(x_ + 0.2, b_ + 0.002, f"{b_ - a_:+.3f}", ha="center", fontsize=7, rotation=90, va="bottom")
+        else:
+            ax.text(x_ + 0.2, 0.802, "no room: beam\nlimit ≤ +75 mm", ha="center", fontsize=6.5, rotation=90,
+                    va="bottom", color="0.4")
+    ax.set_xticks(xs, [p.replace("t", "θ").replace("_H", "\nH") for p in pls], fontsize=8)
+    ax.set_ylim(0.8, 0.96)
+    ax.set_ylabel(f"caught at {100 * res['fpr']:.0f}% false alarms (out-of-bounds)")
+    ax.set_title("C. Best far edge per placement, with and without the extra width toward the horn\n"
+                 "(label = change in the share caught)", loc="left", fontsize=10)
+    ax.grid(alpha=0.3, axis="y")
+    ax.legend(fontsize=8.5, loc="upper left")
+    fig.suptitle("Does widening the plane toward the horn help? Each point is one far edge of one placement, "
+                 "solved both ways on the same rails", fontweight="bold")
+    _save(fig, root, "sweep_05d_near_edge.png", dpi=200)
+
+
 def fig_detection_dials(res, root):
     """The dials, scored by detection AUC: far edge, and the theta x H grid."""
     cs = res["configs"]
@@ -481,6 +661,8 @@ def all_figures(res, root: Path):
     if res["configs"] and "detect" in res["configs"][0]:
         fig_detection(res, root)
         fig_detection_slide(res, root)
+        fig_detection_story(res, root)
+        fig_near_edge(res, root)
         fig_detection_dials(res, root)
         fig_detection_cells(res, root)
 
