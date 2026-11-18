@@ -33,10 +33,10 @@ def _horn_geometry():
 def setup_diagram(save_path=None, show=False, metasurface: bool = True):
     """Annotated 3-panel diagram of the simulated scene (3D, side, top).
 
-    metasurface=False draws the detector-only system (surface="none"): the plane at H_MS
-    is an open collection window -- the light crossing it going up is carried 100 mm to
-    the detectors by free propagation (optics3d: nn.Identity layer + PropagatorRSFFT), and
-    nothing outside it reaches them in the model.
+    metasurface=False draws the detector-only system (surface="none") as built: the horn,
+    the rail and the detector plane at H_MS + 100 mm, nothing at H_MS. (In the model the
+    field is sampled at H_MS over the detectors' footprint and carried up by free
+    propagation -- optics3d: nn.Identity layer + PropagatorRSFFT.)
     """
     ms_name = "metasurface" if metasurface else "collection window"
     ms_col = "tab:orange" if metasurface else "0.35"
@@ -62,15 +62,17 @@ def setup_diagram(save_path=None, show=False, metasurface: bool = True):
     side_xlim = (min(x_lo, -rail_w / 2) - margin, horn_c[0] + margin)
     side_ylim = (config.Z_CUT - margin, z_det + margin)
 
-    fig = plt.figure(figsize=(17, 5.5 if metasurface else 6.6))   # 15 wide put the 3D z-label onto the side view's
+    fig = plt.figure(figsize=(17, 5.5 if metasurface else 6.0))   # 15 wide put the 3D z-label onto the side view's
     below = dict(loc="upper center", bbox_to_anchor=(0.5, -0.13), fontsize=7.5, ncol=2, frameon=False)
 
     # --- 3D view -----------------------------------------------------------
     ax = fig.add_subplot(1, 3, 1, projection="3d")
     ax.plot_trisurf(vx, vy, vz, triangles=f.numpy(), color="lightsteelblue",
                     edgecolor="none", alpha=0.9, shade=True)
-    for zz, color, ls, label in [(z_ms, ms_col, ms_ls, f"{ms_name} z={z_ms:.0f}"),
-                                 (z_det, "tab:green", "-", f"detector plane z={z_det:.0f}")]:
+    planes = [(z_det, "tab:green", "-", f"detector plane z={z_det:.0f}")]
+    if metasurface:
+        planes.insert(0, (z_ms, ms_col, ms_ls, f"{ms_name} z={z_ms:.0f}"))
+    for zz, color, ls, label in planes:
         xs = [x_lo, x_hi, x_hi, x_lo, x_lo]
         ys = [-wy2, -wy2, wy2, wy2, -wy2]
         ax.plot(xs, ys, [zz] * 5, color=color, ls=ls, lw=1.5, label=label)
@@ -89,10 +91,12 @@ def setup_diagram(save_path=None, show=False, metasurface: bool = True):
     ax.plot(sx, sz, color="steelblue", lw=1.2, label="rail cross-section")
     ax.axhline(config.Z_CUT, color="gray", ls=":", lw=0.8)
     ax.text(60, config.Z_CUT + 3, f"z_cut = {config.Z_CUT:.0f} (illuminated above)", fontsize=7)
-    ax.plot([x_lo, x_hi], [z_ms, z_ms], color=ms_col, ls=ms_ls, lw=2,
-            label=f"{ms_name} ({config.WX:.0f} mm wide, x {x_lo:.0f}…{x_hi:+.0f})"
-                  + ("" if metasurface else "\nopen: no metasurface"))
-    ax.plot([x_lo, x_hi], [z_det, z_det], color="tab:green", lw=2, label="detector plane")
+    if metasurface:
+        ax.plot([x_lo, x_hi], [z_ms, z_ms], color=ms_col, ls=ms_ls, lw=2,
+                label=f"{ms_name} ({config.WX:.0f} mm wide)")
+    ax.plot([x_lo, x_hi], [z_det, z_det], color="tab:green", lw=2,
+            label="detector plane" if metasurface else
+            f"detector plane ({config.WX:.0f} x {config.WY:.0f} mm, x {x_lo:.0f}…{x_hi:+.0f})")
     ax.plot(horn_corners[[0, 1], 0], horn_corners[[0, 1], 2], color="tab:red", lw=3,
             label=f"horn (A={config.SIZE_ANT[0]:.1f} mm)")
     ax.annotate("", xy=(0, 0), xytext=(horn_c[0], horn_c[2]),
@@ -104,17 +108,24 @@ def setup_diagram(save_path=None, show=False, metasurface: bool = True):
             fontsize=8, color="tab:red", ha="left", va="top",
             rotation=np.degrees(np.arctan2(horn_c[2], horn_c[0])), rotation_mode="anchor")
     x_ann = x_lo - 15
-    ax.annotate("", xy=(x_ann, z_ms), xytext=(x_ann, 0),
-                arrowprops=dict(arrowstyle="<->", lw=0.8))
-    ax.text(x_ann - 23, z_ms / 2, f"{z_ms:.0f} mm", fontsize=8, rotation=90)
-    ax.annotate("", xy=(x_ann, z_det), xytext=(x_ann, z_ms),
-                arrowprops=dict(arrowstyle="<->", lw=0.8))
-    ax.text(x_ann - 23, (z_ms + z_det) / 2, f"{d_det:.0f} mm", fontsize=8, rotation=90)
+    if metasurface:
+        ax.annotate("", xy=(x_ann, z_ms), xytext=(x_ann, 0),
+                    arrowprops=dict(arrowstyle="<->", lw=0.8))
+        ax.text(x_ann - 23, z_ms / 2, f"{z_ms:.0f} mm", fontsize=8, rotation=90)
+        ax.annotate("", xy=(x_ann, z_det), xytext=(x_ann, z_ms),
+                    arrowprops=dict(arrowstyle="<->", lw=0.8))
+        ax.text(x_ann - 23, (z_ms + z_det) / 2, f"{d_det:.0f} mm", fontsize=8, rotation=90)
+    else:
+        ax.annotate("", xy=(x_ann, z_det), xytext=(x_ann, 0),
+                    arrowprops=dict(arrowstyle="<->", lw=0.8))
+        ax.text(x_ann - 23, z_det / 2, f"{z_det:.0f} mm", fontsize=8, rotation=90)
     # specular lobe off a flat crown: shows why the aperture is dark-field
-    x_spec = -z_ms * np.tan(config.THETA_INC)
-    ax.plot([0, x_spec], [0, z_ms], color="tab:red", ls="--", lw=0.8, alpha=0.6)
-    ax.plot([x_spec], [z_ms], "rx", ms=7,
-            label=f"specular lobe (x={x_spec:.0f} mm)")
+    z_spec = z_ms if metasurface else z_det
+    x_spec = -z_spec * np.tan(config.THETA_INC)
+    ax.plot([0, x_spec], [0, z_spec], color="tab:red", ls="--", lw=0.8, alpha=0.6)
+    ax.plot([x_spec], [z_spec], "rx", ms=7,
+            label=f"specular lobe (x={x_spec:.0f} mm)" if metasurface else
+            f"crown glint at the detector height (x={x_spec:.0f} mm): misses the detectors")
     ax.set(xlabel="x (mm)", ylabel="z (mm)", title="Side view (x-z at y=0)",
            xlim=(min(side_xlim[0], x_spec - 30), side_xlim[1]), ylim=side_ylim)
     ax.set_aspect("equal")
@@ -124,10 +135,10 @@ def setup_diagram(save_path=None, show=False, metasurface: bool = True):
     ax = fig.add_subplot(1, 3, 3)
     ax.add_patch(Rectangle((-rail_w / 2, -config.SEG_LEN / 2), rail_w, config.SEG_LEN,
                            color="steelblue", alpha=0.35, label=f"rail segment ({config.SEG_LEN:.0f} mm)"))
-    ax.add_patch(Rectangle((x_lo, -wy2), config.WX, config.WY, fill=False,
-                           edgecolor=ms_col, ls=ms_ls, lw=1.5,
-                           label=f"{'MS aperture' if metasurface else 'collection window'} "
-                                 f"{config.WX:.0f}x{config.WY:.0f} mm ({config.NX}x{config.NY} px)"))
+    if metasurface:
+        ax.add_patch(Rectangle((x_lo, -wy2), config.WX, config.WY, fill=False,
+                               edgecolor=ms_col, ls=ms_ls, lw=1.5,
+                               label=f"MS aperture {config.WX:.0f}x{config.WY:.0f} mm ({config.NX}x{config.NY} px)"))
     det_lab = (f"detectors ({config.DET_GRID[0]}x{config.DET_GRID[1]} init)" if metasurface else
                f"detector windows: {len(det_c)} at start,\npruned to {config.N_DET_FINAL} in training")
     for k, (cx, cy) in enumerate(det_c):
@@ -145,22 +156,21 @@ def setup_diagram(save_path=None, show=False, metasurface: bool = True):
 
     freq_ghz = 299.792458 / config.WVL
     geo = config.GEOMETRY_OVERRIDE
-    head = ("" if metasurface else
-            "Detector-only system, no metasurface"
-            + ("" if geo is None else f" — geometry {geo.get('label', '?')}") + "\n")
-    fig.suptitle(
-        head + f"rail3D simulated setup — λ={config.WVL:.1f} mm ({freq_ghz:.1f} GHz), "
-        f"dx={config.DX:.1f} mm, grid {config.NX}x{config.NY}, horn "
-        f"{config.DIST_ANT:.1f} mm @ {np.degrees(config.THETA_INC):.0f}° (lowest edge at "
-        f"z={config.HORN_LOWER_EDGE_Z:.0f}), "
-        + (f"crown→MS {z_ms:.0f} mm, MS→det {d_det:.0f} mm, " if metasurface else
-           f"crown→window {z_ms:.0f} mm, window→detectors {d_det:.0f} mm, ")
-        + f"segment {config.SEG_LEN:.0f} mm",
-        fontsize=10, fontweight="normal" if metasurface else "bold",
-    )
+    if metasurface:
+        title = (f"rail3D simulated setup — λ={config.WVL:.1f} mm ({freq_ghz:.1f} GHz), "
+                 f"dx={config.DX:.1f} mm, grid {config.NX}x{config.NY}, horn "
+                 f"{config.DIST_ANT:.1f} mm @ {np.degrees(config.THETA_INC):.0f}° (lowest edge at "
+                 f"z={config.HORN_LOWER_EDGE_Z:.0f}), crown→MS {z_ms:.0f} mm, MS→det {d_det:.0f} mm, "
+                 f"segment {config.SEG_LEN:.0f} mm")
+    else:
+        title = ("rail3D simulated setup" + ("" if geo is None else f" ({geo.get('label', '?')})")
+                 + f"\nλ = {config.WVL:.1f} mm ({freq_ghz:.1f} GHz), horn {config.DIST_ANT:.1f} mm from "
+                 f"the crown @ {np.degrees(config.THETA_INC):.0f}°, detector plane {z_det:.0f} mm above "
+                 f"the crown ({config.WX:.0f} x {config.WY:.0f} mm), rail segment {config.SEG_LEN:.0f} mm")
+    fig.suptitle(title, fontsize=10, fontweight="normal" if metasurface else "bold")
     # explicit margins: tight_layout ignores the 3D axes' z-label (it landed on
     # the side view's) and clipped the side view's x-label
-    fig.subplots_adjust(left=0.02, right=0.99, bottom=0.11 if metasurface else 0.25,
+    fig.subplots_adjust(left=0.02, right=0.99, bottom=0.11 if metasurface else 0.2,
                         top=0.86 if metasurface else 0.88, wspace=0.3)
     if save_path:
         fig.savefig(save_path, dpi=200)
