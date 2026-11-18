@@ -2,6 +2,9 @@
 
 Run from the rail3D folder (CPU-only, laptop-safe):
     python setup_diagram.py
+    python setup_diagram.py --no-ms      # the detector-only system (surface="none") only:
+                                         # setup_diagram_no_ms[_<geometry label>].png
+    RAIL3D_GEOMETRY=geometries/F2_best.json python setup_diagram.py --no-ms
 Outputs land in rail3D/data/figures/.
 """
 
@@ -19,6 +22,13 @@ from rail3d import config, viz_setup  # noqa: E402
 def main() -> None:
     config.ensure_dirs()
     out = config.FIGURE_DIR
+    if "--no-ms" in sys.argv[1:]:
+        # the detector-only system (surface="none"); honours RAIL3D_GEOMETRY
+        geo = config.GEOMETRY_OVERRIDE
+        name = "setup_diagram_no_ms" + ("" if geo is None else f"_{geo.get('label', 'override')}") + ".png"
+        viz_setup.setup_diagram(save_path=out / name, metasurface=False)
+        print(f"wrote {out / name}")
+        return
 
     fig = viz_setup.setup_diagram(save_path=out / "setup_diagram.png")
     print(f"wrote {out / 'setup_diagram.png'}")
