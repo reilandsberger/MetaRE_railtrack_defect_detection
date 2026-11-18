@@ -92,13 +92,11 @@ feed = [(back[0] + b2 * nrm[0], back[1] + b2 * nrm[1]),
 d.polygon([P(*p) for p in feed], fill=(170, 16, 14, 255))
 d.text(P(ap_c[0] + 50, ap_c[1] - 22), "Mm-wave\nsource", font=font, fill=TEXT + (255,), spacing=2 * S)
 
-# 2b. the illuminating beam: wavefronts centred on the horn, an arrow down its axis
+# 2b. the illuminating beam: wavefronts centred on the horn
 for r in (55, 95, 135, 175):
     phi = math.degrees(math.atan2(-u_in[1] * -1, -u_in[0]))           # direction horn -> crown
     phi = math.degrees(math.atan2(crown[1] - back[1], crown[0] - back[0]))
     arc(back, r, phi - 17, phi + 17, w=1.3)
-arrow((ap_c[0] - 14 * u_in[0], ap_c[1] - 14 * u_in[1]), (crown[0] + 24 * u_in[0], crown[1] + 24 * u_in[1]),
-      w=1.4, head=8)
 
 # 2c. the detectors: eight windows on the overhead plate (what pruning keeps)
 dets = [182, 226, 262, 300, 340, 384, 436, 500]
@@ -114,16 +112,9 @@ for src_pt in ((371.0, 306.0),):
 for r in (40, 70, 100):
     arc((crown[0], crown[1] + 12), r, 205, 335, w=1.3, fade=0.3)
 
-# 2e. the crown's mirror reflection leaves on the far side, past the detectors (dark field)
-u_sp = (-math.sin(theta), -math.cos(theta))
-end = (crown[0] + 290 * u_sp[0], crown[1] + 290 * u_sp[1])
-dashed((crown[0] + 6 * u_sp[0], crown[1] + 6 * u_sp[1]), end, w=1.5)
-arrow((end[0] - 1 * u_sp[0], end[1] - 1 * u_sp[1]), end, w=1.5, head=8)
-d.text(P(end[0] - 6, end[1] - 44), "crown glint:\nmisses the detectors", font=small, fill=TEXT + (255,),
-       spacing=1 * S)
 
 ov = ov.resize((W, H), Image.LANCZOS)
 res = base.convert("RGBA")
 res.alpha_composite(ov)
 res.convert("RGB").save(out)
-print("wrote", out, "horn aperture", [round(v) for v in ap_c], "glint end", [round(v) for v in end])
+print("wrote", out)
